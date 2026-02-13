@@ -14,28 +14,11 @@ class Provider:
 
 class LocalJsonProvider(Provider):
     def __init__(self, path: str) -> None:
-        import json
         self._path = path
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except FileNotFoundError:
-            data = {"players": []}
-        self._raw = data
 
     def fetch_players(self) -> List[Player]:
-        players: List[Player] = []
-        for p in self._raw.get("players", []):
-            players.append(Player(
-                id=str(p.get("id", p.get("name"))),
-                name=p.get("name", ""),
-                position=p.get("position", ""),
-                team=p.get("team"),
-                bye_week=p.get("bye_week"),
-                adp=p.get("adp"),
-                projections=p.get("projections", {}),
-            ))
-        return players
+        from ..storage import load_players
+        return load_players(self._path)
 
 
 def build_provider(spec: Dict) -> Provider:

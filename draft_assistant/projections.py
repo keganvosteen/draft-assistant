@@ -8,10 +8,19 @@ from .scoring import fantasy_points
 FLEX_ELIGIBLE = {"RB", "WR", "TE"}
 
 
-def compute_points(players: List[Player], scoring: Dict[str, float]) -> Dict[str, float]:
+def compute_points(
+    players: List[Player],
+    scoring: Dict[str, float],
+    use_historical: bool = True,
+) -> Dict[str, float]:
     pts: Dict[str, float] = {}
     for p in players:
-        pts[p.key()] = fantasy_points(p.projections, scoring)
+        if use_historical and (p.age is not None or p.historical_stats):
+            from .historical import adjust_projections
+            adj = adjust_projections(p, scoring)
+            pts[p.key()] = fantasy_points(adj, scoring)
+        else:
+            pts[p.key()] = fantasy_points(p.projections, scoring)
     return pts
 
 
