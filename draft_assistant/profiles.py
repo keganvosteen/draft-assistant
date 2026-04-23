@@ -12,6 +12,7 @@ from .storage import save_players, save_state
 
 DEFAULT_PROFILE = "default"
 PROFILE_ROOT = Path(".draft_assistant_profiles")
+SHARED_PROJECTIONS_PATH = "data/projections.json"
 
 
 @dataclass(frozen=True)
@@ -43,16 +44,15 @@ def get_profile_paths(name: str) -> ProfilePaths:
             base_dir=".",
             config_path="league.config.yaml",
             state_path="draft_state.json",
-            projections_path="data/projections.json",
+            projections_path=SHARED_PROJECTIONS_PATH,
         )
     base = PROFILE_ROOT / profile
-    data_dir = base / "data"
     return ProfilePaths(
         profile=profile,
         base_dir=os.fspath(base),
         config_path=os.fspath(base / "league.config.yaml"),
         state_path=os.fspath(base / "draft_state.json"),
-        projections_path=os.fspath(data_dir / "projections.json"),
+        projections_path=SHARED_PROJECTIONS_PATH,
     )
 
 
@@ -85,7 +85,7 @@ def ensure_profile(name: str) -> ProfilePaths:
     paths = get_profile_paths(name)
     if paths.profile != DEFAULT_PROFILE:
         os.makedirs(paths.base_dir, exist_ok=True)
-        os.makedirs(os.path.dirname(paths.projections_path), exist_ok=True)
+    os.makedirs(os.path.dirname(paths.projections_path), exist_ok=True)
 
     config_exists = os.path.exists(paths.config_path)
     if config_exists:
@@ -101,7 +101,7 @@ def ensure_profile(name: str) -> ProfilePaths:
     if not os.path.exists(paths.projections_path):
         save_players([], paths.projections_path)
 
-    # Keep local_json profiles isolated by default.
+    # League profiles keep settings/picks separate but share one populated player pool.
     provider = cfg.provider or {}
     if provider.get("type", "local_json") == "local_json":
         opts = dict(provider.get("options", {}) or {})
@@ -119,7 +119,8 @@ def load_profile_config(paths: ProfilePaths) -> LeagueConfig:
     ptype = provider.get("type", "local_json")
     if ptype == "local_json":
         opts = dict(provider.get("options", {}) or {})
-        opts.setdefault("path", paths.projections_path)
+        if opts.get("path") != paths.projections_path:
+            opts["path"] = paths.projections_path
         cfg.provider = {"type": "local_json", "options": opts}
     return cfg
 
@@ -128,6 +129,6 @@ def save_profile_config(config: LeagueConfig, paths: ProfilePaths) -> None:
     provider = config.provider or {}
     if provider.get("type", "local_json") == "local_json":
         opts = dict(provider.get("options", {}) or {})
-        opts.setdefault("path", paths.projections_path)
+        opts["path"] = paths.projections_path
         config.provider = {"type": "local_json", "options": opts}
     save_config(config, paths.config_path)

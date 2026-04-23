@@ -24,7 +24,7 @@
   "provider": {
     "type": "local_json",
     "options": {
-      "path": ".draft_assistant_profiles\\league-a\\data\\projections.json"
+      "path": "data/projections.json"
     }
   }
 }

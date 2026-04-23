@@ -357,6 +357,11 @@ class DraftAssistantApp:
         if provider.get("type") == "local_json":
             opts = provider.get("options", {}) or {}
             out_path = str(opts.get("path", out_path))
+        if len(self.players) > len(sample_players()):
+            self.status_var.set(f"Already using populated data from {out_path}")
+            if messagebox:
+                messagebox.showinfo("Data Already Loaded", f"Loaded {len(self.players)} players from:\n{out_path}")
+            return
         save_players(sample_players(), out_path)
         self.status_var.set(f"Seeded sample data to {out_path}")
         self.reload_data()
