@@ -24,6 +24,7 @@ class LeagueConfig:
     roster: Dict[str, int]
     scoring: Dict[str, float]
     provider: Dict[str, object]
+    draft: Dict[str, object] = field(default_factory=dict)
 
 
 @dataclass

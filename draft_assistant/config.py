@@ -39,6 +39,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "options": {
             "path": "data/projections.json"
         }
+    },
+    "draft": {
+        "slot": 1,
+        "snake": True,
+        "monte_carlo_sims": 250,
+        "adp_noise": 8.0,
+        "candidate_pool": 120
     }
 }
 
@@ -57,6 +64,7 @@ def load_config(path: str = "league.config.yaml") -> LeagueConfig:
         # Fallback naive YAML-like parser: key: value per line, very limited
         # Users should prefer JSON in the same file for now.
         data = DEFAULT_CONFIG
+    data.setdefault("draft", dict(DEFAULT_CONFIG["draft"]))
     return LeagueConfig(**data)
 
 

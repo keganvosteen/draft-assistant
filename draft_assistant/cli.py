@@ -59,13 +59,20 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
 def cmd_suggest(args: argparse.Namespace) -> None:
     config, state, players, _paths = _load_all(args.profile)
+    if args.draft_slot is not None or args.sims is not None:
+        draft_settings = dict(config.draft or {})
+        if args.draft_slot is not None:
+            draft_settings["slot"] = args.draft_slot
+        if args.sims is not None:
+            draft_settings["monte_carlo_sims"] = args.sims
+        config.draft = draft_settings
     tracker = DraftTracker(config, state, players)
     avail = tracker.available_players()
-    ranked = suggest_players(config, avail, tracker.my_roster(), top_n=args.top)
+    ranked = suggest_players(config, avail, tracker.my_roster(), top_n=args.top, draft_state=state)
     print(f"Top {len(ranked)} suggestions:")
     for p, pts, vor, score in ranked:
         adp = f" ADP:{p.adp:.1f}" if p.adp else ""
-        print(f"- {p.name} ({p.position}) Pts:{pts:.1f} VOR:{vor:.1f}{adp}")
+        print(f"- {p.name} ({p.position}) Score:{score:.1f} Pts:{pts:.1f} VOR:{vor:.1f}{adp}")
 
 
 def cmd_pick(args: argparse.Namespace, mine: bool) -> None:
@@ -105,8 +112,8 @@ def cmd_roster(args: argparse.Namespace) -> None:
 
     needs = needs_by_position(config, roster)
     print("Needs:")
-    for pos, n in needs.items():
-        print(f"- {pos}: {n}")
+    for pos in ["QB", "RB", "WR", "TE", "FLEX", "K", "DST"]:
+        print(f"- {pos}: {needs.get(pos, 0)}")
 
 
 def cmd_save(args: argparse.Namespace) -> None:
@@ -146,6 +153,8 @@ def main() -> None:
 
     p_suggest = sub.add_parser("suggest", help="Show top suggestions")
     p_suggest.add_argument("-n", "--top", type=int, default=12)
+    p_suggest.add_argument("--draft-slot", type=int, default=None, help="Override snake draft slot for this run")
+    p_suggest.add_argument("--sims", type=int, default=None, help="Override Monte Carlo simulation count for this run")
     p_suggest.set_defaults(func=cmd_suggest)
 
     p_pick = sub.add_parser("pick", help="Record a league pick")

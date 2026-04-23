@@ -1,12 +1,8 @@
 from __future__ import annotations
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
-from .models import LeagueConfig, Player
-from .projections import compute_points, replacement_levels
-
-
-NEED_BOOST = 1.10
-FILLED_PENALTY = 0.70
+from .draft_value import draft_aware_values
+from .models import DraftState, LeagueConfig, Player
 
 
 def needs_by_position(config: LeagueConfig, my_roster: Dict[str, List[Player]]) -> Dict[str, int]:
@@ -15,26 +11,29 @@ def needs_by_position(config: LeagueConfig, my_roster: Dict[str, List[Player]]) 
         target = int(config.roster.get(pos, 0))
         have = len(my_roster.get(pos, []))
         needs[pos] = max(target - have, 0)
-    # Flex doesn't show in position-specific needs
+    flex_target = int(config.roster.get("FLEX", 0))
+    eligible_have = sum(len(my_roster.get(pos, [])) for pos in ["RB", "WR", "TE"])
+    eligible_slots = sum(int(config.roster.get(pos, 0)) for pos in ["RB", "WR", "TE"]) + flex_target
+    eligible_need = max(eligible_slots - eligible_have, 0)
+    base_eligible_need = sum(needs.get(pos, 0) for pos in ["RB", "WR", "TE"])
+    needs["FLEX"] = max(eligible_need - base_eligible_need, 0)
     return needs
 
 
-def suggest_players(config: LeagueConfig, available: List[Player], my_roster: Dict[str, List[Player]], top_n: int = 12) -> List[Tuple[Player, float, float, float]]:
-    # Returns list of tuples: (player, points, vor, score)
-    pts_map = compute_points(available, config.scoring)
-    repl = replacement_levels(available, config.scoring, config.teams, config.roster)
-    needs = needs_by_position(config, my_roster)
-
-    ranked: List[Tuple[Player, float, float, float]] = []
-    for p in available:
-        pts = pts_map.get(p.key(), 0.0)
-        rep = repl.get(p.position, 0.0)
-        vor = pts - rep
-
-        need_mult = NEED_BOOST if needs.get(p.position, 0) > 0 else FILLED_PENALTY
-        score = vor * need_mult
-        ranked.append((p, pts, vor, score))
-
-    ranked.sort(key=lambda t: (t[3], t[2], t[1]), reverse=True)
-    return ranked[:top_n]
+def suggest_players(
+    config: LeagueConfig,
+    available: List[Player],
+    my_roster: Dict[str, List[Player]],
+    top_n: int = 12,
+    draft_state: Optional[DraftState] = None,
+) -> List[Tuple[Player, float, float, float]]:
+    # Returns list of tuples: (player, points, VOR, draft-aware score).
+    ranked = draft_aware_values(
+        config=config,
+        available=available,
+        my_roster=my_roster,
+        state=draft_state,
+        top_n=top_n,
+    )
+    return [(item.player, item.points, item.vor, item.score) for item in ranked]
 

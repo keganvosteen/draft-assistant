@@ -33,6 +33,16 @@ else:
 
 POSITION_CHOICES = ["", "QB", "RB", "WR", "TE", "K", "DST"]
 ROSTER_FIELDS = ["QB", "RB", "WR", "TE", "FLEX", "K", "DST", "BN", "IR"]
+VOR_TOOLTIP_TEXT = (
+    "VOR (Value Over Replacement)\n"
+    "Projected points above the league replacement line at that position.\n"
+    "Replacement uses league size, required starters, and FLEX demand."
+)
+SCORE_TOOLTIP_TEXT = (
+    "Draft-aware score.\n"
+    "Combines dynamic lineup gain, VOR, ADP-based Monte Carlo scarcity before\n"
+    "your next snake-draft pick, and a small bye-week tiebreaker."
+)
 SCORING_PRESETS: Dict[str, Dict[str, float]] = {
     "PPR": {
         "pass_yd": 0.04,
@@ -70,6 +80,64 @@ SCORING_PRESETS: Dict[str, Dict[str, float]] = {
 }
 
 
+class HoverTooltip:
+    def __init__(self, widget: tk.Widget, text: str, delay_ms: int = 250) -> None:
+        self.widget = widget
+        self.text = text
+        self.delay_ms = delay_ms
+        self._tip: tk.Toplevel | None = None
+        self._after_id: str | None = None
+
+        self.widget.bind("<Enter>", self._on_enter, add="+")
+        self.widget.bind("<Leave>", self._on_leave, add="+")
+        self.widget.bind("<ButtonPress>", self._on_leave, add="+")
+        self.widget.bind("<Destroy>", self._on_leave, add="+")
+
+    def _on_enter(self, _event: object) -> None:
+        self._schedule()
+
+    def _on_leave(self, _event: object) -> None:
+        if self._after_id is not None:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+        self._hide()
+
+    def _schedule(self) -> None:
+        if self._after_id is not None:
+            self.widget.after_cancel(self._after_id)
+        self._after_id = self.widget.after(self.delay_ms, self._show)
+
+    def _show(self) -> None:
+        self._after_id = None
+        if self._tip is not None:
+            return
+        self._tip = tk.Toplevel(self.widget)
+        self._tip.wm_overrideredirect(True)
+        try:
+            self._tip.wm_attributes("-topmost", True)
+        except Exception:
+            pass
+
+        label = ttk.Label(
+            self._tip,
+            text=self.text,
+            justify="left",
+            relief="solid",
+            borderwidth=1,
+            padding=(8, 5),
+            background="#fffde9",
+        )
+        label.pack()
+        x = self.widget.winfo_rootx() + 18
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self._tip.wm_geometry(f"+{x}+{y}")
+
+    def _hide(self) -> None:
+        if self._tip is not None:
+            self._tip.destroy()
+            self._tip = None
+
+
 class DraftAssistantApp:
     def __init__(self, initial_profile: str = DEFAULT_PROFILE) -> None:
         if tk is None or ttk is None:
@@ -96,6 +164,7 @@ class DraftAssistantApp:
         self.suggestion_tree: ttk.Treeview
         self.roster_text: tk.Text
         self.picks_text: tk.Text
+        self._tooltips: List[HoverTooltip] = []
 
         self._build_layout()
         self._activate_profile(initial_profile)
@@ -169,7 +238,35 @@ class DraftAssistantApp:
         suggestion_frame = ttk.LabelFrame(self.root, text="Suggestions", padding=10)
         suggestion_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=10, pady=(0, 10))
         suggestion_frame.columnconfigure(0, weight=1)
-        suggestion_frame.rowconfigure(0, weight=1)
+        suggestion_frame.rowconfigure(1, weight=1)
+
+        info_row = ttk.Frame(suggestion_frame)
+        info_row.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Label(info_row, text="How to read columns:").pack(side="left")
+        ttk.Label(info_row, text="VOR").pack(side="left", padx=(10, 2))
+        vor_info = tk.Label(
+            info_row,
+            text="i",
+            width=2,
+            cursor="question_arrow",
+            relief="groove",
+            borderwidth=1,
+            font=("Segoe UI", 8, "bold"),
+        )
+        vor_info.pack(side="left", padx=(0, 10))
+        ttk.Label(info_row, text="Score").pack(side="left", padx=(0, 2))
+        score_info = tk.Label(
+            info_row,
+            text="i",
+            width=2,
+            cursor="question_arrow",
+            relief="groove",
+            borderwidth=1,
+            font=("Segoe UI", 8, "bold"),
+        )
+        score_info.pack(side="left")
+        self._tooltips.append(HoverTooltip(vor_info, VOR_TOOLTIP_TEXT))
+        self._tooltips.append(HoverTooltip(score_info, SCORE_TOOLTIP_TEXT))
 
         cols = ("name", "pos", "pts", "vor", "score", "adp")
         self.suggestion_tree = ttk.Treeview(
@@ -183,7 +280,7 @@ class DraftAssistantApp:
         self.suggestion_tree.heading("pos", text="Pos")
         self.suggestion_tree.heading("pts", text="Proj Pts")
         self.suggestion_tree.heading("vor", text="VOR")
-        self.suggestion_tree.heading("score", text="Score")
+        self.suggestion_tree.heading("score", text="Draft Score")
         self.suggestion_tree.heading("adp", text="ADP")
         self.suggestion_tree.column("name", width=320, anchor="w")
         self.suggestion_tree.column("pos", width=60, anchor="center")
@@ -191,11 +288,11 @@ class DraftAssistantApp:
         self.suggestion_tree.column("vor", width=90, anchor="e")
         self.suggestion_tree.column("score", width=90, anchor="e")
         self.suggestion_tree.column("adp", width=90, anchor="e")
-        self.suggestion_tree.grid(row=0, column=0, sticky="nsew")
+        self.suggestion_tree.grid(row=1, column=0, sticky="nsew")
         self.suggestion_tree.bind("<<TreeviewSelect>>", self._on_suggestion_selected)
 
         scrollbar = ttk.Scrollbar(suggestion_frame, orient="vertical", command=self.suggestion_tree.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        scrollbar.grid(row=1, column=1, sticky="ns")
         self.suggestion_tree.configure(yscrollcommand=scrollbar.set)
 
         roster_frame = ttk.LabelFrame(self.root, text="Roster & Needs", padding=10)
@@ -276,6 +373,7 @@ class DraftAssistantApp:
             available,
             self.tracker.my_roster(),
             top_n=top_n,
+            draft_state=self.state,
         )
         for p, pts, vor, score in ranked:
             adp = "" if p.adp is None else f"{p.adp:.1f}"
@@ -294,7 +392,7 @@ class DraftAssistantApp:
             lines.append(f"{pos}: {names if names else '-'}")
         lines.append("")
         lines.append("Needs")
-        for pos in ["QB", "RB", "WR", "TE", "K", "DST"]:
+        for pos in ["QB", "RB", "WR", "TE", "FLEX", "K", "DST"]:
             lines.append(f"{pos}: {needs.get(pos, 0)}")
         self._set_text(self.roster_text, "\n".join(lines))
 
@@ -387,8 +485,21 @@ class DraftAssistantApp:
         teams_var = tk.StringVar(value=str(self.config.teams))
         ttk.Entry(frame, textvariable=teams_var, width=10).grid(row=1, column=1, sticky="w", pady=(10, 4))
 
+        draft_box = ttk.LabelFrame(frame, text="Draft", padding=8)
+        draft_box.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 8))
+        draft_settings = self.config.draft or {}
+        draft_slot_var = tk.StringVar(value=str(int(draft_settings.get("slot", 1))))
+        sims_var = tk.StringVar(value=str(int(draft_settings.get("monte_carlo_sims", 250))))
+        noise_var = tk.StringVar(value=str(float(draft_settings.get("adp_noise", 8.0))))
+        ttk.Label(draft_box, text="Snake Slot").grid(row=0, column=0, sticky="w", padx=(0, 4), pady=3)
+        ttk.Entry(draft_box, textvariable=draft_slot_var, width=6).grid(row=0, column=1, sticky="w", pady=3)
+        ttk.Label(draft_box, text="Monte Carlo Sims").grid(row=0, column=2, sticky="w", padx=(16, 4), pady=3)
+        ttk.Entry(draft_box, textvariable=sims_var, width=8).grid(row=0, column=3, sticky="w", pady=3)
+        ttk.Label(draft_box, text="ADP Randomness").grid(row=0, column=4, sticky="w", padx=(16, 4), pady=3)
+        ttk.Entry(draft_box, textvariable=noise_var, width=8).grid(row=0, column=5, sticky="w", pady=3)
+
         roster_box = ttk.LabelFrame(frame, text="Roster Slots", padding=8)
-        roster_box.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 8))
+        roster_box.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 8))
         roster_vars: Dict[str, tk.StringVar] = {}
         for idx, pos in enumerate(ROSTER_FIELDS):
             ttk.Label(roster_box, text=pos).grid(row=idx // 3, column=(idx % 3) * 2, sticky="w", padx=(0, 4), pady=3)
@@ -397,7 +508,7 @@ class DraftAssistantApp:
             ttk.Entry(roster_box, textvariable=var, width=6).grid(row=idx // 3, column=(idx % 3) * 2 + 1, sticky="w", pady=3)
 
         scoring_ctl = ttk.Frame(frame)
-        scoring_ctl.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 4))
+        scoring_ctl.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 4))
         scoring_ctl.columnconfigure(2, weight=1)
         ttk.Label(scoring_ctl, text="Preset").grid(row=0, column=0, sticky="w")
         preset_var = tk.StringVar(value="Half PPR")
@@ -405,11 +516,11 @@ class DraftAssistantApp:
         preset.grid(row=0, column=1, sticky="w", padx=(6, 8))
 
         scoring_label = ttk.Label(frame, text="Scoring JSON")
-        scoring_label.grid(row=4, column=0, columnspan=2, sticky="w")
+        scoring_label.grid(row=5, column=0, columnspan=2, sticky="w")
 
         scoring_text = tk.Text(frame, height=20, wrap="none")
-        scoring_text.grid(row=5, column=0, columnspan=2, sticky="nsew")
-        frame.rowconfigure(5, weight=1)
+        scoring_text.grid(row=6, column=0, columnspan=2, sticky="nsew")
+        frame.rowconfigure(6, weight=1)
         scoring_text.insert("1.0", json.dumps(self.config.scoring, indent=2, sort_keys=True))
 
         def _set_scoring(mapping: Dict[str, float]) -> None:
@@ -433,7 +544,7 @@ class DraftAssistantApp:
         ttk.Button(scoring_ctl, text="Apply Preset", command=apply_preset).grid(row=0, column=2, sticky="w")
 
         button_row = ttk.Frame(frame)
-        button_row.grid(row=6, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        button_row.grid(row=7, column=0, columnspan=2, sticky="e", pady=(10, 0))
 
         def save_settings() -> None:
             try:
@@ -443,6 +554,20 @@ class DraftAssistantApp:
             except ValueError:
                 if messagebox:
                     messagebox.showerror("Invalid Teams", "Teams must be a positive integer.")
+                return
+
+            try:
+                draft_slot = int(draft_slot_var.get())
+                sims = int(sims_var.get())
+                adp_noise = float(noise_var.get())
+                if draft_slot < 1 or draft_slot > teams or sims < 0 or adp_noise < 0:
+                    raise ValueError
+            except ValueError:
+                if messagebox:
+                    messagebox.showerror(
+                        "Invalid Draft Settings",
+                        "Draft slot must fit within league teams; sims and ADP randomness must be non-negative.",
+                    )
                 return
 
             roster_updates: Dict[str, int] = {}
@@ -480,6 +605,14 @@ class DraftAssistantApp:
             self.config.teams = teams
             self.config.roster = updated_roster
             self.config.scoring = scoring
+            draft_settings = dict(self.config.draft or {})
+            draft_settings.update({
+                "slot": draft_slot,
+                "snake": True,
+                "monte_carlo_sims": sims,
+                "adp_noise": adp_noise,
+            })
+            self.config.draft = draft_settings
             save_profile_config(self.config, self.paths)
 
             if len(self.state.league_teams) != teams:

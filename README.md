@@ -20,7 +20,7 @@ CLI Commands (Optional)
 - `python -m draft_assistant.cli --profile home ui` — launch UI on a specific league profile.
 - `python -m draft_assistant.cli init` — generate config and sample state.
 - `python -m draft_assistant.cli fetch` — fetch player data (providers configurable; local sample by default).
-- `python -m draft_assistant.cli suggest [-n 12]` — show top suggestions in terminal.
+- `python -m draft_assistant.cli suggest [-n 12] [--draft-slot 5] [--sims 250]` — show draft-aware suggestions in terminal.
 - `python -m draft_assistant.cli pick "Bijan Robinson"` — record a league pick.
 - `python -m draft_assistant.cli mypick "CeeDee Lamb"` — record your pick.
 - `python -m draft_assistant.cli roster` — show your roster and needs.
@@ -35,9 +35,9 @@ Multi-League Profiles
 
 - The app now supports multiple league profiles in one install.
 - In the UI: use `League` dropdown + `New League` + `Switch`.
-- On CLI: `--profile <name>` switches config/state/projections for that command.
+- On CLI: `--profile <name>` switches league settings and draft state for that command.
 - Default profile uses root files (`league.config.yaml`, `draft_state.json`, `data/projections.json`).
-- Named profiles are stored under `.draft_assistant_profiles/<profile>/`.
+- Named profile settings and picks are stored under `.draft_assistant_profiles/<profile>/`; all profiles share the populated `data/projections.json` player pool.
 
 Configuration
 
@@ -46,7 +46,15 @@ Edit league settings in the UI `Settings` dialog, or edit profile config files d
 - teams: number of teams in your league.
 - roster: starters per position (QB/RB/WR/TE/FLEX/K/DST/BN etc.).
 - scoring: points per stat (supports PPR and typical scoring settings).
+- draft: snake draft slot plus Monte Carlo settings (`slot`, `monte_carlo_sims`, `adp_noise`).
 - provider: where to fetch data from (`local_json` by default; `sleeper` stub included).
+
+Draft-Aware VOR
+
+- Suggestions now use a dynamic roster optimizer, not a fixed lineup assumption.
+- The optimizer fills required roster slots from your league settings, then assigns RB/WR/TE players into however many FLEX slots your league uses.
+- Score combines lineup surplus over replacement, positional VOR, ADP-based Monte Carlo scarcity before your next snake-draft pick, and a small bye-week tiebreaker.
+- Configure your snake slot and simulation count in the UI Settings dialog or with CLI overrides such as `--draft-slot 5 --sims 250`.
 
 Data Providers
 
@@ -79,7 +87,7 @@ Importing Projections (FantasyPros)
 Notes
 
 - Network fetches are optional. The UI and CLI both work offline with local data.
-- VOR baseline accounts for FLEX allocation across RB/WR/TE.
+- VOR baseline accounts for league size, roster slots, and FLEX allocation across RB/WR/TE.
 - State persists to `draft_state.json` in the working directory.
 
 Extending
