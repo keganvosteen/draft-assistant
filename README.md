@@ -35,21 +35,44 @@ Replacement level is the projected points of the last starter drafted at each po
 **Requirements:** Python 3.10+, no external dependencies.
 
 ```bash
-# 1. Initialize config and seed sample player data
-python -m draft_assistant.cli init
+# Option A: Launch the interactive draft UI (recommended)
+python -m draft_assistant.cli draft
 
-# 2. View top draft suggestions
-python -m draft_assistant.cli suggest
+# Option B: Run with no arguments — same thing
+python -m draft_assistant.cli
+```
 
-# 3. Record picks as the draft progresses
-python -m draft_assistant.cli pick "Bijan Robinson"      # someone else drafted him
-python -m draft_assistant.cli mypick "CeeDee Lamb"       # you drafted Lamb
+That's it. The interactive UI walks you through league setup (teams, scoring format, roster slots, your draft position) and then drops you into a live draft board where you type commands to record picks and get real-time recommendations.
 
-# 4. Check your roster and remaining needs
-python -m draft_assistant.cli roster
+### Interactive Commands (inside the draft UI)
 
-# 5. Get updated suggestions (pool and needs have changed)
-python -m draft_assistant.cli suggest
+| Command | What it does |
+|---------|-------------|
+| `pick <name>` | Record someone else's pick |
+| `my <name>` | Record YOUR pick |
+| `pick <name> -p RB` | Disambiguate by position |
+| `undo` / `undo 3` | Undo last pick(s) |
+| `board` | Refresh the recommendation board |
+| `log` | Show the full draft log |
+| `roster` | Show your roster and needs |
+| `auction` / `auction 300` | Show auction dollar values |
+| `save` | Save draft state to disk |
+| `help` | Show all commands |
+| `quit` | Save and exit |
+
+Player names support **fuzzy matching** — typing "Achan" finds "De'Von Achane", "Bijan" finds "Bijan Robinson", etc.
+
+### Advanced: Individual CLI Commands
+
+You can also run commands one at a time from the shell (useful for scripting or quick lookups):
+
+```bash
+python -m draft_assistant.cli init              # Initialize config + sample data
+python -m draft_assistant.cli suggest -n 15     # Show top 15 suggestions
+python -m draft_assistant.cli pick "Bijan"      # Record a pick
+python -m draft_assistant.cli mypick "Lamb"     # Record your pick
+python -m draft_assistant.cli roster            # Show roster + needs
+python -m draft_assistant.cli auction --budget 200
 ```
 
 ---
@@ -58,6 +81,7 @@ python -m draft_assistant.cli suggest
 
 | Command | Description |
 |---------|-------------|
+| `draft` | **Launch the interactive draft UI** (also the default with no args) |
 | `init` | Generate `league.config.yaml` and seed sample data |
 | `fetch` | Refresh player data from the configured provider |
 | `suggest [-n N]` | Show top N ranked suggestions (default 12) |
@@ -183,6 +207,7 @@ The consensus engine matches players by name+position across sources and merges 
 ```
 draft_assistant/
 ├── cli.py              # CLI entry point and command dispatch
+├── ui.py               # Interactive terminal UI (setup wizard + live draft board)
 ├── config.py           # YAML config loading
 ├── models.py           # Player, LeagueConfig, DraftState dataclasses
 ├── draft.py            # DraftTracker — pick recording, roster tracking, fuzzy matching
@@ -253,4 +278,4 @@ The following are areas that could still be improved:
 - **Strength of schedule** — weighting projections toward playoff-week matchups (weeks 14–17) rather than treating all weeks equally.
 - **Remaining positional supply** — the need multiplier currently scales by how many of *your* slots are unfilled, but doesn't account for how many startable players remain in the pool. If only 3 TEs are left and you need one, urgency should be higher than if 15 remain.
 - **Coaching/scheme change tracking** — the `previous_team` field captures player team changes, but coaching staff and scheme changes (new OC, run-heavy vs. pass-heavy) aren't tracked yet.
-- **Web UI** — the app is CLI-only. A browser-based draft board would make it faster to use during live drafts.
+- **Web UI** — the interactive terminal UI works well but a browser-based draft board could be even faster for live drafts.

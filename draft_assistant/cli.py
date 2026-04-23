@@ -16,6 +16,11 @@ from .importers.fftoday import fetch_all_fftoday
 from .export import export_players_csv
 
 
+def _cmd_draft() -> None:
+    from .ui import run_interactive
+    run_interactive()
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     if not os.path.exists("league.config.yaml"):
         save_config(load_config())
@@ -125,6 +130,10 @@ def cmd_load(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="draft-assistant", description="Fantasy Football Draft Assistant")
     sub = parser.add_subparsers(dest="command")
+
+    # Primary command: interactive draft UI
+    p_draft = sub.add_parser("draft", help="Launch interactive draft UI (recommended)")
+    p_draft.set_defaults(func=lambda a: _cmd_draft())
 
     p_init = sub.add_parser("init", help="Initialize config and sample data")
     p_init.set_defaults(func=cmd_init)
@@ -289,6 +298,9 @@ def main() -> None:
     args = parser.parse_args()
     if hasattr(args, "func"):
         args.func(args)
+    elif args.command is None:
+        # No subcommand → launch interactive UI
+        _cmd_draft()
     else:
         parser.print_help()
 
