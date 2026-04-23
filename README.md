@@ -1,23 +1,26 @@
-Fantasy Football Draft Assistant (CLI)
+Fantasy Football Draft Assistant (UI-First)
 
 Overview
 
-- Offline-first Python CLI that ranks players using Value Over Replacement (VOR) based on your league settings (teams, roster sizes, and scoring).
-- Tracks live draft picks and your roster; updates suggestions in real time.
+- Offline-first Python desktop app that ranks players using Value Over Replacement (VOR) based on your league settings (teams, roster sizes, and scoring).
+- Tracks live draft picks and your roster with real-time suggestions in a local UI.
 - Pluggable data providers with a built-in Sleeper provider stub and a local JSON projections loader (sample provided).
 
 Quick Start
 
 1) Create a Python 3.10+ environment.
-2) Run: `python -m draft_assistant.cli init` to generate `league.config.yaml` and seed local sample data.
-3) Run: `python -m draft_assistant.cli suggest` to view top suggested picks based on sample data.
-4) Use `pick` / `mypick` to track your draft; suggestions update automatically.
+2) Run: `python -m draft_assistant` (or `python -m draft_assistant.cli`) to open the desktop UI.
+3) In the UI, click `Seed Sample Data` if you need starter projections.
+4) Use `Settings` to set teams, roster slots, and scoring.
+5) Use `League Pick`, `My Pick`, and `Undo` to track the draft; suggestions update automatically.
 
-Key Commands
+CLI Commands (Optional)
 
+- `python -m draft_assistant.cli ui` — launch desktop UI explicitly.
+- `python -m draft_assistant.cli --profile home ui` — launch UI on a specific league profile.
 - `python -m draft_assistant.cli init` — generate config and sample state.
 - `python -m draft_assistant.cli fetch` — fetch player data (providers configurable; local sample by default).
-- `python -m draft_assistant.cli suggest [-n 12]` — show top suggestions.
+- `python -m draft_assistant.cli suggest [-n 12]` — show top suggestions in terminal.
 - `python -m draft_assistant.cli pick "Bijan Robinson"` — record a league pick.
 - `python -m draft_assistant.cli mypick "CeeDee Lamb"` — record your pick.
 - `python -m draft_assistant.cli roster` — show your roster and needs.
@@ -25,10 +28,20 @@ Key Commands
 - `python -m draft_assistant.cli save` / `load` — persist or restore draft state.
 - `python -m draft_assistant.cli import-fpros --offense <offense.csv> --k <k.csv> --dst <dst.csv>` — import FantasyPros CSVs into `data/projections.json`.
 - `python -m draft_assistant.cli pull-fftoday --season 2024 --out data/projections.json --csv data/projections.csv` — fetch free FFToday projections (experimental) and export JSON/CSV.
+- `python -m draft_assistant.cli pull-free-data --season 2026 --stats-season 2025 --out data/projections.json --csv data/projections.csv` — merge free public sources into the app data file.
+- Add `--profile <name>` to any CLI command to target a specific league profile.
+
+Multi-League Profiles
+
+- The app now supports multiple league profiles in one install.
+- In the UI: use `League` dropdown + `New League` + `Switch`.
+- On CLI: `--profile <name>` switches config/state/projections for that command.
+- Default profile uses root files (`league.config.yaml`, `draft_state.json`, `data/projections.json`).
+- Named profiles are stored under `.draft_assistant_profiles/<profile>/`.
 
 Configuration
 
-Edit `league.config.yaml` to match your league:
+Edit league settings in the UI `Settings` dialog, or edit profile config files directly:
 
 - teams: number of teams in your league.
 - roster: starters per position (QB/RB/WR/TE/FLEX/K/DST/BN etc.).
@@ -39,6 +52,17 @@ Data Providers
 
 - Local JSON: loads from `data/projections.json` (provided sample for demo).
 - Sleeper (stub): fetch players and ADP; you can extend to include projections you trust.
+
+Pulling Free Data Sources
+
+- Run: `python -m draft_assistant.cli pull-free-data --season 2026 --stats-season 2025 --out data/projections.json --csv data/projections.csv`
+- Sources pulled automatically when available:
+  - Sleeper players and season projections.
+  - Fantasy Football Calculator ADP, matched to your league team count and scoring format.
+  - nflverse players metadata and prior-season regular stats from GitHub release CSVs.
+  - FFToday projections, unless `--skip-fftoday` is passed.
+- Optional: pass `--espn-league-id <id>` to attempt ESPN's undocumented public league endpoint.
+- Manual/free-with-export sources such as FantasyPros CSVs are still handled by `import-fpros`.
 
 Importing Projections (FantasyPros)
 
@@ -54,7 +78,7 @@ Importing Projections (FantasyPros)
 
 Notes
 
-- Network fetches are optional. The CLI works offline with the sample data.
+- Network fetches are optional. The UI and CLI both work offline with local data.
 - VOR baseline accounts for FLEX allocation across RB/WR/TE.
 - State persists to `draft_state.json` in the working directory.
 

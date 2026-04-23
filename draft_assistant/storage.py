@@ -43,6 +43,7 @@ def save_players(players: List[Player], path: str = "data/projections.json") -> 
                     "bye_week": p.bye_week,
                     "adp": p.adp,
                     "projections": p.projections,
+                    "metadata": p.metadata,
                 } for p in players
             ]
         }, f, indent=2)

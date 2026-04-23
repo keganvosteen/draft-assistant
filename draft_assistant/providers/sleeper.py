@@ -51,6 +51,12 @@ class SleeperProvider(Provider):
                         bye_week=(p or {}).get("bye_week"),
                         adp=adp_map.get(str(pid)),
                         projections={},  # Sleeper doesn't provide projections here
+                        metadata={
+                            "age": (p or {}).get("age"),
+                            "injury_status": (p or {}).get("injury_status"),
+                            "status": (p or {}).get("status"),
+                            "sources": ["sleeper_players"],
+                        },
                     ))
         return players
 

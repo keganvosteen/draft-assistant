@@ -6,7 +6,7 @@ from .models import Player
 
 
 CSV_HEADERS = [
-    "name", "position", "team",
+    "id", "name", "position", "team", "bye_week", "adp",
     # Passing
     "pass_yd", "pass_td", "pass_int", "pass_2pt",
     # Rushing
@@ -30,9 +30,12 @@ def export_players_csv(players: Iterable[Player], path: str) -> None:
         w.writeheader()
         for p in players:
             row = {h: 0 for h in CSV_HEADERS}
+            row["id"] = p.id
             row["name"] = p.name
             row["position"] = p.position
             row["team"] = p.team or ""
+            row["bye_week"] = p.bye_week or ""
+            row["adp"] = p.adp or ""
             for k, v in p.projections.items():
                 if k in row:
                     row[k] = v

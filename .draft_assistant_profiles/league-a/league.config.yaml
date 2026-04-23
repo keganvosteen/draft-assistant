@@ -1,0 +1,30 @@
+{
+  "teams": 12,
+  "roster": {
+    "QB": 1,
+    "RB": 2,
+    "WR": 2,
+    "TE": 1,
+    "FLEX": 1,
+    "K": 0,
+    "DST": 0,
+    "BN": 6
+  },
+  "scoring": {
+    "pass_yd": 0.04,
+    "pass_td": 4.0,
+    "pass_int": -2.0,
+    "rush_yd": 0.1,
+    "rush_td": 6.0,
+    "rec": 1.0,
+    "rec_yd": 0.1,
+    "rec_td": 6.0,
+    "fumbles": -2.0
+  },
+  "provider": {
+    "type": "local_json",
+    "options": {
+      "path": ".draft_assistant_profiles\\league-a\\data\\projections.json"
+    }
+  }
+}

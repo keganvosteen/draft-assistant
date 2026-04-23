@@ -34,6 +34,7 @@ class LocalJsonProvider(Provider):
                 bye_week=p.get("bye_week"),
                 adp=p.get("adp"),
                 projections=p.get("projections", {}),
+                metadata=p.get("metadata", {}),
             ))
         return players
 
