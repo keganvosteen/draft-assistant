@@ -12,6 +12,14 @@ class Player:
     bye_week: Optional[int] = None
     adp: Optional[float] = None
     projections: Dict[str, float] = field(default_factory=dict)
+    # Extended fields for historical / contextual analysis
+    age: Optional[int] = None
+    experience: Optional[int] = None  # years in NFL
+    historical_stats: Dict[int, Dict[str, float]] = field(default_factory=dict)
+    previous_team: Optional[str] = None
+    draft_capital: Optional[str] = None  # e.g. "1st-round", "UDFA"
+    injury_history: List[str] = field(default_factory=list)
+    # Free-form bucket for provider-specific extras
     metadata: Dict[str, object] = field(default_factory=dict)
 
     def key(self) -> str:

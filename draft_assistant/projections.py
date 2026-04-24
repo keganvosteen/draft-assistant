@@ -8,10 +8,25 @@ from .scoring import fantasy_points
 FLEX_ELIGIBLE = {"RB", "WR", "TE"}
 
 
-def compute_points(players: List[Player], scoring: Dict[str, float]) -> Dict[str, float]:
+def compute_points(
+    players: List[Player],
+    scoring: Dict[str, float],
+    use_historical: bool = True,
+) -> Dict[str, float]:
+    """Compute projected fantasy points per player.
+
+    When use_historical=True (default) and a player has age or historical_stats,
+    the raw projections are blended with multi-year trends and adjusted by the
+    positional age curve before scoring.
+    """
     pts: Dict[str, float] = {}
     for p in players:
-        pts[p.key()] = fantasy_points(p.projections, scoring)
+        if use_historical and (p.age is not None or p.historical_stats):
+            from .historical import adjust_projections
+            adj = adjust_projections(p, scoring)
+            pts[p.key()] = fantasy_points(adj, scoring)
+        else:
+            pts[p.key()] = fantasy_points(p.projections, scoring)
     return pts
 
 
@@ -29,12 +44,18 @@ def _allocate_flex_baseline(points_by_pos: Dict[str, List[Tuple[str, float]]], f
     return alloc
 
 
-def replacement_levels(players: List[Player], scoring: Dict[str, float], teams: int, roster: Dict[str, int]) -> Dict[str, float]:
+def replacement_levels(
+    players: List[Player],
+    scoring: Dict[str, float],
+    teams: int,
+    roster: Dict[str, int],
+    use_historical: bool = True,
+) -> Dict[str, float]:
     # Build per-position sorted lists
     by_pos: Dict[str, List[Player]] = {}
     for p in players:
         by_pos.setdefault(p.position, []).append(p)
-    pts_map = compute_points(players, scoring)
+    pts_map = compute_points(players, scoring, use_historical=use_historical)
     points_by_pos: Dict[str, List[Tuple[str, float]]] = {}
     for pos, plist in by_pos.items():
         points_by_pos[pos] = sorted(

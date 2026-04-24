@@ -15,10 +15,16 @@ from .storage import load_state, save_players, save_state
 from .suggest import suggest_players
 
 
-def launch_ui(profile: str = DEFAULT_PROFILE) -> None:
-    from .ui import run_ui
+def launch_desktop_ui(profile: str = DEFAULT_PROFILE) -> None:
+    from .ui_desktop import run_ui
 
     run_ui(initial_profile=profile)
+
+
+def launch_terminal_ui(profile: str = DEFAULT_PROFILE) -> None:
+    from .ui import run_interactive
+
+    run_interactive(profile=profile)
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -90,12 +96,16 @@ def cmd_pick(args: argparse.Namespace, mine: bool) -> None:
 def cmd_undo(args: argparse.Namespace) -> None:
     config, state, players, paths = _load_all(args.profile)
     tracker = DraftTracker(config, state, players)
-    last = tracker.undo()
-    if not last:
+    steps = getattr(args, "steps", 1) or 1
+    undone = tracker.undo(steps)
+    if not undone:
         print("No picks to undo.")
         return
     save_state(state, paths.state_path)
-    print(f"Undid: {last}")
+    for key in undone:
+        print(f"Undid: {key}")
+    if len(undone) > 1:
+        print(f"({len(undone)} pick(s) undone)")
 
 
 def cmd_roster(args: argparse.Namespace) -> None:
@@ -142,8 +152,11 @@ def main() -> None:
     )
     sub = parser.add_subparsers(dest="command")
 
-    p_ui = sub.add_parser("ui", help="Launch desktop UI")
-    p_ui.set_defaults(func=lambda a: launch_ui(a.profile))
+    p_ui = sub.add_parser("ui", help="Launch desktop (Tkinter) UI")
+    p_ui.set_defaults(func=lambda a: launch_desktop_ui(a.profile))
+
+    p_draft = sub.add_parser("draft", help="Launch interactive terminal UI")
+    p_draft.set_defaults(func=lambda a: launch_terminal_ui(a.profile))
 
     p_init = sub.add_parser("init", help="Initialize profile data")
     p_init.set_defaults(func=cmd_init)
@@ -167,7 +180,8 @@ def main() -> None:
     p_mypick.add_argument("-p", "--position", type=str, default=None)
     p_mypick.set_defaults(func=lambda a: cmd_pick(a, mine=True))
 
-    p_undo = sub.add_parser("undo", help="Undo last pick")
+    p_undo = sub.add_parser("undo", help="Undo last pick(s)")
+    p_undo.add_argument("-n", "--steps", type=int, default=1, help="Number of picks to undo")
     p_undo.set_defaults(func=cmd_undo)
 
     p_roster = sub.add_parser("roster", help="Show your roster and needs")
@@ -256,15 +270,135 @@ def main() -> None:
     p_free.add_argument("--csv", type=str, default=None)
     p_free.set_defaults(func=cmd_pull_free_data)
 
+    # log command
+    def cmd_log(args: argparse.Namespace) -> None:
+        import csv
+        config, state, players, _paths = _load_all(args.profile)
+        tracker = DraftTracker(config, state, players)
+        log = tracker.draft_log()
+        if not log:
+            print("No picks recorded yet.")
+            return
+        teams = config.teams
+        for pick_num, key, is_mine in log:
+            rd = (pick_num - 1) // teams + 1
+            pick_in_rd = (pick_num - 1) % teams + 1
+            mine_flag = " *" if is_mine else ""
+            p = tracker.players.get(key)
+            name = p.name if p else key
+            pos = p.position if p else "?"
+            print(f"Rd {rd} Pick {pick_in_rd}: {name} ({pos}){mine_flag}")
+        if args.csv:
+            with open(args.csv, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["pick", "round", "pick_in_round", "player", "position", "is_mine"])
+                for pick_num, key, is_mine in log:
+                    rd = (pick_num - 1) // teams + 1
+                    pick_in_rd = (pick_num - 1) % teams + 1
+                    p = tracker.players.get(key)
+                    w.writerow([pick_num, rd, pick_in_rd, p.name if p else key, p.position if p else "", is_mine])
+            print(f"Draft log exported to {args.csv}")
+
+    p_log = sub.add_parser("log", help="Show draft pick log")
+    p_log.add_argument("--csv", type=str, default=None, help="Export log to CSV")
+    p_log.set_defaults(func=cmd_log)
+
+    # collect (Sleeper API only)
+    def cmd_collect(args: argparse.Namespace) -> None:
+        paths = ensure_profile(args.profile)
+        from .collectors.sleeper_historical import collect_players
+        players = collect_players(
+            current_season=args.season,
+            history_seasons=args.history,
+        )
+        if not players:
+            print("Collection failed or returned no players.")
+            return
+        out = args.out or paths.projections_path
+        save_players(players, out)
+        print(f"Saved {len(players)} enriched players to {out}")
+
+    p_collect = sub.add_parser("collect", help="Collect Sleeper player data with historical stats")
+    p_collect.add_argument("--season", type=int, default=2026)
+    p_collect.add_argument("--history", type=int, default=3)
+    p_collect.add_argument("--out", type=str, default=None)
+    p_collect.set_defaults(func=cmd_collect)
+
+    # collect-all (nflverse + Sleeper + FFC ADP)
+    def cmd_collect_all(args: argparse.Namespace) -> None:
+        paths = ensure_profile(args.profile)
+        from .collectors.combined import collect_all
+        players = collect_all(
+            current_season=args.season,
+            history_seasons=args.history,
+            scoring_format=args.scoring,
+            teams=args.teams,
+            skip_sleeper=args.skip_sleeper,
+            skip_adp=args.skip_adp,
+        )
+        if not players:
+            print("Collection failed or returned no players.")
+            return
+        out = args.out or paths.projections_path
+        save_players(players, out)
+        print(f"\nSaved {len(players)} fully enriched players to {out}")
+
+    p_ca = sub.add_parser("collect-all",
+        help="Collect from all sources: nflverse + Sleeper + FFC ADP (requires nfl_data_py)")
+    p_ca.add_argument("--season", type=int, default=2026)
+    p_ca.add_argument("--history", type=int, default=3)
+    p_ca.add_argument("--scoring", choices=["ppr", "half-ppr", "standard"], default="ppr")
+    p_ca.add_argument("--teams", type=int, default=12)
+    p_ca.add_argument("--out", type=str, default=None)
+    p_ca.add_argument("--skip-sleeper", action="store_true")
+    p_ca.add_argument("--skip-adp", action="store_true")
+    p_ca.set_defaults(func=cmd_collect_all)
+
+    # consensus (multi-source merge)
+    def cmd_consensus(args: argparse.Namespace) -> None:
+        paths = ensure_profile(args.profile)
+        from .consensus import build_consensus
+        out = args.out or paths.projections_path
+        if not args.sources or len(args.sources) < 2:
+            print("Provide at least 2 source files: --sources file1.json file2.json ...")
+            return
+        build_consensus(args.sources, method=args.method, output_path=out)
+
+    p_consensus = sub.add_parser("consensus", help="Merge multiple projection sources")
+    p_consensus.add_argument("--sources", nargs="+", required=True)
+    p_consensus.add_argument("--method", choices=["median", "mean"], default="median")
+    p_consensus.add_argument("--out", type=str, default=None)
+    p_consensus.set_defaults(func=cmd_consensus)
+
+    # auction
+    def cmd_auction(args: argparse.Namespace) -> None:
+        config, state, players, _paths = _load_all(args.profile)
+        from .auction import compute_dollar_values
+        values = compute_dollar_values(config, players, budget_per_team=args.budget)
+        sorted_vals = sorted(values.items(), key=lambda x: x[1], reverse=True)
+        player_map = {p.key(): p for p in players}
+        print(f"Auction values (${args.budget}/team, {config.teams} teams):")
+        for key, val in sorted_vals[:args.top]:
+            p = player_map.get(key)
+            if p:
+                print(f"  ${val:6.1f}  {p.name} ({p.position})")
+
+    p_auction = sub.add_parser("auction", help="Show auction dollar values")
+    p_auction.add_argument("--budget", type=int, default=200)
+    p_auction.add_argument("-n", "--top", type=int, default=50)
+    p_auction.set_defaults(func=cmd_auction)
+
     args = parser.parse_args()
     if hasattr(args, "func"):
         args.func(args)
     else:
+        # No subcommand: prefer terminal UI (always available); fall back to
+        # desktop UI only if tkinter is present and terminal fails.
         try:
-            launch_ui(args.profile)
+            launch_terminal_ui(args.profile)
         except Exception as exc:
             parser.print_help()
-            print(f"\nUnable to launch UI: {exc}")
+            print(f"\nUnable to launch terminal UI: {exc}")
             raise SystemExit(1)
 
 

@@ -1,9 +1,18 @@
+"""Interactive terminal UI for the draft assistant."""
 from __future__ import annotations
 
-import json
-from typing import Dict, List, Tuple
+import os
+import sys
+from typing import Dict, List, Optional, Tuple
 
+try:
+    import readline  # noqa: F401  # Optional: command history on Unix-like shells.
+except ImportError:  # pragma: no cover - Windows has no stdlib readline.
+    readline = None
+
+from .config import DEFAULT_CONFIG
 from .draft import DraftTracker
+from .historical import confidence_score
 from .models import DraftState, LeagueConfig, Player
 from .profiles import (
     DEFAULT_PROFILE,
@@ -14,619 +23,432 @@ from .profiles import (
     save_profile_config,
 )
 from .providers.base import build_provider
-from .sample_data import sample_players
-from .storage import load_state, save_players, save_state
+from .storage import load_state, save_state, save_players
 from .suggest import needs_by_position, suggest_players
 
-try:
-    import tkinter as tk
-    from tkinter import messagebox, simpledialog, ttk
-except Exception as exc:  # pragma: no cover - platform dependent
-    tk = None
-    messagebox = None
-    simpledialog = None
-    ttk = None
-    _TK_IMPORT_ERROR = exc
-else:
-    _TK_IMPORT_ERROR = None
-
-
-POSITION_CHOICES = ["", "QB", "RB", "WR", "TE", "K", "DST"]
-ROSTER_FIELDS = ["QB", "RB", "WR", "TE", "FLEX", "K", "DST", "BN", "IR"]
-VOR_TOOLTIP_TEXT = (
-    "VOR (Value Over Replacement)\n"
-    "Projected points above the league replacement line at that position.\n"
-    "Replacement uses league size, required starters, and FLEX demand."
-)
-SCORE_TOOLTIP_TEXT = (
-    "Draft-aware score.\n"
-    "Combines dynamic lineup gain, VOR, ADP-based Monte Carlo scarcity before\n"
-    "your next snake-draft pick, and a small bye-week tiebreaker."
-)
-SCORING_PRESETS: Dict[str, Dict[str, float]] = {
-    "PPR": {
-        "pass_yd": 0.04,
-        "pass_td": 4.0,
-        "pass_int": -2.0,
-        "rush_yd": 0.1,
-        "rush_td": 6.0,
-        "rec": 1.0,
-        "rec_yd": 0.1,
-        "rec_td": 6.0,
-        "fumbles": -2.0,
-    },
-    "Half PPR": {
-        "pass_yd": 0.04,
-        "pass_td": 4.0,
-        "pass_int": -2.0,
-        "rush_yd": 0.1,
-        "rush_td": 6.0,
-        "rec": 0.5,
-        "rec_yd": 0.1,
-        "rec_td": 6.0,
-        "fumbles": -2.0,
-    },
-    "Standard": {
-        "pass_yd": 0.04,
-        "pass_td": 4.0,
-        "pass_int": -2.0,
-        "rush_yd": 0.1,
-        "rush_td": 6.0,
-        "rec": 0.0,
-        "rec_yd": 0.1,
-        "rec_td": 6.0,
-        "fumbles": -2.0,
-    },
+POSITIONS = ["QB", "RB", "WR", "TE", "FLEX", "K", "DST", "BN"]
+SCORING_PRESETS = {
+    "ppr": {"rec": 1.0},
+    "half": {"rec": 0.5},
+    "standard": {"rec": 0.0},
 }
 
+CLEAR = "\033[2J\033[H"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+CYAN = "\033[36m"
+RED = "\033[31m"
+RESET = "\033[0m"
 
-class HoverTooltip:
-    def __init__(self, widget: tk.Widget, text: str, delay_ms: int = 250) -> None:
-        self.widget = widget
-        self.text = text
-        self.delay_ms = delay_ms
-        self._tip: tk.Toplevel | None = None
-        self._after_id: str | None = None
 
-        self.widget.bind("<Enter>", self._on_enter, add="+")
-        self.widget.bind("<Leave>", self._on_leave, add="+")
-        self.widget.bind("<ButtonPress>", self._on_leave, add="+")
-        self.widget.bind("<Destroy>", self._on_leave, add="+")
+def _clear():
+    sys.stdout.write(CLEAR)
+    sys.stdout.flush()
 
-    def _on_enter(self, _event: object) -> None:
-        self._schedule()
 
-    def _on_leave(self, _event: object) -> None:
-        if self._after_id is not None:
-            self.widget.after_cancel(self._after_id)
-            self._after_id = None
-        self._hide()
+def _header(title: str):
+    width = 60
+    print(f"\n{BOLD}{CYAN}{'=' * width}{RESET}")
+    print(f"{BOLD}{CYAN}{title:^{width}}{RESET}")
+    print(f"{BOLD}{CYAN}{'=' * width}{RESET}\n")
 
-    def _schedule(self) -> None:
-        if self._after_id is not None:
-            self.widget.after_cancel(self._after_id)
-        self._after_id = self.widget.after(self.delay_ms, self._show)
 
-    def _show(self) -> None:
-        self._after_id = None
-        if self._tip is not None:
-            return
-        self._tip = tk.Toplevel(self.widget)
-        self._tip.wm_overrideredirect(True)
+def _prompt(msg: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    val = input(f"  {msg}{suffix}: ").strip()
+    return val if val else default
+
+
+def _prompt_int(msg: str, default: int) -> int:
+    raw = _prompt(msg, str(default))
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _prompt_float(msg: str, default: float) -> float:
+    raw = _prompt(msg, str(default))
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+# ── Setup Wizard ──────────────────────────────────────────────
+
+
+def _setup_wizard(paths: ProfilePaths) -> Tuple[LeagueConfig, DraftState]:
+    """Interactive league setup. Returns (config, state)."""
+    _clear()
+    _header(f"FANTASY DRAFT ASSISTANT — LEAGUE SETUP [{paths.profile}]")
+
+    teams = _prompt_int("Number of teams", 12)
+    my_pick = _prompt_int("Your draft position (1-based)", 1)
+    team_name = _prompt("Your team name", "My Team")
+
+    # Scoring format
+    print(f"\n  {BOLD}Scoring format:{RESET}")
+    print("    1) PPR (1 pt per reception)")
+    print("    2) Half PPR (0.5 pt)")
+    print("    3) Standard (0 pt)")
+    print("    4) Custom")
+    fmt = _prompt("Choice", "1")
+
+    scoring = dict(DEFAULT_CONFIG["scoring"])
+    if fmt == "2":
+        scoring["rec"] = 0.5
+    elif fmt == "3":
+        scoring["rec"] = 0.0
+    elif fmt == "4":
+        print(f"\n  {DIM}Enter scoring overrides (blank to keep default).{RESET}")
+        for key in ["pass_yd", "pass_td", "pass_int", "rush_yd", "rush_td",
+                     "rec", "rec_yd", "rec_td", "fumbles"]:
+            scoring[key] = _prompt_float(f"  {key}", scoring.get(key, 0.0))
+
+    # Roster slots
+    print(f"\n  {BOLD}Roster slots:{RESET}")
+    roster = dict(DEFAULT_CONFIG["roster"])
+    for pos in POSITIONS:
+        roster[pos] = _prompt_int(f"  {pos}", roster.get(pos, 0))
+
+    provider = {
+        "type": "local_json",
+        "options": {"path": paths.projections_path},
+    }
+
+    draft_cfg = dict(DEFAULT_CONFIG["draft"])
+    draft_cfg["slot"] = my_pick
+    config = LeagueConfig(teams=teams, roster=roster, scoring=scoring, provider=provider, draft=draft_cfg)
+    save_profile_config(config, paths)
+
+    league_teams = [f"Team {i + 1}" for i in range(teams)]
+    if 1 <= my_pick <= teams:
+        league_teams[my_pick - 1] = team_name
+
+    state = DraftState(
+        my_team_name=team_name,
+        league_teams=league_teams,
+    )
+    save_state(state, paths.state_path)
+
+    # Data source
+    data_path = paths.projections_path
+    print(f"\n  {BOLD}Player data source:{RESET}")
+    print("    1) Sample data (built-in, works offline)")
+    print("    2) Collect real data (nflverse + Sleeper + ADP)")
+    print(f"    3) Keep existing data{' (' + data_path + ')' if os.path.exists(data_path) else ''}")
+    data_choice = _prompt("Choice", "1" if not os.path.exists(data_path) else "3")
+
+    if data_choice == "2":
+        season = _prompt_int("Season year", 2026)
+        scoring_fmt = "ppr" if scoring.get("rec", 0) >= 1.0 else "half-ppr" if scoring.get("rec", 0) >= 0.5 else "standard"
+        print(f"\n  {CYAN}Collecting data (this may take a minute)...{RESET}")
         try:
-            self._tip.wm_attributes("-topmost", True)
-        except Exception:
-            pass
-
-        label = ttk.Label(
-            self._tip,
-            text=self.text,
-            justify="left",
-            relief="solid",
-            borderwidth=1,
-            padding=(8, 5),
-            background="#fffde9",
-        )
-        label.pack()
-        x = self.widget.winfo_rootx() + 18
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
-        self._tip.wm_geometry(f"+{x}+{y}")
-
-    def _hide(self) -> None:
-        if self._tip is not None:
-            self._tip.destroy()
-            self._tip = None
-
-
-class DraftAssistantApp:
-    def __init__(self, initial_profile: str = DEFAULT_PROFILE) -> None:
-        if tk is None or ttk is None:
-            raise RuntimeError(f"Tkinter UI is unavailable: {_TK_IMPORT_ERROR}")
-
-        self.root = tk.Tk()
-        self.root.title("Draft Assistant")
-        self.root.geometry("1180x760")
-        self.root.minsize(980, 640)
-
-        self.paths: ProfilePaths
-        self.config: LeagueConfig
-        self.state: DraftState
-        self.players: List[Player]
-        self.tracker: DraftTracker
-
-        self.profile_var = tk.StringVar(value=initial_profile)
-        self.player_var = tk.StringVar()
-        self.position_var = tk.StringVar(value="")
-        self.top_n_var = tk.IntVar(value=20)
-        self.status_var = tk.StringVar(value="Loading...")
-
-        self.profile_combo: ttk.Combobox
-        self.suggestion_tree: ttk.Treeview
-        self.roster_text: tk.Text
-        self.picks_text: tk.Text
-        self._tooltips: List[HoverTooltip] = []
-
-        self._build_layout()
-        self._activate_profile(initial_profile)
-
-    def run(self) -> None:
-        self.root.mainloop()
-
-    def _build_layout(self) -> None:
-        self.root.columnconfigure(0, weight=1)
-        self.root.columnconfigure(1, weight=1)
-        self.root.rowconfigure(1, weight=1)
-        self.root.rowconfigure(2, weight=1)
-
-        controls = ttk.Frame(self.root, padding=10)
-        controls.grid(row=0, column=0, columnspan=2, sticky="ew")
-        controls.columnconfigure(7, weight=1)
-
-        ttk.Label(controls, text="League").grid(row=0, column=0, sticky="w")
-        self.profile_combo = ttk.Combobox(
-            controls,
-            textvariable=self.profile_var,
-            values=list_profiles(),
-            width=18,
-            state="readonly",
-        )
-        self.profile_combo.grid(row=0, column=1, sticky="w", padx=(6, 6))
-        self.profile_combo.bind("<<ComboboxSelected>>", lambda _e: self.switch_profile())
-        ttk.Button(controls, text="Switch", command=self.switch_profile).grid(row=0, column=2, sticky="w")
-        ttk.Button(controls, text="New League", command=self.create_profile).grid(row=0, column=3, sticky="w", padx=(6, 0))
-        ttk.Button(controls, text="Settings", command=self.open_settings).grid(row=0, column=4, sticky="w", padx=(6, 10))
-
-        ttk.Label(controls, text="Player").grid(row=0, column=5, sticky="w")
-        player_entry = ttk.Entry(controls, textvariable=self.player_var, width=30)
-        player_entry.grid(row=0, column=6, sticky="ew", padx=(6, 8))
-        player_entry.bind("<Return>", lambda _e: self.record_pick(my_pick=False))
-
-        ttk.Label(controls, text="Pos").grid(row=0, column=8, sticky="e")
-        pos_cb = ttk.Combobox(
-            controls,
-            textvariable=self.position_var,
-            values=POSITION_CHOICES,
-            width=6,
-            state="readonly",
-        )
-        pos_cb.grid(row=0, column=9, sticky="w", padx=(6, 8))
-
-        ttk.Label(controls, text="Top").grid(row=0, column=10, sticky="e")
-        top_spin = ttk.Spinbox(controls, from_=5, to=60, increment=1, textvariable=self.top_n_var, width=5)
-        top_spin.grid(row=0, column=11, sticky="w", padx=(6, 8))
-        ttk.Button(controls, text="Refresh", command=self.reload_data).grid(row=0, column=12, sticky="w")
-        ttk.Button(controls, text="League Pick", command=lambda: self.record_pick(my_pick=False)).grid(
-            row=0,
-            column=13,
-            sticky="w",
-            padx=(8, 0),
-        )
-        ttk.Button(controls, text="My Pick", command=lambda: self.record_pick(my_pick=True)).grid(
-            row=0,
-            column=14,
-            sticky="w",
-            padx=(8, 0),
-        )
-        ttk.Button(controls, text="Undo", command=self.undo_last).grid(row=0, column=15, sticky="w", padx=(8, 0))
-        ttk.Button(controls, text="Seed Sample Data", command=self.seed_sample_data).grid(
-            row=0,
-            column=16,
-            sticky="w",
-            padx=(8, 0),
-        )
-
-        suggestion_frame = ttk.LabelFrame(self.root, text="Suggestions", padding=10)
-        suggestion_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=10, pady=(0, 10))
-        suggestion_frame.columnconfigure(0, weight=1)
-        suggestion_frame.rowconfigure(1, weight=1)
-
-        info_row = ttk.Frame(suggestion_frame)
-        info_row.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
-        ttk.Label(info_row, text="How to read columns:").pack(side="left")
-        ttk.Label(info_row, text="VOR").pack(side="left", padx=(10, 2))
-        vor_info = tk.Label(
-            info_row,
-            text="i",
-            width=2,
-            cursor="question_arrow",
-            relief="groove",
-            borderwidth=1,
-            font=("Segoe UI", 8, "bold"),
-        )
-        vor_info.pack(side="left", padx=(0, 10))
-        ttk.Label(info_row, text="Score").pack(side="left", padx=(0, 2))
-        score_info = tk.Label(
-            info_row,
-            text="i",
-            width=2,
-            cursor="question_arrow",
-            relief="groove",
-            borderwidth=1,
-            font=("Segoe UI", 8, "bold"),
-        )
-        score_info.pack(side="left")
-        self._tooltips.append(HoverTooltip(vor_info, VOR_TOOLTIP_TEXT))
-        self._tooltips.append(HoverTooltip(score_info, SCORE_TOOLTIP_TEXT))
-
-        cols = ("name", "pos", "pts", "vor", "score", "adp")
-        self.suggestion_tree = ttk.Treeview(
-            suggestion_frame,
-            columns=cols,
-            show="headings",
-            height=16,
-            selectmode="browse",
-        )
-        self.suggestion_tree.heading("name", text="Name")
-        self.suggestion_tree.heading("pos", text="Pos")
-        self.suggestion_tree.heading("pts", text="Proj Pts")
-        self.suggestion_tree.heading("vor", text="VOR")
-        self.suggestion_tree.heading("score", text="Draft Score")
-        self.suggestion_tree.heading("adp", text="ADP")
-        self.suggestion_tree.column("name", width=320, anchor="w")
-        self.suggestion_tree.column("pos", width=60, anchor="center")
-        self.suggestion_tree.column("pts", width=90, anchor="e")
-        self.suggestion_tree.column("vor", width=90, anchor="e")
-        self.suggestion_tree.column("score", width=90, anchor="e")
-        self.suggestion_tree.column("adp", width=90, anchor="e")
-        self.suggestion_tree.grid(row=1, column=0, sticky="nsew")
-        self.suggestion_tree.bind("<<TreeviewSelect>>", self._on_suggestion_selected)
-
-        scrollbar = ttk.Scrollbar(suggestion_frame, orient="vertical", command=self.suggestion_tree.yview)
-        scrollbar.grid(row=1, column=1, sticky="ns")
-        self.suggestion_tree.configure(yscrollcommand=scrollbar.set)
-
-        roster_frame = ttk.LabelFrame(self.root, text="Roster & Needs", padding=10)
-        roster_frame.grid(row=2, column=0, sticky="nsew", padx=(10, 5), pady=(0, 10))
-        roster_frame.columnconfigure(0, weight=1)
-        roster_frame.rowconfigure(0, weight=1)
-
-        self.roster_text = tk.Text(roster_frame, height=12, wrap="word")
-        self.roster_text.grid(row=0, column=0, sticky="nsew")
-        self.roster_text.configure(state="disabled")
-
-        picks_frame = ttk.LabelFrame(self.root, text="Draft Log", padding=10)
-        picks_frame.grid(row=2, column=1, sticky="nsew", padx=(5, 10), pady=(0, 10))
-        picks_frame.columnconfigure(0, weight=1)
-        picks_frame.rowconfigure(0, weight=1)
-
-        self.picks_text = tk.Text(picks_frame, height=12, wrap="word")
-        self.picks_text.grid(row=0, column=0, sticky="nsew")
-        self.picks_text.configure(state="disabled")
-
-        status = ttk.Label(self.root, textvariable=self.status_var, anchor="w", padding=(10, 6))
-        status.grid(row=3, column=0, columnspan=2, sticky="ew")
-
-    def _refresh_profile_list(self, selected: str | None = None) -> None:
-        profiles = list_profiles()
-        self.profile_combo.configure(values=profiles)
-        if selected and selected in profiles:
-            self.profile_var.set(selected)
-        elif self.profile_var.get() not in profiles and profiles:
-            self.profile_var.set(profiles[0])
-
-    def _activate_profile(self, profile_name: str) -> None:
-        try:
-            self.paths = ensure_profile(profile_name)
-        except Exception as exc:
-            if messagebox:
-                messagebox.showerror("Profile Error", str(exc))
-            self.paths = ensure_profile(DEFAULT_PROFILE)
-        self._refresh_profile_list(self.paths.profile)
-        self.reload_data()
-
-    def switch_profile(self) -> None:
-        self._activate_profile(self.profile_var.get())
-
-    def create_profile(self) -> None:
-        if simpledialog is None:
-            self.status_var.set("New league creation is unavailable on this platform.")
-            return
-        name = simpledialog.askstring("New League", "Enter a league/profile name:")
-        if not name:
-            return
-        self._activate_profile(name)
-
-    def reload_data(self) -> None:
-        self.config = load_profile_config(self.paths)
-        self.state = load_state(self.paths.state_path)
-        provider = build_provider(self.config.provider)
-        self.players = provider.fetch_players()
-        self.tracker = DraftTracker(self.config, self.state, self.players)
-        self._refresh_view()
-
-    def _refresh_view(self) -> None:
-        self._refresh_suggestions()
-        self._refresh_roster()
-        self._refresh_picks()
-        self.status_var.set(
-            f"League: {self.paths.profile} | Players: {len(self.players)} | Picks: {len(self.state.picks)} | My picks: {len(self.state.my_picks)}"
-        )
-
-    def _refresh_suggestions(self) -> None:
-        for item in self.suggestion_tree.get_children():
-            self.suggestion_tree.delete(item)
-
-        available = self.tracker.available_players()
-        top_n = max(1, int(self.top_n_var.get() or 20))
-        ranked: List[Tuple[Player, float, float, float]] = suggest_players(
-            self.config,
-            available,
-            self.tracker.my_roster(),
-            top_n=top_n,
-            draft_state=self.state,
-        )
-        for p, pts, vor, score in ranked:
-            adp = "" if p.adp is None else f"{p.adp:.1f}"
-            self.suggestion_tree.insert(
-                "",
-                "end",
-                values=(p.name, p.position, f"{pts:.1f}", f"{vor:.1f}", f"{score:.1f}", adp),
+            from .collectors.combined import collect_all
+            players = collect_all(
+                current_season=season,
+                history_seasons=3,
+                scoring_format=scoring_fmt,
+                teams=teams,
             )
+            if players:
+                save_players(players, data_path)
+                print(f"\n  {GREEN}Saved {len(players)} players to {data_path}{RESET}")
+            else:
+                print(f"\n  {YELLOW}Collection returned no data. Falling back to sample data.{RESET}")
+                from .sample_data import sample_players
+                save_players(sample_players(), data_path)
+        except Exception as e:
+            print(f"\n  {RED}Collection failed: {e}{RESET}")
+            print(f"  {YELLOW}Falling back to sample data.{RESET}")
+            from .sample_data import sample_players
+            save_players(sample_players(), data_path)
+    elif data_choice == "1" or not os.path.exists(data_path):
+        from .sample_data import sample_players
+        save_players(sample_players(), data_path)
+        print(f"\n  {GREEN}Seeded sample projections at {data_path}{RESET}")
 
-    def _refresh_roster(self) -> None:
-        roster = self.tracker.my_roster()
-        needs = needs_by_position(self.config, roster)
-        lines = ["My roster"]
-        for pos in ["QB", "RB", "WR", "TE", "K", "DST"]:
-            names = ", ".join(p.name for p in roster.get(pos, []))
-            lines.append(f"{pos}: {names if names else '-'}")
-        lines.append("")
-        lines.append("Needs")
-        for pos in ["QB", "RB", "WR", "TE", "FLEX", "K", "DST"]:
-            lines.append(f"{pos}: {needs.get(pos, 0)}")
-        self._set_text(self.roster_text, "\n".join(lines))
-
-    def _refresh_picks(self) -> None:
-        if not self.state.picks:
-            self._set_text(self.picks_text, "No picks recorded yet.")
-            return
-        mine_set = set(self.state.my_picks)
-        lines = []
-        for idx, key in enumerate(self.state.picks, start=1):
-            mine = " (mine)" if key in mine_set else ""
-            lines.append(f"{idx}. {key}{mine}")
-        self._set_text(self.picks_text, "\n".join(lines))
-
-    def _set_text(self, widget: tk.Text, value: str) -> None:
-        widget.configure(state="normal")
-        widget.delete("1.0", "end")
-        widget.insert("1.0", value)
-        widget.configure(state="disabled")
-
-    def _on_suggestion_selected(self, _event: object) -> None:
-        selected = self.suggestion_tree.selection()
-        if not selected:
-            return
-        values = self.suggestion_tree.item(selected[0], "values")
-        if not values:
-            return
-        self.player_var.set(str(values[0]))
-        self.position_var.set(str(values[1]))
-
-    def record_pick(self, my_pick: bool) -> None:
-        player_name = self.player_var.get().strip()
-        if not player_name:
-            self.status_var.set("Enter a player name or click one from suggestions.")
-            return
-        position = self.position_var.get().strip() or None
-        picked = self.tracker.record_pick(player_name, position=position, my_pick=my_pick)
-        if not picked:
-            self.status_var.set("No matching available player found.")
-            return
-        save_state(self.state, self.paths.state_path)
-        self.player_var.set("")
-        self.position_var.set("")
-        tag = "My pick" if my_pick else "Pick"
-        self.status_var.set(f"{tag}: {picked.name} ({picked.position})")
-        self._refresh_view()
-
-    def undo_last(self) -> None:
-        last = self.tracker.undo()
-        if not last:
-            self.status_var.set("No picks to undo.")
-            return
-        save_state(self.state, self.paths.state_path)
-        self.status_var.set(f"Undid: {last}")
-        self._refresh_view()
-
-    def seed_sample_data(self) -> None:
-        out_path = self.paths.projections_path
-        provider = self.config.provider or {}
-        if provider.get("type") == "local_json":
-            opts = provider.get("options", {}) or {}
-            out_path = str(opts.get("path", out_path))
-        if len(self.players) > len(sample_players()):
-            self.status_var.set(f"Already using populated data from {out_path}")
-            if messagebox:
-                messagebox.showinfo("Data Already Loaded", f"Loaded {len(self.players)} players from:\n{out_path}")
-            return
-        save_players(sample_players(), out_path)
-        self.status_var.set(f"Seeded sample data to {out_path}")
-        self.reload_data()
-        if messagebox:
-            messagebox.showinfo("Sample Data Ready", f"Seeded sample projections at:\n{out_path}")
-
-    def open_settings(self) -> None:
-        dialog = tk.Toplevel(self.root)
-        dialog.title(f"League Settings - {self.paths.profile}")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.geometry("760x680")
-
-        frame = ttk.Frame(dialog, padding=12)
-        frame.grid(row=0, column=0, sticky="nsew")
-        dialog.columnconfigure(0, weight=1)
-        dialog.rowconfigure(0, weight=1)
-        frame.columnconfigure(1, weight=1)
-
-        ttk.Label(frame, text=f"Profile: {self.paths.profile}").grid(row=0, column=0, columnspan=2, sticky="w")
-
-        ttk.Label(frame, text="Teams").grid(row=1, column=0, sticky="w", pady=(10, 4))
-        teams_var = tk.StringVar(value=str(self.config.teams))
-        ttk.Entry(frame, textvariable=teams_var, width=10).grid(row=1, column=1, sticky="w", pady=(10, 4))
-
-        draft_box = ttk.LabelFrame(frame, text="Draft", padding=8)
-        draft_box.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 8))
-        draft_settings = self.config.draft or {}
-        draft_slot_var = tk.StringVar(value=str(int(draft_settings.get("slot", 1))))
-        sims_var = tk.StringVar(value=str(int(draft_settings.get("monte_carlo_sims", 250))))
-        noise_var = tk.StringVar(value=str(float(draft_settings.get("adp_noise", 8.0))))
-        ttk.Label(draft_box, text="Snake Slot").grid(row=0, column=0, sticky="w", padx=(0, 4), pady=3)
-        ttk.Entry(draft_box, textvariable=draft_slot_var, width=6).grid(row=0, column=1, sticky="w", pady=3)
-        ttk.Label(draft_box, text="Monte Carlo Sims").grid(row=0, column=2, sticky="w", padx=(16, 4), pady=3)
-        ttk.Entry(draft_box, textvariable=sims_var, width=8).grid(row=0, column=3, sticky="w", pady=3)
-        ttk.Label(draft_box, text="ADP Randomness").grid(row=0, column=4, sticky="w", padx=(16, 4), pady=3)
-        ttk.Entry(draft_box, textvariable=noise_var, width=8).grid(row=0, column=5, sticky="w", pady=3)
-
-        roster_box = ttk.LabelFrame(frame, text="Roster Slots", padding=8)
-        roster_box.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 8))
-        roster_vars: Dict[str, tk.StringVar] = {}
-        for idx, pos in enumerate(ROSTER_FIELDS):
-            ttk.Label(roster_box, text=pos).grid(row=idx // 3, column=(idx % 3) * 2, sticky="w", padx=(0, 4), pady=3)
-            var = tk.StringVar(value=str(int(self.config.roster.get(pos, 0))))
-            roster_vars[pos] = var
-            ttk.Entry(roster_box, textvariable=var, width=6).grid(row=idx // 3, column=(idx % 3) * 2 + 1, sticky="w", pady=3)
-
-        scoring_ctl = ttk.Frame(frame)
-        scoring_ctl.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(4, 4))
-        scoring_ctl.columnconfigure(2, weight=1)
-        ttk.Label(scoring_ctl, text="Preset").grid(row=0, column=0, sticky="w")
-        preset_var = tk.StringVar(value="Half PPR")
-        preset = ttk.Combobox(scoring_ctl, textvariable=preset_var, values=list(SCORING_PRESETS.keys()), width=12, state="readonly")
-        preset.grid(row=0, column=1, sticky="w", padx=(6, 8))
-
-        scoring_label = ttk.Label(frame, text="Scoring JSON")
-        scoring_label.grid(row=5, column=0, columnspan=2, sticky="w")
-
-        scoring_text = tk.Text(frame, height=20, wrap="none")
-        scoring_text.grid(row=6, column=0, columnspan=2, sticky="nsew")
-        frame.rowconfigure(6, weight=1)
-        scoring_text.insert("1.0", json.dumps(self.config.scoring, indent=2, sort_keys=True))
-
-        def _set_scoring(mapping: Dict[str, float]) -> None:
-            scoring_text.delete("1.0", "end")
-            scoring_text.insert("1.0", json.dumps(mapping, indent=2, sort_keys=True))
-
-        def apply_preset() -> None:
-            selected = preset_var.get()
-            base = SCORING_PRESETS.get(selected)
-            if not base:
-                return
-            try:
-                current = json.loads(scoring_text.get("1.0", "end").strip() or "{}")
-            except json.JSONDecodeError:
-                current = {}
-            if not isinstance(current, dict):
-                current = {}
-            current.update(base)
-            _set_scoring(current)
-
-        ttk.Button(scoring_ctl, text="Apply Preset", command=apply_preset).grid(row=0, column=2, sticky="w")
-
-        button_row = ttk.Frame(frame)
-        button_row.grid(row=7, column=0, columnspan=2, sticky="e", pady=(10, 0))
-
-        def save_settings() -> None:
-            try:
-                teams = int(teams_var.get())
-                if teams < 1:
-                    raise ValueError
-            except ValueError:
-                if messagebox:
-                    messagebox.showerror("Invalid Teams", "Teams must be a positive integer.")
-                return
-
-            try:
-                draft_slot = int(draft_slot_var.get())
-                sims = int(sims_var.get())
-                adp_noise = float(noise_var.get())
-                if draft_slot < 1 or draft_slot > teams or sims < 0 or adp_noise < 0:
-                    raise ValueError
-            except ValueError:
-                if messagebox:
-                    messagebox.showerror(
-                        "Invalid Draft Settings",
-                        "Draft slot must fit within league teams; sims and ADP randomness must be non-negative.",
-                    )
-                return
-
-            roster_updates: Dict[str, int] = {}
-            try:
-                for pos, var in roster_vars.items():
-                    val = int(var.get())
-                    if val < 0:
-                        raise ValueError
-                    roster_updates[pos] = val
-            except ValueError:
-                if messagebox:
-                    messagebox.showerror("Invalid Roster", "Roster slots must be non-negative integers.")
-                return
-
-            raw = scoring_text.get("1.0", "end").strip()
-            try:
-                parsed = json.loads(raw or "{}")
-            except json.JSONDecodeError as exc:
-                if messagebox:
-                    messagebox.showerror("Invalid Scoring JSON", f"Could not parse scoring JSON:\n{exc}")
-                return
-            if not isinstance(parsed, dict):
-                if messagebox:
-                    messagebox.showerror("Invalid Scoring JSON", "Scoring JSON must be an object.")
-                return
-            try:
-                scoring = {str(k): float(v) for k, v in parsed.items()}
-            except (TypeError, ValueError):
-                if messagebox:
-                    messagebox.showerror("Invalid Scoring JSON", "All scoring values must be numeric.")
-                return
-
-            updated_roster = dict(self.config.roster)
-            updated_roster.update(roster_updates)
-            self.config.teams = teams
-            self.config.roster = updated_roster
-            self.config.scoring = scoring
-            draft_settings = dict(self.config.draft or {})
-            draft_settings.update({
-                "slot": draft_slot,
-                "snake": True,
-                "monte_carlo_sims": sims,
-                "adp_noise": adp_noise,
-            })
-            self.config.draft = draft_settings
-            save_profile_config(self.config, self.paths)
-
-            if len(self.state.league_teams) != teams:
-                self.state.league_teams = [f"Team {i+1}" for i in range(teams)]
-                save_state(self.state, self.paths.state_path)
-
-            self.reload_data()
-            self.status_var.set(f"Saved settings for league '{self.paths.profile}'.")
-            dialog.destroy()
-
-        ttk.Button(button_row, text="Cancel", command=dialog.destroy).grid(row=0, column=0, padx=(0, 8))
-        ttk.Button(button_row, text="Save Settings", command=save_settings).grid(row=0, column=1)
+    print(f"\n  {GREEN}League saved! {teams} teams, pick #{my_pick}, {_scoring_label(scoring)}{RESET}")
+    input(f"\n  {DIM}Press Enter to start drafting…{RESET}")
+    return config, state
 
 
-def run_ui(initial_profile: str = DEFAULT_PROFILE) -> None:
-    app = DraftAssistantApp(initial_profile=initial_profile)
-    app.run()
+def _scoring_label(scoring: dict) -> str:
+    rec = scoring.get("rec", 0.0)
+    if rec >= 1.0:
+        return "PPR"
+    elif rec >= 0.5:
+        return "Half PPR"
+    return "Standard"
+
+
+# ── Draft Board ───────────────────────────────────────────────
+
+
+def _show_board(tracker: DraftTracker, config: LeagueConfig, state: DraftState):
+    """Show the live draft board: suggestions, roster, and needs."""
+    _clear()
+    avail = tracker.available_players()
+    roster = tracker.my_roster()
+    needs = needs_by_position(config, roster)
+    total_picks = len(state.picks)
+
+    ranked = suggest_players(config, avail, roster, top_n=10, total_picks=total_picks, draft_state=state)
+
+    # Compact header
+    rd = total_picks // config.teams + 1
+    pick_in_rd = total_picks % config.teams + 1
+    print(f"{BOLD}  Round {rd}, Pick {pick_in_rd}{RESET}  |  "
+          f"{total_picks} picks made  |  "
+          f"{len(avail)} available\n")
+
+    # Two-column layout: suggestions on left, roster on right
+    # Suggestions
+    print(f"  {BOLD}{CYAN}TOP RECOMMENDATIONS{RESET}")
+    print(f"  {'#':>2}  {'Player':<25} {'Pos':4} {'Pts':>6} {'VOR':>6} {'Score':>6}  {'Info'}")
+    print(f"  {DIM}{'─' * 75}{RESET}")
+    for i, (p, pts, vor, score) in enumerate(ranked, 1):
+        extras = []
+        if p.age is not None:
+            extras.append(f"Age:{p.age}")
+        conf = confidence_score(p)
+        if conf != 0.5:
+            extras.append(f"Conf:{conf:.0%}")
+        if p.bye_week:
+            extras.append(f"Bye:{p.bye_week}")
+        info = " ".join(extras)
+
+        need_flag = ""
+        need = needs.get(p.position, 0)
+        flex = needs.get("FLEX", 0) if p.position in {"RB", "WR", "TE"} else 0
+        if need > 0:
+            need_flag = f" {GREEN}NEED{RESET}"
+        elif flex > 0:
+            need_flag = f" {YELLOW}FLEX{RESET}"
+
+        print(f"  {i:>2}. {p.name:<25} {p.position:4} {pts:>6.1f} {vor:>6.1f} {score:>6.1f}  {DIM}{info}{RESET}{need_flag}")
+
+    # Roster
+    print(f"\n  {BOLD}{CYAN}MY ROSTER{RESET}")
+    total_filled = 0
+    for pos in ["QB", "RB", "WR", "TE", "K", "DST"]:
+        players_at = roster.get(pos, [])
+        names = ", ".join(p.name for p in players_at) if players_at else f"{DIM}—{RESET}"
+        slot_count = config.roster.get(pos, 0)
+        filled = len(players_at)
+        total_filled += filled
+        status = f"{GREEN}{filled}/{slot_count}{RESET}" if filled >= slot_count else f"{YELLOW}{filled}/{slot_count}{RESET}"
+        print(f"    {pos:4} [{status}]  {names}")
+
+    # FLEX
+    flex_target = config.roster.get("FLEX", 0)
+    flex_open = needs.get("FLEX", 0)
+    flex_filled = flex_target - flex_open
+    flex_status = f"{GREEN}{flex_filled}/{flex_target}{RESET}" if flex_open == 0 else f"{YELLOW}{flex_filled}/{flex_target}{RESET}"
+    print(f"    {'FLEX':4} [{flex_status}]  {DIM}(RB/WR/TE overflow){RESET}")
+
+    # Needs summary line
+    need_strs = [f"{pos}:{n}" for pos, n in needs.items() if n > 0 and pos != "FLEX"]
+    if needs.get("FLEX", 0) > 0:
+        need_strs.append(f"FLEX:{needs['FLEX']}")
+    if need_strs:
+        print(f"\n  {BOLD}Needs:{RESET} {', '.join(need_strs)}")
+    else:
+        print(f"\n  {GREEN}{BOLD}All starter slots filled!{RESET}")
+
+
+def _show_log(tracker: DraftTracker, config: LeagueConfig):
+    """Show draft log."""
+    log = tracker.draft_log()
+    if not log:
+        print(f"\n  {DIM}No picks yet.{RESET}")
+        return
+    print(f"\n  {BOLD}{CYAN}DRAFT LOG{RESET}")
+    for pick_num, key, is_mine in log:
+        rd = (pick_num - 1) // config.teams + 1
+        pick_in_rd = (pick_num - 1) % config.teams + 1
+        p = tracker.players.get(key)
+        name = p.name if p else key
+        pos = p.position if p else "?"
+        mine_flag = f" {GREEN}*{RESET}" if is_mine else ""
+        print(f"    Rd {rd} Pick {pick_in_rd}: {name} ({pos}){mine_flag}")
+
+
+def _show_auction(config: LeagueConfig, players: List[Player], budget: int = 200):
+    from .auction import compute_dollar_values
+    values = compute_dollar_values(config, players, budget_per_team=budget)
+    sorted_vals = sorted(values.items(), key=lambda x: x[1], reverse=True)
+    player_map = {p.key(): p for p in players}
+    print(f"\n  {BOLD}{CYAN}AUCTION VALUES (${budget}/team){RESET}")
+    for key, val in sorted_vals[:15]:
+        p = player_map.get(key)
+        if p:
+            print(f"    ${val:6.1f}  {p.name} ({p.position})")
+
+
+def _show_help():
+    print(f"""
+  {BOLD}{CYAN}COMMANDS{RESET}
+    {BOLD}pick <name>{RESET}       Record someone else's pick
+    {BOLD}my <name>{RESET}         Record YOUR pick
+    {BOLD}pick <name> -p RB{RESET} Specify position for ambiguous names
+    {BOLD}undo{RESET}              Undo last pick
+    {BOLD}undo <N>{RESET}          Undo last N picks
+    {BOLD}board{RESET}             Refresh the board
+    {BOLD}log{RESET}               Show full draft log
+    {BOLD}roster{RESET}            Show your roster details
+    {BOLD}auction{RESET}           Show auction dollar values
+    {BOLD}save{RESET}              Save draft state
+    {BOLD}help{RESET}              Show this help
+    {BOLD}quit{RESET}              Save and exit
+""")
+
+
+# ── Main Loop ─────────────────────────────────────────────────
+
+
+def run_interactive(profile: str = DEFAULT_PROFILE):
+    """Single entry point: setup (if needed) then live draft loop."""
+
+    paths = ensure_profile(profile)
+
+    # Load or create config
+    config_exists = os.path.exists(paths.config_path)
+    data_exists = os.path.exists(paths.projections_path)
+    if config_exists and data_exists:
+        print(f"\n  Found existing config for profile '{paths.profile}'.")
+        choice = _prompt("Start new league setup or continue? (new/continue)", "continue")
+        if choice.lower().startswith("n"):
+            config, state = _setup_wizard(paths)
+        else:
+            config = load_profile_config(paths)
+            state = load_state(paths.state_path)
+    else:
+        config, state = _setup_wizard(paths)
+
+    # Load players
+    provider = build_provider(config.provider)
+    players = provider.fetch_players()
+    if not players:
+        from .sample_data import sample_players
+        players = sample_players()
+        save_players(players, paths.projections_path)
+        print(f"  {GREEN}Loaded {len(players)} sample players.{RESET}")
+
+    tracker = DraftTracker(config, state, players)
+
+    # Show initial board
+    _show_board(tracker, config, state)
+    _show_help()
+
+    # Enable readline tab completion for player names
+    available_names = [p.name for p in players]
+
+    def _completer(text, state_idx):
+        prefix = text.lower()
+        matches = [n for n in available_names if n.lower().startswith(prefix)]
+        if state_idx < len(matches):
+            return matches[state_idx]
+        return None
+
+    readline.set_completer(_completer)
+    readline.parse_and_bind("tab: complete")
+    readline.set_completer_delims("")
+
+    while True:
+        try:
+            raw = input(f"\n  {BOLD}>{RESET} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if not raw:
+            continue
+
+        parts = raw.split(maxsplit=1)
+        cmd = parts[0].lower()
+        arg = parts[1] if len(parts) > 1 else ""
+
+        if cmd in ("quit", "exit", "q"):
+            save_state(state, paths.state_path)
+            print(f"  {GREEN}Draft saved. Goodbye!{RESET}")
+            break
+
+        elif cmd == "help":
+            _show_help()
+
+        elif cmd == "board":
+            _show_board(tracker, config, state)
+
+        elif cmd == "pick":
+            if not arg:
+                print(f"  {RED}Usage: pick <player name>{RESET}")
+                continue
+            pos_filter = None
+            if " -p " in arg:
+                arg, pos_filter = arg.rsplit(" -p ", 1)
+                pos_filter = pos_filter.strip().upper()
+            picked = tracker.record_pick(arg, position=pos_filter, my_pick=False)
+            if picked:
+                save_state(state, paths.state_path)
+                print(f"  {DIM}Picked: {picked.name} ({picked.position}){RESET}")
+                _show_board(tracker, config, state)
+            else:
+                print(f"  {RED}No match found for '{arg}'. Try a different name.{RESET}")
+
+        elif cmd in ("my", "mypick"):
+            if not arg:
+                print(f"  {RED}Usage: my <player name>{RESET}")
+                continue
+            pos_filter = None
+            if " -p " in arg:
+                arg, pos_filter = arg.rsplit(" -p ", 1)
+                pos_filter = pos_filter.strip().upper()
+            picked = tracker.record_pick(arg, position=pos_filter, my_pick=True)
+            if picked:
+                save_state(state, paths.state_path)
+                print(f"  {GREEN}Your pick: {picked.name} ({picked.position}){RESET}")
+                _show_board(tracker, config, state)
+            else:
+                print(f"  {RED}No match found for '{arg}'. Try a different name.{RESET}")
+
+        elif cmd == "undo":
+            steps = 1
+            if arg:
+                try:
+                    steps = int(arg)
+                except ValueError:
+                    pass
+            undone = tracker.undo(steps)
+            if undone:
+                save_state(state, paths.state_path)
+                for key in undone:
+                    print(f"  {YELLOW}Undid: {key}{RESET}")
+                _show_board(tracker, config, state)
+            else:
+                print(f"  {DIM}Nothing to undo.{RESET}")
+
+        elif cmd == "log":
+            _show_log(tracker, config)
+
+        elif cmd == "roster":
+            _show_board(tracker, config, state)
+
+        elif cmd == "auction":
+            budget = 200
+            if arg:
+                try:
+                    budget = int(arg)
+                except ValueError:
+                    pass
+            _show_auction(config, tracker.available_players(), budget)
+
+        elif cmd == "save":
+            save_state(state, paths.state_path)
+            print(f"  {GREEN}Draft state saved.{RESET}")
+
+        else:
+            print(f"  {RED}Unknown command: '{cmd}'. Type 'help' for commands.{RESET}")
