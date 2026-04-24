@@ -120,6 +120,7 @@ python -m draft_assistant pull-free-data --season 2026 --stats-season 2025
 Uses `nfl_data_py` for historical stats + injuries + derived bye weeks, combined with Sleeper projections and FFC ADP.
 
 ```bash
+# Use Python 3.10 or 3.11 for this optional collector.
 pip install -r requirements-data.txt
 python -m draft_assistant collect-all --season 2026 --scoring ppr --teams 12
 ```

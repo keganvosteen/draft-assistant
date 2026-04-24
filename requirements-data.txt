@@ -1,4 +1,6 @@
-# Optional dependencies for real data collection (collect-all command)
+# Optional dependencies for real data collection (collect-all command).
+# nfl_data_py 0.3.x pins pandas<2, so use Python 3.10 or 3.11 for this
+# optional collector until nfl_data_py publishes Python 3.12+ compatible deps.
 # The core app has no external dependencies and runs on Python 3.10+ stdlib only.
 # Install these to use: python -m draft_assistant.cli collect-all
 nfl_data_py>=0.3.0
