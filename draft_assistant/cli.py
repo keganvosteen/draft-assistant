@@ -241,7 +241,7 @@ def main() -> None:
     p_log.add_argument("--csv", type=str, default=None, help="Export log to CSV")
     p_log.set_defaults(func=cmd_log)
 
-    # Collect historical data from Sleeper
+    # Collect historical data from Sleeper (legacy command)
     def cmd_collect(args: argparse.Namespace) -> None:
         from .collectors.sleeper_historical import collect_players
         players = collect_players(
@@ -260,6 +260,42 @@ def main() -> None:
     p_collect.add_argument("--history", type=int, default=3, help="Number of prior seasons to collect")
     p_collect.add_argument("--out", type=str, default="data/projections.json")
     p_collect.set_defaults(func=cmd_collect)
+
+    # Combined collector: nflverse + Sleeper + FFC ADP
+    def cmd_collect_all(args: argparse.Namespace) -> None:
+        from .collectors.combined import collect_all
+        players = collect_all(
+            current_season=args.season,
+            history_seasons=args.history,
+            scoring_format=args.scoring,
+            teams=args.teams,
+            skip_sleeper=args.skip_sleeper,
+            skip_adp=args.skip_adp,
+        )
+        if not players:
+            print("Collection failed or returned no players.")
+            return
+        out = args.out
+        save_players(players, out)
+        print(f"\nSaved {len(players)} fully enriched players to {out}")
+
+    p_ca = sub.add_parser("collect-all",
+        help="Collect from all sources: nflverse + Sleeper projections + FFC ADP")
+    p_ca.add_argument("--season", type=int, default=2026,
+        help="Current/upcoming season year (default: 2026)")
+    p_ca.add_argument("--history", type=int, default=3,
+        help="Number of prior seasons for historical stats")
+    p_ca.add_argument("--scoring", choices=["ppr", "half-ppr", "standard"], default="ppr",
+        help="ADP scoring format")
+    p_ca.add_argument("--teams", type=int, default=12,
+        help="League size for ADP")
+    p_ca.add_argument("--out", type=str, default="data/projections.json",
+        help="Output JSON path")
+    p_ca.add_argument("--skip-sleeper", action="store_true",
+        help="Skip Sleeper API (offline mode)")
+    p_ca.add_argument("--skip-adp", action="store_true",
+        help="Skip FFC ADP fetch")
+    p_ca.set_defaults(func=cmd_collect_all)
 
     # Multi-source consensus
     def cmd_consensus(args: argparse.Namespace) -> None:

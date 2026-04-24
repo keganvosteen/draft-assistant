@@ -120,11 +120,41 @@ def _setup_wizard() -> Tuple[LeagueConfig, DraftState]:
     )
     save_state(state)
 
-    # Seed sample data if no projection file exists
+    # Data source
     data_path = provider["options"]["path"]
-    if not os.path.exists(data_path):
+    print(f"\n  {BOLD}Player data source:{RESET}")
+    print("    1) Sample data (built-in, works offline)")
+    print("    2) Collect real data (nflverse + Sleeper + ADP)")
+    print(f"    3) Keep existing data{' (' + data_path + ')' if os.path.exists(data_path) else ''}")
+    data_choice = _prompt("Choice", "1" if not os.path.exists(data_path) else "3")
+
+    if data_choice == "2":
+        season = _prompt_int("Season year", 2026)
+        scoring_fmt = "ppr" if scoring.get("rec", 0) >= 1.0 else "half-ppr" if scoring.get("rec", 0) >= 0.5 else "standard"
+        print(f"\n  {CYAN}Collecting data (this may take a minute)...{RESET}")
+        try:
+            from .collectors.combined import collect_all
+            players = collect_all(
+                current_season=season,
+                history_seasons=3,
+                scoring_format=scoring_fmt,
+                teams=teams,
+            )
+            if players:
+                save_players(players, data_path)
+                print(f"\n  {GREEN}Saved {len(players)} players to {data_path}{RESET}")
+            else:
+                print(f"\n  {YELLOW}Collection returned no data. Falling back to sample data.{RESET}")
+                from .sample_data import sample_players
+                save_players(sample_players(), data_path)
+        except Exception as e:
+            print(f"\n  {RED}Collection failed: {e}{RESET}")
+            print(f"  {YELLOW}Falling back to sample data.{RESET}")
+            from .sample_data import sample_players
+            save_players(sample_players(), data_path)
+    elif data_choice == "1" or not os.path.exists(data_path):
         from .sample_data import sample_players
-        save_players(sample_players())
+        save_players(sample_players(), data_path)
         print(f"\n  {GREEN}Seeded sample projections at {data_path}{RESET}")
 
     print(f"\n  {GREEN}League saved! {teams} teams, pick #{my_pick}, {_scoring_label(scoring)}{RESET}")

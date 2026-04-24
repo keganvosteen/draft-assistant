@@ -91,7 +91,8 @@ python -m draft_assistant.cli auction --budget 200
 | `roster` | Show your roster and position needs (including FLEX) |
 | `log [--csv path]` | Show full draft log with round/pick numbers; optionally export to CSV |
 | `save` / `load` | Persist or restore draft state to `draft_state.json` |
-| `collect` | Fetch enriched player data with historical stats from Sleeper API |
+| `collect-all` | **Collect from all sources: nflverse + Sleeper + FFC ADP** |
+| `collect` | Fetch enriched player data from Sleeper API only |
 | `consensus` | Merge multiple projection sources into a single consensus file |
 | `auction` | Show auction dollar values for all players |
 | `import-fpros` | Import FantasyPros CSV projections |
@@ -139,6 +140,35 @@ provider:
 ---
 
 ## Data Sources
+
+### Collect All (recommended)
+
+The `collect-all` command pulls from three free sources and merges them into a single enriched dataset:
+
+```bash
+# Install the data dependency first
+pip install nfl_data_py pandas
+
+# Collect everything: nflverse historical stats + Sleeper projections + FFC ADP
+python -m draft_assistant.cli collect-all --season 2026
+
+# Customize for your league
+python -m draft_assistant.cli collect-all --season 2026 --scoring half-ppr --teams 10
+
+# Offline mode (nflverse only, no Sleeper/ADP API calls)
+python -m draft_assistant.cli collect-all --season 2026 --skip-sleeper --skip-adp
+```
+
+This gives every player: multi-year historical stats, age, draft capital, injury history, bye weeks, team-change detection, current projections, and ADP — all from free, public data.
+
+You can also choose "Collect real data" during the interactive setup wizard (`python -m draft_assistant.cli draft`).
+
+**Sources used:**
+| Source | Data | Requires |
+|--------|------|----------|
+| [nflverse](https://github.com/nflverse/nflverse-data) via `nfl_data_py` | Historical stats, rosters, injuries, bye weeks | `pip install nfl_data_py pandas` |
+| [Sleeper API](https://docs.sleeper.com/) | Current-season projections, player metadata | Internet (free, no key) |
+| [Fantasy Football Calculator](https://fantasyfootballcalculator.com/api/v1/adp/) | ADP by format | Internet (free, no key) |
 
 ### Local JSON (default)
 
@@ -222,7 +252,10 @@ draft_assistant/
 ├── sample_data.py      # Built-in sample players for demo
 ├── export.py           # CSV export
 ├── collectors/
-│   └── sleeper_historical.py  # Fetch metadata + multi-year stats from Sleeper API
+│   ├── combined.py            # Orchestrates all data sources into one dataset
+│   ├── nflverse.py            # Historical stats, rosters, injuries via nfl_data_py
+│   ├── ffc_adp.py             # ADP from Fantasy Football Calculator API
+│   └── sleeper_historical.py  # Projections + metadata from Sleeper API
 ├── importers/
 │   ├── fantasypros.py  # FantasyPros CSV parser
 │   └── fftoday.py      # FFToday HTML scraper
@@ -237,7 +270,9 @@ tests/
 ├── test_historical.py  # Age curve and historical adjustment tests
 ├── test_draft.py       # Pick recording, fuzzy matching, undo, draft log tests
 ├── test_fuzzy.py       # Levenshtein distance tests
-└── test_auction.py     # Auction dollar value and budget tests
+├── test_auction.py     # Auction dollar value and budget tests
+├── test_nflverse_collector.py  # nflverse data collector tests
+└── test_combined_collector.py  # Combined collector and name matching tests
 ```
 
 ---
@@ -266,7 +301,7 @@ This distributes the total league budget proportional to each player's VOR, rese
 python -m unittest discover tests -v
 ```
 
-60 tests cover scoring, VOR/replacement levels, the suggestion engine (gradient needs, FLEX, bye weeks), historical adjustments, age curves, fuzzy matching, draft tracking, and auction values.
+80 tests cover scoring, VOR/replacement levels, the suggestion engine (gradient needs, FLEX, bye weeks), historical adjustments, age curves, fuzzy matching, draft tracking, and auction values.
 
 ---
 
