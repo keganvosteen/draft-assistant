@@ -15,6 +15,9 @@ python -m draft_assistant
 # Launch Tkinter desktop UI
 python -m draft_assistant ui
 
+# Launch browser UI with VOR/scarcity explanation columns
+python -m draft_assistant web
+
 # Target a specific league profile
 python -m draft_assistant --profile home draft
 ```
@@ -73,6 +76,7 @@ All commands accept `--profile <name>` to target a specific league:
 | Command | Description |
 |---------|-------------|
 | `ui` | Launch Tkinter desktop UI |
+| `web [--port N]` | Launch browser UI backed by the Python scoring engine |
 | `draft` | Launch interactive terminal UI (default) |
 | `init` | Initialize a profile with config + sample data |
 | `suggest [-n N] [--draft-slot N] [--sims N]` | Show top N ranked suggestions |
@@ -159,6 +163,8 @@ draft_assistant/
 ├── cli.py                 # CLI argument parser and command dispatch
 ├── ui.py                  # Terminal UI (readline + ANSI + setup wizard)
 ├── ui_desktop.py          # Tkinter desktop UI
+├── web.py                 # Browser UI server + JSON API
+├── web_static/            # Browser UI assets
 ├── profiles.py            # Multi-league profile management
 ├── config.py              # League config load/save
 ├── models.py              # Player, LeagueConfig, DraftState dataclasses
