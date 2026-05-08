@@ -27,6 +27,18 @@ def launch_terminal_ui(profile: str = DEFAULT_PROFILE) -> None:
     run_interactive(profile=profile)
 
 
+def launch_web_ui(profile: str = DEFAULT_PROFILE, port: int = 8080, no_open: bool = False) -> None:
+    from .web.server import run_server
+
+    # Ensure the profile is initialized so the API has data to serve.
+    paths = ensure_profile(profile)
+    config = load_profile_config(paths)
+    provider = build_provider(config.provider)
+    if not provider.fetch_players():
+        save_players(sample_players(), paths.projections_path)
+    run_server(port=port, profile=profile, open_browser=not no_open)
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     paths = ensure_profile(args.profile)
     config = load_profile_config(paths)
@@ -157,6 +169,11 @@ def main() -> None:
 
     p_draft = sub.add_parser("draft", help="Launch interactive terminal UI")
     p_draft.set_defaults(func=lambda a: launch_terminal_ui(a.profile))
+
+    p_web = sub.add_parser("web", help="Launch web UI (browser-based draft assistant)")
+    p_web.add_argument("--port", type=int, default=8080, help="Port to listen on (default 8080)")
+    p_web.add_argument("--no-open", action="store_true", help="Don't auto-open the browser")
+    p_web.set_defaults(func=lambda a: launch_web_ui(a.profile, port=a.port, no_open=a.no_open))
 
     p_init = sub.add_parser("init", help="Initialize profile data")
     p_init.set_defaults(func=cmd_init)

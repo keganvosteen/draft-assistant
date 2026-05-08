@@ -1,6 +1,6 @@
 # Fantasy Football Draft Assistant
 
-A Python draft assistant with two user interfaces (terminal and desktop GUI), multi-league profiles, draft-aware Monte Carlo scoring, historical trend analysis, and free public-data ingestion.
+A Python draft assistant with three user interfaces (terminal, desktop GUI, browser web UI), multi-league profiles, draft-aware Monte Carlo scoring, historical trend analysis, and free public-data ingestion.
 
 ---
 
@@ -12,6 +12,9 @@ A Python draft assistant with two user interfaces (terminal and desktop GUI), mu
 # Launch terminal UI (default, works everywhere)
 python -m draft_assistant
 
+# Launch web UI (browser-based — recommended for live drafts)
+python -m draft_assistant web
+
 # Launch Tkinter desktop UI
 python -m draft_assistant ui
 
@@ -20,6 +23,8 @@ python -m draft_assistant --profile home draft
 ```
 
 The terminal UI walks you through league setup on first run (teams, scoring format, roster, draft position), seeds sample player data, and drops you into a live draft board with commands like `pick <name>`, `my <name>`, `undo`, `log`, `auction`.
+
+The web UI starts a local HTTP server (default `http://127.0.0.1:8080`) and opens your browser. It loads real player data from your active profile and provides a live Draft Score / VORP draft board with recommendations, scarcity alerts, and a tweakable scoring panel — all client-side for instant feedback. Add `--port N` or `--no-open` to customize.
 
 The desktop UI opens a Tkinter window with a draft board, roster panel, and a league switcher.
 
@@ -158,6 +163,9 @@ draft_assistant/
 ├── cli.py                 # CLI argument parser and command dispatch
 ├── ui.py                  # Terminal UI (readline + ANSI + setup wizard)
 ├── ui_desktop.py          # Tkinter desktop UI
+├── web/                   # Browser web UI (HTTP server + React frontend)
+│   ├── server.py          # Stdlib HTTP server + JSON API
+│   └── static/            # index.html, scoring engine, React components
 ├── profiles.py            # Multi-league profile management
 ├── config.py              # League config load/save
 ├── models.py              # Player, LeagueConfig, DraftState dataclasses
