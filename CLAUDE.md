@@ -2,7 +2,7 @@
 
 ## Local Development
 
-- **Owner's local path (Windows):** `D:\Vibe Projects\GitHub\draft-assistant`
+- **Owner's local path (Windows):** `C:\Users\kegan\Documents\draft-assistant`
 - **Cloud dev environment:** `/home/user/draft-assistant`
 - **Primary branch:** `claude/fantasy-draft-recommender-NxX9l`
 
