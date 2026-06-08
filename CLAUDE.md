@@ -9,8 +9,9 @@
 ## Running
 
 - Terminal UI: `python -m draft_assistant`
-- Desktop UI: `python -m draft_assistant ui`
-- Web UI: `python -m draft_assistant web`
+- Desktop UI (Tkinter): `python -m draft_assistant ui`
+- Web UI (browser): `python -m draft_assistant web`
+- Desktop App (pywebview): `python -m draft_assistant app` (requires `pip install -r requirements-desktop.txt`)
 - Tests: `python -m unittest discover tests -v`
 
 ## Key Details

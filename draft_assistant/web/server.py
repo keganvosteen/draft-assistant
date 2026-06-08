@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import traceback
 import webbrowser
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -38,6 +39,10 @@ BYE_WEEKS = {
     "NYJ": 7, "PHI": 7, "PIT": 14, "SEA": 14, "SF": 10, "TB": 9,
     "TEN": 9, "WAS": 14,
 }
+
+# Tracks background tasks (pull-free-data, collect-all, etc.)
+_tasks: dict[str, dict] = {}
+_task_lock = threading.Lock()
 
 
 def _player_to_js(player, config: LeagueConfig) -> dict:
@@ -84,12 +89,32 @@ def _load_players(profile: str):
     return players, config
 
 
+def _run_task(task_id: str, fn, *args, **kwargs):
+    """Run *fn* in a background thread, storing result in _tasks."""
+    def _worker():
+        try:
+            result = fn(*args, **kwargs)
+            with _task_lock:
+                _tasks[task_id]["status"] = "done"
+                _tasks[task_id]["result"] = result
+        except Exception as exc:
+            with _task_lock:
+                _tasks[task_id]["status"] = "error"
+                _tasks[task_id]["error"] = f"{exc}\n{traceback.format_exc()}"
+
+    with _task_lock:
+        _tasks[task_id] = {"status": "running", "result": None, "error": None}
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 class DraftAPIHandler(SimpleHTTPRequestHandler):
     """Serves static files from STATIC_DIR and handles /api/ routes."""
 
     def __init__(self, *args, profile: str = DEFAULT_PROFILE, **kwargs):
         self.profile = profile
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
+
+    # ── routing ───────────────────────────────────────────────────────────
 
     def do_GET(self):
         if self.path == "/api/players":
@@ -98,14 +123,45 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_config()
         elif self.path == "/api/state":
             self._handle_get_state()
+        elif self.path.startswith("/api/task/"):
+            self._handle_task_status()
         else:
             super().do_GET()
 
     def do_POST(self):
         if self.path == "/api/state":
             self._handle_save_state()
+        elif self.path == "/api/pull-free-data":
+            self._handle_pull_free_data()
+        elif self.path == "/api/collect-all":
+            self._handle_collect_all()
+        elif self.path == "/api/fetch":
+            self._handle_fetch()
+        elif self.path == "/api/auction":
+            self._handle_auction()
+        elif self.path == "/api/save-draft":
+            self._handle_save_draft()
+        elif self.path == "/api/load-draft":
+            self._handle_load_draft()
+        elif self.path == "/api/export-log":
+            self._handle_export_log()
         else:
             self._send_json({"error": "not found"}, 404)
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    # ── helpers ────────────────────────────────────────────────────────────
+
+    def _read_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0))
+        if length:
+            return json.loads(self.rfile.read(length))
+        return {}
 
     def _send_json(self, data, code=200):
         body = json.dumps(data).encode("utf-8")
@@ -115,6 +171,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+
+    # ── existing endpoints ────────────────────────────────────────────────
 
     def _handle_players(self):
         try:
@@ -152,8 +210,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
 
     def _handle_save_state(self):
         try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(content_length)) if content_length else {}
+            body = self._read_body()
             paths = ensure_profile(self.profile)
             state = load_state(paths.state_path)
             if "picks" in body:
@@ -162,6 +219,182 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 state.my_picks = body["my_picks"]
             save_state(state, paths.state_path)
             self._send_json({"ok": True})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    # ── background task polling ───────────────────────────────────────────
+
+    def _handle_task_status(self):
+        task_id = self.path.split("/api/task/")[-1]
+        with _task_lock:
+            task = _tasks.get(task_id)
+        if not task:
+            self._send_json({"error": "unknown task"}, 404)
+            return
+        self._send_json({
+            "status": task["status"],
+            "result": task["result"],
+            "error": task["error"],
+        })
+
+    # ── pull-free-data (async) ────────────────────────────────────────────
+
+    def _handle_pull_free_data(self):
+        try:
+            body = self._read_body()
+            profile = self.profile
+            task_id = f"pull-free-data-{threading.get_ident()}-{id(body)}"
+
+            def _do_pull():
+                from ..importers.free_sources import pull_free_data as _pull
+                paths = ensure_profile(profile)
+                config = load_profile_config(paths)
+                result = _pull(
+                    config=config,
+                    season=body.get("season"),
+                    stats_season=body.get("statsSeason"),
+                    teams=body.get("teams"),
+                    adp_format=body.get("adpFormat"),
+                    include_fftoday=not body.get("skipFftoday", False),
+                    espn_league_id=body.get("espnLeagueId"),
+                )
+                save_players(result.players, paths.projections_path)
+                reports = [
+                    {"source": r.source, "records": r.records, "ok": r.ok, "detail": r.detail}
+                    for r in result.reports
+                ]
+                return {"players": len(result.players), "reports": reports}
+
+            _run_task(task_id, _do_pull)
+            self._send_json({"taskId": task_id})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    # ── collect-all (async, optional dependency) ──────────────────────────
+
+    def _handle_collect_all(self):
+        try:
+            body = self._read_body()
+            profile = self.profile
+            task_id = f"collect-all-{threading.get_ident()}-{id(body)}"
+
+            def _do_collect():
+                from ..collectors.combined import collect_all
+                paths = ensure_profile(profile)
+                players = collect_all(
+                    current_season=body.get("season", 2026),
+                    history_seasons=body.get("history", 3),
+                    scoring_format=body.get("scoring", "ppr"),
+                    teams=body.get("teams", 12),
+                    skip_sleeper=body.get("skipSleeper", False),
+                    skip_adp=body.get("skipAdp", False),
+                )
+                save_players(players, paths.projections_path)
+                return {"players": len(players)}
+
+            _run_task(task_id, _do_collect)
+            self._send_json({"taskId": task_id})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    # ── fetch (sync, fast) ────────────────────────────────────────────────
+
+    def _handle_fetch(self):
+        try:
+            paths = ensure_profile(self.profile)
+            config = load_profile_config(paths)
+            provider = build_provider(config.provider)
+            players = provider.fetch_players()
+            save_players(players, paths.projections_path)
+            self._send_json({"ok": True, "players": len(players)})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    # ── auction values ────────────────────────────────────────────────────
+
+    def _handle_auction(self):
+        try:
+            body = self._read_body()
+            budget = body.get("budget", 200)
+            top_n = body.get("top", 50)
+            paths = ensure_profile(self.profile)
+            config = load_profile_config(paths)
+            provider = build_provider(config.provider)
+            players = provider.fetch_players()
+            from ..auction import compute_dollar_values
+            values = compute_dollar_values(config, players, budget_per_team=budget)
+            sorted_vals = sorted(values.items(), key=lambda x: x[1], reverse=True)
+            player_map = {p.key(): p for p in players}
+            rows = []
+            for key, val in sorted_vals[:top_n]:
+                p = player_map.get(key)
+                if p:
+                    rows.append({
+                        "name": p.name, "pos": p.position,
+                        "team": p.team or "FA", "value": round(val, 1),
+                    })
+            self._send_json({"budget": budget, "teams": config.teams, "values": rows})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    # ── save/load draft state ─────────────────────────────────────────────
+
+    def _handle_save_draft(self):
+        try:
+            body = self._read_body()
+            paths = ensure_profile(self.profile)
+            state = load_state(paths.state_path)
+            if "picks" in body:
+                state.picks = body["picks"]
+            if "my_picks" in body:
+                state.my_picks = body["my_picks"]
+            save_state(state, paths.state_path)
+            self._send_json({"ok": True, "path": str(paths.state_path)})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_load_draft(self):
+        try:
+            paths = ensure_profile(self.profile)
+            state = load_state(paths.state_path)
+            self._send_json({
+                "picks": state.picks,
+                "my_picks": state.my_picks,
+                "my_team_name": state.my_team_name,
+                "league_teams": state.league_teams,
+            })
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    # ── export draft log ──────────────────────────────────────────────────
+
+    def _handle_export_log(self):
+        try:
+            body = self._read_body()
+            pick_list = body.get("picks", [])
+            num_teams = body.get("numTeams", 12)
+            players_map = body.get("playersMap", {})
+            import csv
+            import io
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(["pick", "round", "pick_in_round", "team", "player", "position"])
+            for i, pk in enumerate(pick_list):
+                pick_num = i + 1
+                rd = (pick_num - 1) // num_teams + 1
+                pick_in_rd = (pick_num - 1) % num_teams + 1
+                pid = pk.get("playerId", "")
+                p = players_map.get(pid, {})
+                w.writerow([pick_num, rd, pick_in_rd, pk.get("teamNum", ""),
+                            p.get("name", pid), p.get("pos", "")])
+            csv_str = buf.getvalue()
+            body_bytes = csv_str.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.send_header("Content-Disposition", 'attachment; filename="draft_log.csv"')
+            self.send_header("Content-Length", str(len(body_bytes)))
+            self.end_headers()
+            self.wfile.write(body_bytes)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 

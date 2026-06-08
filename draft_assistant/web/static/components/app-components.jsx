@@ -334,9 +334,280 @@ function LeagueSetupModal({ league, onSave, onClose }) {
   );
 }
 
+// ─── TASK POLLING HOOK ────────────────────────────────────────────────────────
+function useTask() {
+  const [taskId, setTaskId] = React.useState(null);
+  const [status, setStatus] = React.useState(null); // null | 'running' | 'done' | 'error'
+  const [result, setResult] = React.useState(null);
+  const [error,  setError]  = React.useState(null);
+
+  React.useEffect(() => {
+    if (!taskId) return;
+    setStatus('running');
+    setResult(null);
+    setError(null);
+    let cancelled = false;
+    const poll = () => {
+      fetch(`/api/task/${taskId}`)
+        .then(r => r.json())
+        .then(data => {
+          if (cancelled) return;
+          if (data.status === 'running') {
+            setTimeout(poll, 800);
+          } else if (data.status === 'done') {
+            setStatus('done');
+            setResult(data.result);
+          } else {
+            setStatus('error');
+            setError(data.error || 'Unknown error');
+          }
+        })
+        .catch(err => {
+          if (!cancelled) { setStatus('error'); setError(String(err)); }
+        });
+    };
+    poll();
+    return () => { cancelled = true; };
+  }, [taskId]);
+
+  const start = (id) => { setTaskId(id); };
+  const reset = () => { setTaskId(null); setStatus(null); setResult(null); setError(null); };
+  return { start, reset, status, result, error };
+}
+
+// ─── PULL DATA MODAL ─────────────────────────────────────────────────────────
+function PullDataModal({ onClose, onComplete }) {
+  const currentYear = new Date().getFullYear();
+  const [mode, setMode]         = React.useState('free');
+  const [season, setSeason]     = React.useState(currentYear);
+  const [statsSeason, setStats] = React.useState(currentYear - 1);
+  const [teams, setTeams]       = React.useState(12);
+  const [adpFormat, setAdp]     = React.useState('ppr');
+  const [skipFf, setSkipFf]     = React.useState(false);
+  const [scoring, setScoring]   = React.useState('ppr');
+  const [history, setHistory]   = React.useState(3);
+  const task = useTask();
+
+  const handlePull = () => {
+    const endpoint = mode === 'free' ? '/api/pull-free-data' : '/api/collect-all';
+    const body = mode === 'free'
+      ? { season, statsSeason, teams, adpFormat, skipFftoday: skipFf }
+      : { season, teams, scoring, history };
+    fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) { alert(data.error); return; }
+        task.start(data.taskId);
+      })
+      .catch(err => alert(String(err)));
+  };
+
+  const handleDone = () => {
+    task.reset();
+    onComplete();
+    onClose();
+  };
+
+  return (
+    <Modal title="Pull Player Data" onClose={onClose} width={520}>
+      {task.status === 'running' && (
+        <div style={{textAlign:'center', padding:'40px 0'}}>
+          <div className="loading-spinner" style={{margin:'0 auto 16px'}} />
+          <div style={{fontSize:14, fontWeight:600, color:T.text}}>Pulling data...</div>
+          <div style={{fontSize:12, color:T.muted, marginTop:4}}>This may take 30-60 seconds.</div>
+        </div>
+      )}
+
+      {task.status === 'done' && (
+        <div style={{textAlign:'center', padding:'30px 0'}}>
+          <div style={{fontSize:28, marginBottom:12, color:T.green}}>&#10003;</div>
+          <div style={{fontSize:16, fontWeight:700, color:T.text, marginBottom:8}}>Data Pulled Successfully</div>
+          <div style={{fontSize:14, color:T.muted, marginBottom:6}}>
+            {task.result?.players} players loaded
+          </div>
+          {task.result?.reports && (
+            <div style={{textAlign:'left', margin:'16px auto', maxWidth:400, background:T.surfaceAlt,
+              borderRadius:T.rsm, padding:12, fontSize:12}}>
+              {task.result.reports.map((r, i) => (
+                <div key={i} style={{display:'flex', justifyContent:'space-between', padding:'3px 0',
+                  color: r.ok ? T.text : T.muted}}>
+                  <span>{r.source}</span>
+                  <span>{r.ok ? `${r.records} records` : 'skipped'}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <Btn onClick={handleDone}>Done</Btn>
+        </div>
+      )}
+
+      {task.status === 'error' && (
+        <div style={{textAlign:'center', padding:'30px 0'}}>
+          <div style={{fontSize:28, marginBottom:12, color:T.red}}>!</div>
+          <div style={{fontSize:14, fontWeight:600, color:T.red, marginBottom:8}}>Pull Failed</div>
+          <div style={{fontSize:12, color:T.muted, marginBottom:16, maxWidth:400, margin:'0 auto 16px',
+            wordBreak:'break-word'}}>{task.error}</div>
+          <div style={{display:'flex', gap:8, justifyContent:'center'}}>
+            <Btn variant="ghost" onClick={() => task.reset()}>Try Again</Btn>
+            <Btn variant="ghost" onClick={onClose}>Close</Btn>
+          </div>
+        </div>
+      )}
+
+      {!task.status && (
+        <>
+          <Field label="Data Source">
+            <div style={{display:'flex', gap:8}}>
+              {[
+                {v:'free', l:'Free Sources', hint:'No dependencies'},
+                {v:'full', l:'Full Collect', hint:'Requires nfl_data_py'},
+              ].map(({v, l, hint}) => (
+                <label key={v} style={{
+                  flex:1, border:`1.5px solid ${mode===v ? T.primary : T.border}`,
+                  borderRadius:T.rsm, padding:'10px 14px', cursor:'pointer',
+                  background: mode===v ? T.primaryLight : T.surface,
+                }}>
+                  <input type="radio" name="pullMode" value={v} checked={mode===v}
+                    onChange={() => setMode(v)} style={{display:'none'}} />
+                  <div style={{fontSize:13, fontWeight:600, color: mode===v ? T.primary : T.text}}>{l}</div>
+                  <div style={{fontSize:11, color:T.muted, marginTop:2}}>{hint}</div>
+                </label>
+              ))}
+            </div>
+          </Field>
+
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
+            <Field label="Projection Season">
+              <Input type="number" value={season} onChange={e => setSeason(parseInt(e.target.value) || currentYear)} />
+            </Field>
+            {mode === 'free' && (
+              <Field label="Stats Season">
+                <Input type="number" value={statsSeason} onChange={e => setStats(parseInt(e.target.value) || currentYear-1)} />
+              </Field>
+            )}
+            <Field label="Teams">
+              <Select value={teams} onChange={e => setTeams(parseInt(e.target.value))}
+                options={[8,10,12,14].map(n => ({value:n, label:`${n} teams`}))} />
+            </Field>
+            <Field label={mode === 'free' ? "ADP Format" : "Scoring Format"}>
+              <Select value={mode === 'free' ? adpFormat : scoring}
+                onChange={e => mode === 'free' ? setAdp(e.target.value) : setScoring(e.target.value)}
+                options={[
+                  {value:'ppr', label:'PPR'},
+                  {value:'half-ppr', label:'Half PPR'},
+                  {value:'standard', label:'Standard'},
+                ]} />
+            </Field>
+          </div>
+
+          {mode === 'free' && (
+            <label style={{display:'flex', alignItems:'center', gap:8, fontSize:13, color:T.text, marginTop:8, cursor:'pointer'}}>
+              <input type="checkbox" checked={skipFf} onChange={e => setSkipFf(e.target.checked)} />
+              Skip FFToday scraping
+            </label>
+          )}
+
+          {mode === 'full' && (
+            <Field label="History Seasons" hint="years of stats to fetch">
+              <Input type="number" value={history} onChange={e => setHistory(parseInt(e.target.value) || 3)}
+                min={1} max={5} />
+            </Field>
+          )}
+
+          <div style={{display:'flex', justifyContent:'flex-end', gap:10, marginTop:24, paddingTop:20, borderTop:`1px solid ${T.border}`}}>
+            <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+            <Btn onClick={handlePull}>Pull Data</Btn>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+// ─── AUCTION MODAL ───────────────────────────────────────────────────────────
+function AuctionModal({ onClose }) {
+  const [budget, setBudget] = React.useState(200);
+  const [topN, setTopN]     = React.useState(50);
+  const [data, setData]     = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+
+  const handleFetch = () => {
+    setLoading(true);
+    fetch('/api/auction', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ budget, top: topN }),
+    })
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); })
+      .catch(err => { alert(String(err)); setLoading(false); });
+  };
+
+  React.useEffect(() => { handleFetch(); }, []);
+
+  const posColors = {
+    QB: T.amberLight, RB: '#dcfce7', WR: '#dbeafe', TE: '#ede9fe', K: '#f3f4f6', DST: '#fce7f3',
+  };
+
+  return (
+    <Modal title="Auction Values" onClose={onClose} width={560}>
+      <div style={{display:'flex', gap:12, marginBottom:16, alignItems:'flex-end'}}>
+        <Field label="Budget per Team">
+          <Input type="number" value={budget} onChange={e => setBudget(parseInt(e.target.value) || 200)}
+            style={{width:100}} />
+        </Field>
+        <Field label="Show Top">
+          <Input type="number" value={topN} onChange={e => setTopN(parseInt(e.target.value) || 50)}
+            style={{width:80}} />
+        </Field>
+        <Btn onClick={handleFetch} disabled={loading} style={{marginBottom:18}}>Refresh</Btn>
+      </div>
+
+      {loading && <div style={{textAlign:'center', padding:20, color:T.muted}}>Loading...</div>}
+
+      {data && data.values && (
+        <div style={{maxHeight:400, overflowY:'auto'}}>
+          <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
+            <thead>
+              <tr style={{borderBottom:`2px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.muted}}>
+                <th style={{textAlign:'left', padding:'6px 8px'}}>#</th>
+                <th style={{textAlign:'left', padding:'6px 8px'}}>Player</th>
+                <th style={{textAlign:'left', padding:'6px 8px'}}>Pos</th>
+                <th style={{textAlign:'left', padding:'6px 8px'}}>Team</th>
+                <th style={{textAlign:'right', padding:'6px 8px'}}>Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.values.map((v, i) => (
+                <tr key={i} style={{borderBottom:`1px solid ${T.borderLight}`}}>
+                  <td style={{padding:'5px 8px', color:T.mutedLight, fontSize:12}}>{i+1}</td>
+                  <td style={{padding:'5px 8px', fontWeight:600}}>{v.name}</td>
+                  <td style={{padding:'5px 8px'}}>
+                    <span style={{background:posColors[v.pos]||T.borderLight, borderRadius:4,
+                      padding:'1px 6px', fontSize:11, fontWeight:700}}>{v.pos}</span>
+                  </td>
+                  <td style={{padding:'5px 8px', color:T.muted}}>{v.team}</td>
+                  <td style={{padding:'5px 8px', textAlign:'right', fontWeight:700, fontFamily:'DM Mono,monospace',
+                    color:v.value >= 20 ? T.green : T.text}}>${v.value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 // ─── HOME SCREEN ─────────────────────────────────────────────────────────────
-function HomeScreen({ leagues, onSelectLeague, onAddLeague, onEditLeague, onDeleteLeague }) {
+function HomeScreen({ leagues, onSelectLeague, onAddLeague, onEditLeague, onDeleteLeague, playerCount, onRefreshPlayers }) {
   const platformColors = { ESPN:'#cc0000', Yahoo:'#6001d2', Sleeper:'#1e1e1e', 'NFL.com':'#013369', Other: T.muted };
+  const [showPull, setShowPull]       = React.useState(false);
+  const [showAuction, setShowAuction] = React.useState(false);
 
   return (
     <div style={{minHeight:'100vh', background:T.bg, display:'flex', flexDirection:'column'}}>
@@ -355,8 +626,15 @@ function HomeScreen({ leagues, onSelectLeague, onAddLeague, onEditLeague, onDele
             </svg>
           </div>
           <span style={{fontSize:18, fontWeight:700, color:T.text}}>Draft Assistant</span>
+          {playerCount != null && (
+            <Badge label={`${playerCount} players`} color="gray" />
+          )}
         </div>
-        <Btn onClick={onAddLeague}>+ Add League</Btn>
+        <div style={{display:'flex', alignItems:'center', gap:8}}>
+          <Btn variant="green" size="sm" onClick={() => setShowPull(true)}>Pull Data</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => setShowAuction(true)}>Auction $</Btn>
+          <Btn onClick={onAddLeague}>+ Add League</Btn>
+        </div>
       </div>
 
       <div style={{flex:1, padding:'40px 32px', maxWidth:960, margin:'0 auto', width:'100%', boxSizing:'border-box'}}>
@@ -431,6 +709,9 @@ function HomeScreen({ leagues, onSelectLeague, onAddLeague, onEditLeague, onDele
           })}
         </div>
       </div>
+
+      {showPull && <PullDataModal onClose={() => setShowPull(false)} onComplete={onRefreshPlayers} />}
+      {showAuction && <AuctionModal onClose={() => setShowAuction(false)} />}
     </div>
   );
 }
@@ -450,7 +731,13 @@ function App() {
   const [showSetup, setShowSetup] = React.useState(false);
   const [editingId, setEditingId] = React.useState(null);
 
-  // Load player data + auto-create initial league from backend config on first run
+  const refreshPlayers = React.useCallback(() => {
+    return fetch('/api/players')
+      .then(r => r.json())
+      .then(data => { if (!data.error) setPlayers(data); })
+      .catch(() => {});
+  }, []);
+
   React.useEffect(() => {
     fetch('/api/players')
       .then(r => r.json())
@@ -462,7 +749,6 @@ function App() {
 
     setLeagues(prev => {
       if (prev.length > 0) return prev;
-      // Seed from backend config on first load
       fetch('/api/config')
         .then(r => r.json())
         .then(cfg => {
@@ -543,6 +829,7 @@ function App() {
         onUndoPick={() => undoPick(selectedLeague.id)}
         onResetPicks={() => resetPicks(selectedLeague.id)}
         onUpdateLeague={patch => updateLeague(selectedLeague.id, patch)}
+        onRefreshPlayers={refreshPlayers}
       />
     );
   }
@@ -555,6 +842,8 @@ function App() {
         onAddLeague={() => { setEditingId(null); setShowSetup(true); }}
         onEditLeague={id => { setEditingId(id); setShowSetup(true); }}
         onDeleteLeague={deleteLeague}
+        playerCount={players ? players.length : null}
+        onRefreshPlayers={refreshPlayers}
       />
       {showSetup && (
         <LeagueSetupModal
@@ -572,5 +861,6 @@ Object.assign(window, {
   getSnakeTeam, getCurrentRoundPick, getRosterNeeds,
   makeLeague, leagueFromBackendConfig, SCORING_LABELS, POSITIONS,
   Btn, Badge, Modal, Field, Input, Select,
+  useTask, PullDataModal, AuctionModal,
   LeagueSetupModal, HomeScreen, App,
 });

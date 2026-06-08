@@ -175,6 +175,14 @@ def main() -> None:
     p_web.add_argument("--no-open", action="store_true", help="Don't auto-open the browser")
     p_web.set_defaults(func=lambda a: launch_web_ui(a.profile, port=a.port, no_open=a.no_open))
 
+    def _launch_app(a):
+        from .desktop import run_desktop
+        run_desktop(profile=a.profile, debug=a.debug)
+
+    p_app = sub.add_parser("app", help="Launch native desktop app (requires pywebview)")
+    p_app.add_argument("--debug", action="store_true", help="Enable developer tools")
+    p_app.set_defaults(func=_launch_app)
+
     p_init = sub.add_parser("init", help="Initialize profile data")
     p_init.set_defaults(func=cmd_init)
 

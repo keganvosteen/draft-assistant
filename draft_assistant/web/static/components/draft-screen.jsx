@@ -526,10 +526,13 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
 }
 
 // ─── DRAFT SCREEN ─────────────────────────────────────────────────────────────
-function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick, onResetPicks, onUpdateLeague }) {
+function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick, onResetPicks, onUpdateLeague, onRefreshPlayers }) {
   const [showDraftBoard, setShowDraftBoard] = React.useState(false);
   const [showDrafted,    setShowDrafted]    = React.useState(false);
   const [hint,           setHint]           = React.useState('');
+  const [showPullModal,  setShowPullModal]  = React.useState(false);
+  const [showAuction,    setShowAuction]    = React.useState(false);
+  const [saveMsg,        setSaveMsg]        = React.useState(null);
 
   const tweakDefaults = typeof TWEAK_DEFAULTS !== 'undefined' ? TWEAK_DEFAULTS : {
     scarcityWeight:0.60, nextPickWeight:0.25, vorWeight:0.20,
@@ -588,6 +591,42 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     setHint(generateRoundHint(round, myPlayers, sortedScored, league));
   };
 
+  const handleSave = () => {
+    const pickData = picks.map(pk => pk.playerId);
+    const myPickData = picks.filter(pk => pk.teamNum === league.draftPosition).map(pk => pk.playerId);
+    fetch('/api/save-draft', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ picks: pickData, my_picks: myPickData }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        setSaveMsg(d.ok ? 'Saved!' : (d.error || 'Error'));
+        setTimeout(() => setSaveMsg(null), 2000);
+      })
+      .catch(() => { setSaveMsg('Save failed'); setTimeout(() => setSaveMsg(null), 2000); });
+  };
+
+  const handleExportLog = () => {
+    const playerMap = {};
+    allPlayers.forEach(p => { playerMap[p.id] = { name: p.name, pos: p.pos }; });
+    const blob = new Blob([
+      'pick,round,pick_in_round,team,player,position\n' +
+      picks.map((pk, i) => {
+        const n = i + 1;
+        const rd = Math.ceil(n / league.numTeams);
+        const pip = ((n - 1) % league.numTeams) + 1;
+        const pl = playerMap[pk.playerId] || {};
+        return `${n},${rd},${pip},${pk.teamNum},${(pl.name||pk.playerId).replace(/,/g,' ')},${pl.pos||''}`;
+      }).join('\n')
+    ], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `draft_log_${league.name.replace(/\s+/g, '_')}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
   return (
     <div style={{height:'100vh', display:'flex', flexDirection:'column', background:T.bg, overflow:'hidden'}}>
       <div style={{
@@ -622,6 +661,13 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
               Round {round} · Pick {pickInRound}/{league.numTeams}
             </div>
           </div>
+          <Btn variant="green" size="sm" onClick={() => setShowPullModal(true)}>Pull Data</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => setShowAuction(true)}>Auction $</Btn>
+          <Btn variant="ghost" size="sm" onClick={handleSave}>
+            {saveMsg || 'Save'}
+          </Btn>
+          <Btn variant="ghost" size="sm" onClick={handleExportLog} disabled={picks.length===0}>Export CSV</Btn>
+          <div style={{width:1, height:20, background:T.border}} />
           <Btn variant="ghost" size="sm" onClick={()=>setShowDraftBoard(true)}>Draft Board</Btn>
           <Btn variant="ghost" size="sm" onClick={onUndoPick} disabled={picks.length===0}>Undo</Btn>
           <Btn variant="danger" size="sm" onClick={onResetPicks} disabled={picks.length===0}>Reset</Btn>
@@ -665,6 +711,15 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
           league={league} picks={picks} allPlayers={enriched}
           onClose={()=>setShowDraftBoard(false)}
         />
+      )}
+      {showPullModal && (
+        <PullDataModal
+          onClose={() => setShowPullModal(false)}
+          onComplete={() => onRefreshPlayers && onRefreshPlayers()}
+        />
+      )}
+      {showAuction && (
+        <AuctionModal onClose={() => setShowAuction(false)} />
       )}
     </div>
   );
