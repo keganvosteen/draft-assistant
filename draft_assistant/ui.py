@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import os
-import readline
 import sys
 from typing import Dict, List, Optional, Tuple
+
+try:
+    import readline  # noqa: F401  # Optional: command history on Unix-like shells.
+except ImportError:  # pragma: no cover - Windows has no stdlib readline.
+    readline = None
 
 from .config import DEFAULT_CONFIG
 from .draft import DraftTracker
