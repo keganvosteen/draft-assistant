@@ -1,0 +1,3 @@
+# Desktop app mode (pywebview native window)
+# Install with: pip install -r requirements-desktop.txt
+pywebview>=4.0
