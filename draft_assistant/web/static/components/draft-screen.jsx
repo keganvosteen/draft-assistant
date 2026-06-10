@@ -70,8 +70,13 @@ function generateRoundHint(round, myPlayers, topAvailable, league) {
     return `Round ${round}: continue building RB/WR core. Elite TE (Kelce-tier) is also a defensible reach now.`;
   }
   if (round <= 7) {
-    if (!counts.QB && (slots.QB || 0) > 0)
-      return `Round ${round}: window is opening for top QBs. ${top && top.pos==='QB' ? top.name + ' is excellent value. ' : ''}Don't wait too late on a 1-QB tier dropoff.`;
+    if (!counts.QB && (slots.QB || 0) > 0) {
+      const topQB  = topAvailable.find(p => p.pos === 'QB');
+      const qbRank = topQB ? topAvailable.indexOf(topQB) + 1 : 0;
+      if (topQB && qbRank <= 3)
+        return `Round ${round}: ${topQB.name} is the #${qbRank} score on the board — QB window is open, take it.`;
+      return `Round ${round}: no QB yet — okay for now${topQB ? ` (${topQB.name} ranks #${qbRank})` : ''}, but your open starter slots score higher. Fill those first, grab a QB by round 7-8.`;
+    }
     return `Round ${round}: depth time. RB handcuffs and WR3/4 with target share matter; avoid kicker/DST.`;
   }
   if (round <= 10) {
@@ -175,6 +180,151 @@ function MyTeamPanel({ league, myPlayers, round, hint, onGetHint }) {
   );
 }
 
+// ─── OPPONENTS PANEL ─────────────────────────────────────────────────────────
+function rosterCountString(counts) {
+  return ['QB','RB','WR','TE','K','DST']
+    .filter(pos => counts[pos])
+    .map(pos => `${counts[pos]}${pos}`)
+    .join(' · ') || 'empty';
+}
+
+function ModeToggle({ mode, onChange }) {
+  return (
+    <div style={{display:'inline-flex', border:`1px solid ${T.border}`, borderRadius:T.rxs, overflow:'hidden'}}>
+      {['live','auto'].map(m => (
+        <button key={m} onClick={() => onChange(m)} title={m === 'live' ? 'Drafting live — picks by need' : 'Autodrafting — follows ADP'}
+          style={{
+            border:'none', cursor:'pointer', fontFamily:'inherit',
+            padding:'2px 7px', fontSize:10, fontWeight:700, letterSpacing:.3,
+            background: mode === m ? (m === 'auto' ? T.amberLight : T.primaryLight) : T.surface,
+            color:      mode === m ? (m === 'auto' ? T.amber : T.primary) : T.mutedLight,
+          }}>
+          {m === 'auto' ? 'AUTO' : 'LIVE'}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function OpponentTeamRow({ teamNum, mode, counts, posProbs, pickLabel, onSetMode, highlight }) {
+  const topPos = posProbs
+    ? Object.entries(posProbs).sort((a,b) => b[1]-a[1]).filter(([,p]) => p >= 0.08).slice(0,3)
+    : null;
+  return (
+    <div style={{
+      padding:'8px 10px', borderRadius:T.rsm, marginBottom:6,
+      background: highlight ? T.surfaceAlt : 'transparent',
+      border: `1px solid ${highlight ? T.border : 'transparent'}`,
+    }}>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:3}}>
+        <span style={{fontSize:12, fontWeight:700, color:T.text}}>
+          Team {teamNum}
+          {pickLabel && <span style={{fontWeight:600, color:T.muted, marginLeft:6, fontSize:10}}>{pickLabel}</span>}
+        </span>
+        <ModeToggle mode={mode} onChange={onSetMode} />
+      </div>
+      <div style={{fontSize:10, color:T.muted, marginBottom: topPos ? 5 : 0}}>{rosterCountString(counts)}</div>
+      {topPos && (
+        <div style={{display:'flex', gap:4, flexWrap:'wrap'}}>
+          {topPos.map(([pos, p]) => (
+            <span key={pos} style={{display:'inline-flex', alignItems:'center', gap:3}}>
+              <PosBadge pos={pos} />
+              <span style={{fontSize:10, fontWeight:700, color:T.muted, fontFamily:'DM Mono,monospace'}}>
+                {Math.round(p*100)}%
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OpponentsPanel({ league, oppData, picksMade, onSetTeamMode }) {
+  if (!oppData) return null;
+  const modes = league.teamModes || {};
+  const upcomingTeams = new Set(oppData.upcoming.map(u => u.teamNum));
+
+  const others = [];
+  for (let t = 1; t <= league.numTeams; t++) {
+    if (t === league.draftPosition || upcomingTeams.has(t)) continue;
+    others.push(t);
+  }
+
+  const expected = Object.entries(oppData.expectedByPos)
+    .filter(([,n]) => n >= 0.5)
+    .sort((a,b) => b[1]-a[1])
+    .slice(0,4);
+
+  return (
+    <div style={{
+      width:236, flexShrink:0, background:T.surface,
+      borderLeft:`1px solid ${T.border}`, display:'flex', flexDirection:'column', overflowY:'auto',
+    }}>
+      <div style={{padding:'14px 16px', borderBottom:`1px solid ${T.border}`}}>
+        <div style={{fontSize:11, fontWeight:700, color:T.muted, letterSpacing:.5}}>OPPONENTS</div>
+        {expected.length > 0 ? (
+          <div style={{fontSize:11, color:T.muted, marginTop:4, lineHeight:1.5}}>
+            Likely gone before your pick:{' '}
+            {expected.map(([pos, n], i) => (
+              <span key={pos} style={{fontWeight:700, color:T.text}}>
+                {i > 0 && <span style={{fontWeight:400, color:T.muted}}> · </span>}
+                ~{n.toFixed(1)} {pos}
+              </span>
+            ))}
+          </div>
+        ) : (
+          <div style={{fontSize:11, color:T.muted, marginTop:4}}>
+            {oppData.upcoming.length === 0 ? 'No picks before your next turn.' : 'Predictions update each pick.'}
+          </div>
+        )}
+      </div>
+
+      <div style={{padding:'10px 10px', flex:1}}>
+        {oppData.upcoming.length > 0 && (
+          <div style={{fontSize:10, fontWeight:700, color:T.muted, letterSpacing:.5, margin:'2px 6px 6px'}}>
+            PICKING BEFORE YOU
+          </div>
+        )}
+        {oppData.upcoming.map(u => (
+          <OpponentTeamRow key={u.teamNum}
+            teamNum={u.teamNum}
+            mode={modes[u.teamNum] === 'auto' ? 'auto' : 'live'}
+            counts={u.rosterCounts}
+            posProbs={u.posProbs}
+            pickLabel={`pick ${u.pickNum - picksMade > 1 ? `in ${u.pickNum - picksMade}` : 'next'}`}
+            onSetMode={m => onSetTeamMode(u.teamNum, m)}
+            highlight
+          />
+        ))}
+
+        {others.length > 0 && (
+          <div style={{fontSize:10, fontWeight:700, color:T.muted, letterSpacing:.5, margin:'12px 6px 6px'}}>
+            AFTER YOUR PICK
+          </div>
+        )}
+        {others.map(t => (
+          <OpponentTeamRow key={t}
+            teamNum={t}
+            mode={modes[t] === 'auto' ? 'auto' : 'live'}
+            counts={oppData.rosters[t] ? oppData.rosters[t].reduce((c,p) => { c[p.pos]=(c[p.pos]||0)+1; return c; }, {}) : {}}
+            posProbs={null}
+            pickLabel={null}
+            onSetMode={m => onSetTeamMode(t, m)}
+            highlight={false}
+          />
+        ))}
+      </div>
+
+      <div style={{padding:'10px 16px', borderTop:`1px solid ${T.border}`, fontSize:10, color:T.muted, lineHeight:1.5}}>
+        <b style={{color:T.text}}>LIVE</b> = drafts by roster need.{' '}
+        <b style={{color:T.text}}>AUTO</b> = autodraft, follows ADP. Toggle per team — it changes
+        availability odds and the position-run alerts.
+      </div>
+    </div>
+  );
+}
+
 // ─── RECOMMENDATION BAR ───────────────────────────────────────────────────────
 function RecCard({ icon, label, player, reason, highlight }) {
   if (!player) return null;
@@ -208,7 +358,7 @@ function RecCard({ icon, label, player, reason, highlight }) {
   );
 }
 
-function RecommendationBar({ scored, myPlayers, league }) {
+function RecommendationBar({ scored, myPlayers, league, oppData }) {
   if (!scored || scored.length === 0) {
     return (
       <div style={{padding:'12px 16px', background:T.surface, borderBottom:`1px solid ${T.border}`}}>
@@ -222,8 +372,19 @@ function RecommendationBar({ scored, myPlayers, league }) {
 
   const needs     = getRosterNeeds(myPlayers, league.rosterSlots);
   const flexElig  = new Set(['RB','WR','TE']);
+
+  // "Need" means an open dedicated starting slot first; only fall back to
+  // soft depth caps when every starter is filled. Otherwise a 4th RB keeps
+  // masquerading as a need via the flex/bench allowance.
+  const posCounts = {};
+  myPlayers.forEach(p => { posCounts[p.pos] = (posCounts[p.pos] || 0) + 1; });
+  const starterNeeds = ['QB','RB','WR','TE','K','DST'].filter(pos =>
+    (posCounts[pos] || 0) < (league.rosterSlots[pos] || 0)
+  );
+  const needPool = starterNeeds.length > 0 ? starterNeeds : needs;
   const bestByNeed = sortedByScore.find(p =>
-    needs.includes(p.pos) || (needs.includes('FLEX') && flexElig.has(p.pos))
+    needPool.includes(p.pos) ||
+    (starterNeeds.length === 0 && needs.includes('FLEX') && flexElig.has(p.pos))
   ) || bestOverall;
 
   const isSame = bestOverall.id === bestByNeed.id;
@@ -238,6 +399,19 @@ function RecommendationBar({ scored, myPlayers, league }) {
       }
     }
   });
+
+  // Position run: opponents picking before my next turn are collectively
+  // likely to take 2+ players at a position I still need.
+  let runAlert = null;
+  if (oppData && oppData.expectedByPos) {
+    needs.forEach(pos => {
+      const exp = oppData.expectedByPos[pos] || 0;
+      if (exp >= 1.6) {
+        const top = sortedByScore.find(p => p.pos === pos);
+        if (top && (!runAlert || exp > runAlert.exp)) runAlert = { pos, exp, player: top };
+      }
+    });
+  }
 
   let crossPos = null, crossReason = null;
   if (!isSame && bestOverall.draftScore - bestByNeed.draftScore > 12) {
@@ -272,7 +446,13 @@ function RecommendationBar({ scored, myPlayers, league }) {
             player={scarcityAlert.player}
             reason={`Only ${scarcityAlert.count} elite ${scarcityAlert.pos} left.`} />
         )}
-        {!crossPos && !scarcityAlert && !isSame && (
+        {runAlert && (
+          <RecCard icon="⏳" label={`${runAlert.pos} RUN LIKELY`}
+            player={runAlert.player}
+            reason={`~${runAlert.exp.toFixed(1)} ${runAlert.pos}s expected to go before your next pick — only ${runAlert.player.availPct}% chance ${runAlert.player.name.split(' ').pop()} survives.`}
+            highlight />
+        )}
+        {!crossPos && !scarcityAlert && !runAlert && !isSame && (
           <div style={{
             flex:1, background:T.surfaceAlt, border:`1.5px dashed ${T.border}`,
             borderRadius:T.r, padding:'12px 14px', display:'flex', alignItems:'center', justifyContent:'center',
@@ -529,6 +709,7 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
 function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick, onResetPicks, onUpdateLeague, onRefreshPlayers }) {
   const [showDraftBoard, setShowDraftBoard] = React.useState(false);
   const [showDrafted,    setShowDrafted]    = React.useState(false);
+  const [showOpponents,  setShowOpponents]  = React.useState(true);
   const [hint,           setHint]           = React.useState('');
   const [showPullModal,  setShowPullModal]  = React.useState(false);
   const [showAuction,    setShowAuction]    = React.useState(false);
@@ -567,10 +748,31 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     [playersWithVORP, draftedIds]
   );
 
+  const playersById = React.useMemo(
+    () => Object.fromEntries(playersWithVORP.map(p => [p.id, p])),
+    [playersWithVORP]
+  );
+
+  // Opponent roster analysis: predicted positions for every pick between now
+  // and my next turn, plus per-player survival odds.
+  const oppData = React.useMemo(() => {
+    if (!window.OpponentModel) return null;
+    return window.OpponentModel.analyze(
+      available, picks, league, league.teamModes || {}, playersById
+    );
+  }, [available, picks, league, playersById]);
+
+  const setTeamMode = (teamNum, mode) => {
+    onUpdateLeague({ teamModes: { ...(league.teamModes || {}), [teamNum]: mode } });
+  };
+
   const scored = React.useMemo(() => {
     if (typeof window.computeDraftScores !== 'function') return available;
-    return window.computeDraftScores(available, myPlayers, league, picks.length, tweaks);
-  }, [available, myPlayers, league, picks.length, tweaks]);
+    return window.computeDraftScores(
+      available, myPlayers, league, picks.length, tweaks,
+      oppData ? oppData.survival : null
+    );
+  }, [available, myPlayers, league, picks.length, tweaks, oppData]);
 
   const enriched = React.useMemo(() => {
     const scoredMap = Object.fromEntries(scored.map(p=>[p.id,p]));
@@ -668,6 +870,8 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
           </Btn>
           <Btn variant="ghost" size="sm" onClick={handleExportLog} disabled={picks.length===0}>Export CSV</Btn>
           <div style={{width:1, height:20, background:T.border}} />
+          <Btn variant="ghost" size="sm" onClick={()=>setShowOpponents(v=>!v)}
+            style={showOpponents ? {background:T.borderLight} : {}}>Opponents</Btn>
           <Btn variant="ghost" size="sm" onClick={()=>setShowDraftBoard(true)}>Draft Board</Btn>
           <Btn variant="ghost" size="sm" onClick={onUndoPick} disabled={picks.length===0}>Undo</Btn>
           <Btn variant="danger" size="sm" onClick={onResetPicks} disabled={picks.length===0}>Reset</Btn>
@@ -681,7 +885,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
           onGetHint={handleGetHint}
         />
         <div style={{flex:1, display:'flex', flexDirection:'column', minWidth:0}}>
-          <RecommendationBar scored={scored} myPlayers={myPlayers} league={league} />
+          <RecommendationBar scored={scored} myPlayers={myPlayers} league={league} oppData={oppData} />
           <PlayerList
             players={enriched}
             onDraft={handleDraft}
@@ -689,6 +893,13 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
             onToggleDrafted={()=>setShowDrafted(v=>!v)}
           />
         </div>
+        {showOpponents && (
+          <OpponentsPanel
+            league={league} oppData={oppData}
+            picksMade={picks.length}
+            onSetTeamMode={setTeamMode}
+          />
+        )}
       </div>
 
       <TweaksPanel title="Draft Tweaks">
@@ -729,4 +940,5 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
 Object.assign(window, {
   PosBadge, VORPBadge, ScoreBadge,
   MyTeamPanel, RecommendationBar, PlayerList, DraftBoardModal, DraftScreen,
+  OpponentsPanel,
 });

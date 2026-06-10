@@ -83,13 +83,25 @@
 
     if (player.pos === 'K'   && round <= 11) return 0.20;
     if (player.pos === 'DST' && round <= 11) return 0.25;
-    if (isOneQB && player.pos === 'QB' && round <= 4) return 0.55;
-    if (isOneQB && player.pos === 'QB' && round <= 7) return 0.82;
+    if (isOneQB && player.pos === 'QB') {
+      if (cnt >= 1) return round <= 9 ? 0.30 : 0.55;  // backup QB
+      if (round <= 4) return 0.55;   // don't reach early
+      if (round <= 7) return 1.00;   // window open — compete on merit
+      return 1.15;                   // getting late with no QB
+    }
 
-    if (cnt < starters)           return 1.20;
-    if (flexElig && flexOpen > 0) return 1.08;
-    if (cnt < starters + (flexElig ? flexSlots : 0) + bnSlots) return 0.80;
-    return 0.55;
+    // Open dedicated starter beats everything else.
+    if (cnt < starters) return 1.30;
+
+    // Flex-filler: real lineup value, but diminishing returns the more
+    // you stack one position — a 4th RB shouldn't outrank an open WR2.
+    if (flexElig && flexOpen > 0) {
+      var surplus = cnt - starters;  // already spilling past dedicated slots
+      return Math.max(0.75, 1.0 - 0.10 * surplus);
+    }
+
+    if (cnt < starters + (flexElig ? flexSlots : 0) + bnSlots) return 0.70;
+    return 0.45;
   }
 
   function computeByePenalty(player, myPlayers, penaltyPer) {
@@ -111,7 +123,9 @@
     return 0;
   }
 
-  window.computeDraftScores = function (available, myPlayers, league, totalPicksMade, w) {
+  // survivalMap (optional): {playerId: P(still available at my next pick)}
+  // from OpponentModel.analyze — roster-aware, replaces the pure-ADP sigmoid.
+  window.computeDraftScores = function (available, myPlayers, league, totalPicksMade, w, survivalMap) {
     var pickNum = totalPicksMade + 1;
     var ahead   = picksToMyTurn(totalPicksMade, league);
     var sigma   = w.adpSigma || 18;
@@ -125,7 +139,9 @@
     });
 
     return available.map(function(player) {
-      var ap   = availProb(player, pickNum, ahead, sigma);
+      var ap = survivalMap && survivalMap[player.id] != null
+        ? Math.max(0.02, Math.min(0.98, survivalMap[player.id]))
+        : availProb(player, pickNum, ahead, sigma);
       var vorp = player.vorp || 0;
 
       var posPool     = (byPos[player.pos] || []).filter(function(p) { return p.id !== player.id; });
