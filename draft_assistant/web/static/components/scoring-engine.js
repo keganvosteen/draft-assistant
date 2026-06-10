@@ -1,10 +1,14 @@
 // Draft Scoring Engine
-// Draft Score = (VORP * 2.5 + urgency * scarcityWeight + adpAdj) * availProb * needMult * slotMult - byePenalty
+// Draft Score = (VORP * 2.5 + urgency * scarcityWeight + adpAdj) * needMult * slotMult - byePenalty
 //
 // 1. VORP is the primary signal — encodes position scarcity vs replacement level.
 // 2. Urgency = dropoff to next-best at same position * P(player gone at next pick).
-// 3. Availability is MULTIPLICATIVE — player 80% likely gone is worth 20% of face value.
-// 4. Need multiplier suppresses QB/K/DST in early rounds.
+//    This is where availability matters: players who won't survive to your next
+//    pick AND have no comparable replacement get a bonus for taking them NOW.
+//    Availability must NOT multiply the whole score — every listed player is
+//    100% available at the current pick, so discounting elite low-ADP players
+//    by "they'll be gone later" inverts the rankings.
+// 3. Need multiplier suppresses QB/K/DST in early rounds.
 
 (function () {
 
@@ -98,6 +102,7 @@
   }
 
   function computeADPAdj(player, pickNum) {
+    if (player.adp >= 900) return 0; // 999 = ADP unknown, no signal
     var diff = player.adp - pickNum;
     if (diff >  15) return  0.8;
     if (diff >   5) return  0.3;
@@ -137,7 +142,7 @@
       var nm     = computeNeedMult(player, myPlayers, league, pickNum);
 
       var base       = vorp * 2.5 + urgency * w.scarcityWeight + adj;
-      var draftScore = base * ap * nm * slotMult - byePen;
+      var draftScore = base * nm * slotMult - byePen;
 
       return Object.assign({}, player, {
         draftScore:    Math.round(draftScore * 10) / 10,
