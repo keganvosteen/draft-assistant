@@ -714,6 +714,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       )}
       {showPullModal && (
         <PullDataModal
+          league={league}
           onClose={() => setShowPullModal(false)}
           onComplete={() => onRefreshPlayers && onRefreshPlayers()}
         />

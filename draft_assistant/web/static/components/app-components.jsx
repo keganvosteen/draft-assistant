@@ -375,24 +375,36 @@ function useTask() {
   return { start, reset, status, result, error };
 }
 
+// Map a league's scoring type to the ADP board format (FFC/Sleeper publish
+// separate ADP lists per format). Projections are raw stats either way.
+function adpFormatForLeague(league) {
+  if (!league) return 'ppr';
+  if (league.scoringType === 'custom') {
+    const rec = (league.customScoring && league.customScoring.reception) || 0;
+    return rec >= 0.75 ? 'ppr' : rec >= 0.25 ? 'half-ppr' : 'standard';
+  }
+  return league.scoringType || 'ppr';
+}
+
 // ─── PULL DATA MODAL ─────────────────────────────────────────────────────────
-function PullDataModal({ onClose, onComplete }) {
+function PullDataModal({ league, onClose, onComplete }) {
   const currentYear = new Date().getFullYear();
   const [mode, setMode]         = React.useState('free');
   const [season, setSeason]     = React.useState(currentYear);
   const [statsSeason, setStats] = React.useState(currentYear - 1);
-  const [teams, setTeams]       = React.useState(12);
-  const [adpFormat, setAdp]     = React.useState('ppr');
   const [skipFf, setSkipFf]     = React.useState(false);
-  const [scoring, setScoring]   = React.useState('ppr');
   const [history, setHistory]   = React.useState(3);
   const task = useTask();
+
+  // ADP board + league size derived from league settings — not user-facing.
+  const adpFormat = adpFormatForLeague(league);
+  const teams     = (league && league.numTeams) || 12;
 
   const handlePull = () => {
     const endpoint = mode === 'free' ? '/api/pull-free-data' : '/api/collect-all';
     const body = mode === 'free'
       ? { season, statsSeason, teams, adpFormat, skipFftoday: skipFf }
-      : { season, teams, scoring, history };
+      : { season, teams, scoring: adpFormat, history };
     fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -489,19 +501,12 @@ function PullDataModal({ onClose, onComplete }) {
                 <Input type="number" value={statsSeason} onChange={e => setStats(parseInt(e.target.value) || currentYear-1)} />
               </Field>
             )}
-            <Field label="Teams">
-              <Select value={teams} onChange={e => setTeams(parseInt(e.target.value))}
-                options={[8,10,12,14].map(n => ({value:n, label:`${n} teams`}))} />
-            </Field>
-            <Field label={mode === 'free' ? "ADP Format" : "Scoring Format"}>
-              <Select value={mode === 'free' ? adpFormat : scoring}
-                onChange={e => mode === 'free' ? setAdp(e.target.value) : setScoring(e.target.value)}
-                options={[
-                  {value:'ppr', label:'PPR'},
-                  {value:'half-ppr', label:'Half PPR'},
-                  {value:'standard', label:'Standard'},
-                ]} />
-            </Field>
+            {mode === 'full' && (
+              <Field label="History Seasons" hint="years of stats">
+                <Input type="number" value={history} onChange={e => setHistory(parseInt(e.target.value) || 3)}
+                  min={1} max={5} />
+              </Field>
+            )}
           </div>
 
           {mode === 'free' && (
@@ -511,12 +516,15 @@ function PullDataModal({ onClose, onComplete }) {
             </label>
           )}
 
-          {mode === 'full' && (
-            <Field label="History Seasons" hint="years of stats to fetch">
-              <Input type="number" value={history} onChange={e => setHistory(parseInt(e.target.value) || 3)}
-                min={1} max={5} />
-            </Field>
-          )}
+          <div style={{
+            marginTop:16, padding:'10px 14px', background:T.surfaceAlt,
+            border:`1px solid ${T.border}`, borderRadius:T.rsm, fontSize:12, color:T.muted, lineHeight:1.5,
+          }}>
+            Projections are pulled as raw stats — your league's scoring is applied
+            automatically and updates in real time when you change league settings.
+            ADP board matched to your league: <b style={{color:T.text}}>
+            {adpFormat === 'ppr' ? 'PPR' : adpFormat === 'half-ppr' ? 'Half PPR' : 'Standard'} · {teams} teams</b>
+          </div>
 
           <div style={{display:'flex', justifyContent:'flex-end', gap:10, marginTop:24, paddingTop:20, borderTop:`1px solid ${T.border}`}}>
             <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
@@ -710,7 +718,7 @@ function HomeScreen({ leagues, onSelectLeague, onAddLeague, onEditLeague, onDele
         </div>
       </div>
 
-      {showPull && <PullDataModal onClose={() => setShowPull(false)} onComplete={onRefreshPlayers} />}
+      {showPull && <PullDataModal league={leagues[0]} onClose={() => setShowPull(false)} onComplete={onRefreshPlayers} />}
       {showAuction && <AuctionModal onClose={() => setShowAuction(false)} />}
     </div>
   );
