@@ -111,7 +111,9 @@
     return 0;
   }
 
-  window.computeDraftScores = function (available, myPlayers, league, totalPicksMade, w) {
+  // survivalMap (optional): {playerId: P(still available at my next pick)}
+  // from OpponentModel.analyze — roster-aware, replaces the pure-ADP sigmoid.
+  window.computeDraftScores = function (available, myPlayers, league, totalPicksMade, w, survivalMap) {
     var pickNum = totalPicksMade + 1;
     var ahead   = picksToMyTurn(totalPicksMade, league);
     var sigma   = w.adpSigma || 18;
@@ -125,7 +127,9 @@
     });
 
     return available.map(function(player) {
-      var ap   = availProb(player, pickNum, ahead, sigma);
+      var ap = survivalMap && survivalMap[player.id] != null
+        ? Math.max(0.02, Math.min(0.98, survivalMap[player.id]))
+        : availProb(player, pickNum, ahead, sigma);
       var vorp = player.vorp || 0;
 
       var posPool     = (byPos[player.pos] || []).filter(function(p) { return p.id !== player.id; });
