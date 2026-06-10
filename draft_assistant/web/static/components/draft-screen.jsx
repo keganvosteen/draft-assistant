@@ -70,8 +70,13 @@ function generateRoundHint(round, myPlayers, topAvailable, league) {
     return `Round ${round}: continue building RB/WR core. Elite TE (Kelce-tier) is also a defensible reach now.`;
   }
   if (round <= 7) {
-    if (!counts.QB && (slots.QB || 0) > 0)
-      return `Round ${round}: window is opening for top QBs. ${top && top.pos==='QB' ? top.name + ' is excellent value. ' : ''}Don't wait too late on a 1-QB tier dropoff.`;
+    if (!counts.QB && (slots.QB || 0) > 0) {
+      const topQB  = topAvailable.find(p => p.pos === 'QB');
+      const qbRank = topQB ? topAvailable.indexOf(topQB) + 1 : 0;
+      if (topQB && qbRank <= 3)
+        return `Round ${round}: ${topQB.name} is the #${qbRank} score on the board — QB window is open, take it.`;
+      return `Round ${round}: no QB yet — okay for now${topQB ? ` (${topQB.name} ranks #${qbRank})` : ''}, but your open starter slots score higher. Fill those first, grab a QB by round 7-8.`;
+    }
     return `Round ${round}: depth time. RB handcuffs and WR3/4 with target share matter; avoid kicker/DST.`;
   }
   if (round <= 10) {
@@ -367,8 +372,19 @@ function RecommendationBar({ scored, myPlayers, league, oppData }) {
 
   const needs     = getRosterNeeds(myPlayers, league.rosterSlots);
   const flexElig  = new Set(['RB','WR','TE']);
+
+  // "Need" means an open dedicated starting slot first; only fall back to
+  // soft depth caps when every starter is filled. Otherwise a 4th RB keeps
+  // masquerading as a need via the flex/bench allowance.
+  const posCounts = {};
+  myPlayers.forEach(p => { posCounts[p.pos] = (posCounts[p.pos] || 0) + 1; });
+  const starterNeeds = ['QB','RB','WR','TE','K','DST'].filter(pos =>
+    (posCounts[pos] || 0) < (league.rosterSlots[pos] || 0)
+  );
+  const needPool = starterNeeds.length > 0 ? starterNeeds : needs;
   const bestByNeed = sortedByScore.find(p =>
-    needs.includes(p.pos) || (needs.includes('FLEX') && flexElig.has(p.pos))
+    needPool.includes(p.pos) ||
+    (starterNeeds.length === 0 && needs.includes('FLEX') && flexElig.has(p.pos))
   ) || bestOverall;
 
   const isSame = bestOverall.id === bestByNeed.id;

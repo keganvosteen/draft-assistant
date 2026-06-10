@@ -84,8 +84,14 @@ function getRosterNeeds(myPlayers, rosterSlots) {
     K:   rosterSlots.K   || 1,
     DST: rosterSlots.DST || 1,
   };
+  // Open dedicated starting slots first, depth-only needs after.
   return Object.entries(maxByPos)
     .filter(([pos, max]) => (counts[pos] || 0) < max)
+    .sort(([a], [b]) => {
+      const aOpen = (counts[a] || 0) < (rosterSlots[a] || 0) ? 0 : 1;
+      const bOpen = (counts[b] || 0) < (rosterSlots[b] || 0) ? 0 : 1;
+      return aOpen - bOpen;
+    })
     .map(([pos]) => pos);
 }
 
