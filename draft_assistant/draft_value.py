@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import heapq
 import random
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
@@ -112,7 +113,9 @@ def draft_aware_values(
     roster_players = _flatten_roster(my_roster)
     all_players = available + roster_players
     points_map = compute_points(all_players, config.scoring)
-    repl = replacement_levels(available, config.scoring, config.teams, config.roster)
+    repl = replacement_levels(
+        available, config.scoring, config.teams, config.roster, points_map=points_map
+    )
     surplus_map = {
         player.key(): max(0.0, points_map.get(player.key(), 0.0) - repl.get(player.position, 0.0))
         for player in all_players
@@ -250,9 +253,16 @@ def _bye_week_penalty(player: Player, roster_players: List[Player], points_map: 
     if not player.bye_week or player.position in {"K", "DST"}:
         return 0.0
     lineup = roster_value(roster_players + [player], points_map, roster)
-    starters = [p for p in lineup.starters if p.position not in {"K", "DST"} and p.bye_week == player.bye_week]
-    same_position = [p for p in starters if p.position == player.position]
-    penalty = max(0, len(starters) - 1) * 0.75 + max(0, len(same_position) - 1) * 0.75
+    # Count starters OTHER than the candidate sharing his bye — the candidate
+    # may land on the bench, in which case subtracting one would undercount.
+    shared = [
+        p for p in lineup.starters
+        if p.key() != player.key()
+        and p.position not in {"K", "DST"}
+        and p.bye_week == player.bye_week
+    ]
+    same_position = [p for p in shared if p.position == player.position]
+    penalty = len(shared) * 0.75 + len(same_position) * 0.75
     return round(min(3.0, penalty), 2)
 
 
@@ -320,20 +330,21 @@ def _simulate_boards(
     adp_noise: float,
     seed: int,
 ) -> List[List[str]]:
+    """Simulate opponent boards as the top picks_until_next+1 players by
+    noisy ADP. Only that prefix is ever consumed (one extra in case the
+    drafted candidate is excluded), so keeping full sorted boards would just
+    multiply downstream work by the size of the player pool."""
+    keep = picks_until_next + 1
+    base = [
+        (float(p.adp) if p.adp is not None else 999.0, p.key())
+        for p in available
+    ]
     boards: List[List[str]] = []
     for sim in range(sims):
         rng = random.Random(seed + sim)
-        ranked = sorted(
-            available,
-            key=lambda p: _sampled_adp_rank(p, rng, adp_noise),
-        )
-        boards.append([player.key() for player in ranked])
+        sampled = [(adp + rng.gauss(0.0, adp_noise), key) for adp, key in base]
+        boards.append([key for _, key in heapq.nsmallest(keep, sampled)])
     return boards
-
-
-def _sampled_adp_rank(player: Player, rng: random.Random, adp_noise: float) -> float:
-    adp = float(player.adp) if player.adp is not None else 999.0
-    return adp + rng.gauss(0.0, adp_noise)
 
 
 def _simulation_seed(config: LeagueConfig, state: Optional[DraftState]) -> int:

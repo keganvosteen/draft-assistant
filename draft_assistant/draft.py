@@ -33,22 +33,33 @@ class DraftTracker:
                     if position is None or p.position.upper() == position.upper():
                         matches.append(p)
 
-        # 3) Fuzzy match (Levenshtein distance <= 3)
+        # 3) Fuzzy match — allow fewer edits for short queries so e.g. "Hall"
+        #    can't silently become "Hill".
         if not matches:
+            query = player_name.strip()
+            max_distance = 1 if len(query) <= 5 else 2 if len(query) <= 10 else 3
             candidate_names = [p.name for p in avail]
-            fuzzy_results = fuzzy_match(player_name.strip(), candidate_names, max_distance=3)
+            fuzzy_results = fuzzy_match(query, candidate_names, max_distance=max_distance)
+            seen_keys = set()
             for matched_name, _dist in fuzzy_results:
                 for p in avail:
-                    if p.name == matched_name:
+                    if p.name == matched_name and p.key() not in seen_keys:
                         if position is None or p.position.upper() == position.upper():
                             matches.append(p)
+                            seen_keys.add(p.key())
 
         if len(matches) == 1:
             p = matches[0]
         elif len(matches) > 1:
-            # Prefer skill positions
-            pref = [m for m in matches if m.position in {"RB", "WR", "QB", "TE"}]
-            p = pref[0] if pref else matches[0]
+            # Ambiguous: prefer the player most likely to actually be drafted
+            # (lowest ADP), then skill positions, then name for determinism.
+            skill = {"RB", "WR", "QB", "TE"}
+            matches.sort(key=lambda m: (
+                m.adp if m.adp is not None else float("inf"),
+                0 if m.position in skill else 1,
+                m.name,
+            ))
+            p = matches[0]
         else:
             return None
 

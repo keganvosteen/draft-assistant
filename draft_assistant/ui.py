@@ -344,7 +344,8 @@ def run_interactive(profile: str = DEFAULT_PROFILE):
     _show_board(tracker, config, state)
     _show_help()
 
-    # Enable readline tab completion for player names
+    # Enable readline tab completion for player names (readline is not in the
+    # stdlib on Windows; the UI still works there, just without tab completion).
     available_names = [p.name for p in players]
 
     def _completer(text, state_idx):
@@ -354,9 +355,10 @@ def run_interactive(profile: str = DEFAULT_PROFILE):
             return matches[state_idx]
         return None
 
-    readline.set_completer(_completer)
-    readline.parse_and_bind("tab: complete")
-    readline.set_completer_delims("")
+    if readline is not None:
+        readline.set_completer(_completer)
+        readline.parse_and_bind("tab: complete")
+        readline.set_completer_delims("")
 
     while True:
         try:

@@ -11,16 +11,17 @@ import threading
 import traceback
 import webbrowser
 from functools import partial
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 
-from ..models import LeagueConfig
+from ..models import DraftState, LeagueConfig
 from ..profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from ..providers.base import build_provider
+from ..rollout import rollout_values
 from ..sample_data import sample_players
 from ..scoring import fantasy_points
-from ..storage import load_state, save_players, save_state
+from ..storage import load_players, load_state, save_players, save_state
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -31,6 +32,8 @@ STANDARD_SCORING = {
     "fumbles": -2,
 }
 
+# Last-resort fallback only (a past season's byes — goes stale). Byes are
+# preferred from player data, then from per-team byes derived from that data.
 BYE_WEEKS = {
     "ARI": 13, "ATL": 12, "BAL": 8, "BUF": 6, "CAR": 6, "CHI": 14,
     "CIN": 8, "CLE": 14, "DAL": 10, "DEN": 11, "DET": 5, "GB": 13,
@@ -40,17 +43,53 @@ BYE_WEEKS = {
     "TEN": 9, "WAS": 14,
 }
 
+
+def _team_byes_from_players(players) -> dict:
+    """Derive each team's bye week from whichever players carry one.
+
+    This self-heals every season from pulled data instead of relying on the
+    hardcoded table above.
+    """
+    byes: dict = {}
+    for player in players:
+        if player.team and player.bye_week and player.team not in byes:
+            byes[player.team] = player.bye_week
+    return byes
+
 # Tracks background tasks (pull-free-data, collect-all, etc.)
 _tasks: dict[str, dict] = {}
 _task_lock = threading.Lock()
 
 
-def _player_to_js(player, config: LeagueConfig) -> dict:
-    """Convert a Python Player to the JS frontend's expected format."""
-    std_pts = fantasy_points(player.projections, STANDARD_SCORING)
-    rec_bonus = float(player.projections.get("rec", 0)) * 0.5
+def _player_to_js(player, config: LeagueConfig, team_byes: Optional[dict] = None) -> dict:
+    """Convert a Python Player to the JS frontend's expected format.
+
+    stdPts is standard (0 pt/rec) scoring; recPts is the full 1-pt-per-reception
+    bonus so the frontend computes: ppr = stdPts + recPts, half = stdPts + 0.5*recPts.
+    K/DST don't vary with reception format, so they are scored with the league's
+    own scoring config (STANDARD_SCORING has no kicker/defense stat weights).
+    """
+    # Board scoring runs through the same historical/age model as Auction + CLI,
+    # so accumulated history and aging shape the rankings — not just raw
+    # current-season projections.
+    if player.age is not None or player.historical_stats:
+        from ..historical import adjust_projections
+        proj = adjust_projections(player, config.scoring)
+    else:
+        proj = player.projections
+
+    if player.position in {"K", "DST"}:
+        std_pts = fantasy_points(proj, config.scoring)
+    else:
+        std_pts = fantasy_points(proj, STANDARD_SCORING)
+    rec_bonus = float(proj.get("rec", 0))
     adp = player.adp if player.adp else 999
-    bye = player.bye_week or BYE_WEEKS.get(player.team or "", None)
+    team = player.team or ""
+    bye = (
+        player.bye_week
+        or (team_byes or {}).get(team)
+        or BYE_WEEKS.get(team)
+    )
 
     tier = 5
     if adp <= 12:
@@ -61,6 +100,19 @@ def _player_to_js(player, config: LeagueConfig) -> dict:
         tier = 3
     elif adp <= 90:
         tier = 4
+
+    # Raw stat lines the frontend needs to apply fully custom scoring.
+    custom_keys = (
+        "pass_yd", "pass_td", "pass_int", "pass_2pt",
+        "rush_yd", "rush_td", "rush_2pt",
+        "rec", "rec_yd", "rec_td", "rec_2pt",
+        "sack_taken", "fumbles", "fumbles_total", "fum_ret_td",
+    )
+    stats = {
+        key: round(float(proj.get(key, 0.0)), 1)
+        for key in custom_keys
+        if proj.get(key)
+    }
 
     return {
         "id": player.key(),
@@ -73,6 +125,7 @@ def _player_to_js(player, config: LeagueConfig) -> dict:
         "tier": tier,
         "byeWeek": bye,
         "age": player.age,
+        "stats": stats,
     }
 
 
@@ -139,6 +192,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_fetch()
         elif self.path == "/api/auction":
             self._handle_auction()
+        elif self.path == "/api/suggest":
+            self._handle_suggest()
         elif self.path == "/api/save-draft":
             self._handle_save_draft()
         elif self.path == "/api/load-draft":
@@ -148,14 +203,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         else:
             self._send_json({"error": "not found"}, 404)
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
-
     # ── helpers ────────────────────────────────────────────────────────────
+    # No CORS headers on purpose: the frontend is same-origin, and a wildcard
+    # Access-Control-Allow-Origin would let any website the user has open
+    # rewrite draft state or trigger data pulls on this local server.
 
     def _read_body(self) -> dict:
         length = int(self.headers.get("Content-Length", 0))
@@ -163,12 +214,18 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             return json.loads(self.rfile.read(length))
         return {}
 
+    @staticmethod
+    def _picks_list(value) -> list:
+        """Validate a picks payload: must be a list of player-key strings."""
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ValueError("picks must be a list of player key strings")
+        return value
+
     def _send_json(self, data, code=200):
         body = json.dumps(data).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
@@ -177,7 +234,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     def _handle_players(self):
         try:
             players, config = _load_players(self.profile)
-            js_players = [_player_to_js(p, config) for p in players]
+            team_byes = _team_byes_from_players(players)
+            js_players = [_player_to_js(p, config, team_byes) for p in players]
             self._send_json(js_players)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
@@ -192,6 +250,93 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 "scoring": config.scoring,
                 "draft": config.draft,
             })
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _suggest_config(self, body: dict, config: LeagueConfig) -> LeagueConfig:
+        """Build the effective LeagueConfig for a suggestion request.
+
+        The league you create (server profile config) is the source of truth for
+        scoring — including K/DST weights the browser never sees. The live UI may
+        override teams / draft slot / roster slots / sim count per request, so
+        the engine always reflects whatever league you are actually drafting.
+        """
+        league = body.get("league") or {}
+        teams = int(league.get("numTeams") or config.teams)
+        roster = dict(config.roster)
+        slots = league.get("rosterSlots")
+        if isinstance(slots, dict):
+            roster.update({k: int(v) for k, v in slots.items() if v is not None})
+        scoring = config.scoring
+        if isinstance(league.get("scoring"), dict) and league["scoring"]:
+            scoring = league["scoring"]
+        draft = dict(config.draft or {})
+        if league.get("draftPosition"):
+            draft["slot"] = max(1, min(int(league["draftPosition"]), teams))
+        if league.get("sims"):
+            draft["rollout_sims"] = max(1, int(league["sims"]))
+        # Common-random-numbers keeps impact stable at modest sim counts, so the
+        # web default favors responsiveness; bump via league.sims for precision.
+        draft.setdefault("rollout_sims", 24)
+        return LeagueConfig(
+            teams=teams, roster=roster, scoring=scoring,
+            provider=config.provider, draft=draft,
+        )
+
+    def _handle_suggest(self):
+        """Rank the board by the rest-of-draft season-points rollout engine.
+
+        Body: {picks: [key...], my_picks: [key...], top: int, league: {...}}.
+        Player ids are ``Player.key()`` ("name|POS"), matching /api/players, so
+        the frontend can merge the returned impact scores straight onto its board.
+        """
+        try:
+            body = self._read_body()
+            picks = self._picks_list(body.get("picks", []))
+            my_picks = self._picks_list(body.get("my_picks", []))
+            top_n = max(1, int(body.get("top", 50)))
+            players, config = _load_players(self.profile)
+            eff = self._suggest_config(body, config)
+
+            by_key = {p.key(): p for p in players}
+            picked = set(picks)
+            available = [p for k, p in by_key.items() if k not in picked]
+            my_roster: dict = {}
+            for k in my_picks:
+                p = by_key.get(k)
+                if p:
+                    my_roster.setdefault(p.position, []).append(p)
+            state = DraftState(
+                my_team_name="Me",
+                league_teams=[f"T{i + 1}" for i in range(eff.teams)],
+                picks=picks,
+                my_picks=my_picks,
+            )
+
+            results = rollout_values(eff, available, my_roster, state, top_n=top_n)
+            rows = [{
+                "id": r.player.key(),
+                "name": r.player.name,
+                "pos": r.player.position,
+                "nflTeam": r.player.team or "FA",
+                "adp": round(r.player.adp, 1) if r.player.adp else None,
+                "byeWeek": r.player.bye_week,
+                "points": r.points,
+                "vor": r.vor,
+                "immediateGain": r.immediate_gain,
+                "projRoster": r.expected_roster_points,
+                "impact": r.impact,
+                "goneRisk": r.gone_risk,
+                "byePenalty": r.bye_penalty,
+            } for r in results]
+            self._send_json({
+                "suggestions": rows,
+                "sims": results[0].sims if results else 0,
+                "teams": eff.teams,
+                "slot": int((eff.draft or {}).get("slot", 1)),
+            })
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
@@ -214,11 +359,13 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             paths = ensure_profile(self.profile)
             state = load_state(paths.state_path)
             if "picks" in body:
-                state.picks = body["picks"]
+                state.picks = self._picks_list(body["picks"])
             if "my_picks" in body:
-                state.my_picks = body["my_picks"]
+                state.my_picks = self._picks_list(body["my_picks"])
             save_state(state, paths.state_path)
             self._send_json({"ok": True})
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
@@ -247,6 +394,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
 
             def _do_pull():
                 from ..importers.free_sources import pull_free_data as _pull
+                from ..importers.free_sources import merge_historical_into
                 paths = ensure_profile(profile)
                 config = load_profile_config(paths)
                 result = _pull(
@@ -257,13 +405,19 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     adp_format=body.get("adpFormat"),
                     include_fftoday=not body.get("skipFftoday", False),
                     espn_league_id=body.get("espnLeagueId"),
+                    history_seasons=body.get("history"),
                 )
-                save_players(result.players, paths.projections_path)
+                # Accumulate history across pulls: keep prior seasons on disk
+                # rather than overwriting them with this pull's seasons only.
+                players = merge_historical_into(result.players, load_players(paths.projections_path))
+                save_players(players, paths.projections_path)
+                seasons = sorted({s for p in players for s in p.historical_stats})
                 reports = [
                     {"source": r.source, "records": r.records, "ok": r.ok, "detail": r.detail}
                     for r in result.reports
                 ]
-                return {"players": len(result.players), "reports": reports}
+                return {"players": len(players), "reports": reports,
+                        "historySeasons": seasons}
 
             _run_task(task_id, _do_pull)
             self._send_json({"taskId": task_id})
@@ -345,11 +499,13 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             paths = ensure_profile(self.profile)
             state = load_state(paths.state_path)
             if "picks" in body:
-                state.picks = body["picks"]
+                state.picks = self._picks_list(body["picks"])
             if "my_picks" in body:
-                state.my_picks = body["my_picks"]
+                state.my_picks = self._picks_list(body["my_picks"])
             save_state(state, paths.state_path)
             self._send_json({"ok": True, "path": str(paths.state_path)})
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
@@ -408,7 +564,10 @@ def run_server(
     open_browser: bool = True,
 ) -> None:
     handler = partial(DraftAPIHandler, profile=profile)
-    server = HTTPServer(("127.0.0.1", port), handler)
+    # Threaded: the rollout endpoint can take a couple seconds, and a
+    # single-threaded server would freeze every other request (player data,
+    # state saves, the next pick) while it runs.
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}"
     print(f"Draft Assistant web UI: {url}")
     print("Press Ctrl+C to stop.")

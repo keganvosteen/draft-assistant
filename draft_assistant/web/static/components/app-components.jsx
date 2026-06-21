@@ -25,17 +25,46 @@ const T = {
 };
 
 // ─── UTILITIES ────────────────────────────────────────────────────────────────
-function calcProjection(player, scoringType, customRec) {
+// stdPts = standard (0 pt/rec) scoring from the backend; recPts = full
+// 1-pt-per-reception bonus (i.e. projected receptions). K/DST stdPts are
+// already computed server-side with the league's scoring config.
+function calcCustomProjection(player, cs) {
+  const s = player.stats;
+  if (!s) return player.stdPts + player.recPts * ((cs && cs.reception) || 0);
+  const perYd = denom => (denom ? 1 / denom : 0);
+  // Back-compat for leagues saved before these fields existed: fall back to the
+  // old flat -2 fumble penalty and treat new categories as off (0).
+  const fumbleLost = cs.fumbleLost != null ? cs.fumbleLost : -2;
+  const fumbleAny  = cs.fumble     != null ? cs.fumble     : 0;
+  const twoPt      = cs.twoPt      || 0;
+  const pts =
+    (s.pass_yd  || 0) * perYd(cs.passYds) +
+    (s.pass_td  || 0) * (cs.passTD  || 0) +
+    (s.pass_int || 0) * (cs.passInt || 0) +
+    (s.sack_taken || 0) * (cs.sackTaken || 0) +
+    (s.rush_yd  || 0) * perYd(cs.rushYds) +
+    (s.rush_td  || 0) * (cs.rushTD  || 0) +
+    (s.rec_yd   || 0) * perYd(cs.recYds) +
+    (s.rec_td   || 0) * (cs.recTD   || 0) +
+    (s.rec      || 0) * (cs.reception || 0) +
+    ((s.pass_2pt || 0) + (s.rush_2pt || 0) + (s.rec_2pt || 0)) * twoPt +
+    (s.fum_ret_td   || 0) * (cs.fumRetTD || 0) +
+    (s.fumbles_total || 0) * fumbleAny +
+    (s.fumbles  || 0) * fumbleLost;
+  return Math.round(pts * 10) / 10;
+}
+
+function calcProjection(player, scoringType, customScoring) {
+  if (player.pos === 'K' || player.pos === 'DST') return player.stdPts;
   if (scoringType === 'standard') return player.stdPts;
   if (scoringType === 'ppr')      return player.stdPts + player.recPts;
-  if (scoringType === 'half-ppr') return Math.round(player.stdPts + player.recPts * 0.5);
-  if (scoringType === 'custom')   return Math.round(player.stdPts + player.recPts * (customRec || 0));
+  if (scoringType === 'half-ppr') return Math.round((player.stdPts + player.recPts * 0.5) * 10) / 10;
+  if (scoringType === 'custom')   return calcCustomProjection(player, customScoring || {});
   return player.stdPts;
 }
 
 function withProjections(players, league) {
-  const recMult = league.scoringType === 'custom' ? (league.customScoring && league.customScoring.reception || 0) : 1;
-  return players.map(p => ({ ...p, projPts: calcProjection(p, league.scoringType, recMult) }));
+  return players.map(p => ({ ...p, projPts: calcProjection(p, league.scoringType, league.customScoring) }));
 }
 
 function withVORP(players, league) {
@@ -97,7 +126,11 @@ function getRosterNeeds(myPlayers, rosterSlots) {
 
 // ─── DEFAULT DATA ─────────────────────────────────────────────────────────────
 const DEFAULT_SLOTS   = { QB:1, RB:2, WR:2, TE:1, FLEX:1, K:1, DST:1, BN:6 };
-const DEFAULT_CUSTOM  = { passTD:4, passYds:25, passInt:-2, rushTD:6, rushYds:10, recTD:6, recYds:10, reception:0.5 };
+// Neutral starting template for a new custom league — NOT any one league's
+// settings. Raw stats are league-agnostic; each league's own scoring (entered
+// in the editor) is applied to them dynamically, so these are just defaults to
+// tweak. New categories default to "off"/common so they only count once set.
+const DEFAULT_CUSTOM  = { passTD:4, passYds:25, passInt:-2, sackTaken:0, rushTD:6, rushYds:10, recTD:6, recYds:10, reception:0.5, twoPt:2, fumbleLost:-2, fumble:0, fumRetTD:6 };
 const SCORING_LABELS  = { standard:'Standard', ppr:'PPR', 'half-ppr':'Half PPR', custom:'Custom' };
 const PLATFORMS       = ['ESPN','Yahoo','Sleeper','NFL.com','Other'];
 const POSITIONS       = ['QB','RB','WR','TE','K','DST'];
@@ -246,7 +279,7 @@ function Select({ value, onChange, options, style={} }) {
 // ─── LEAGUE SETUP MODAL ──────────────────────────────────────────────────────
 function LeagueSetupModal({ league, onSave, onClose }) {
   const [form, setForm] = React.useState(league
-    ? {...league, rosterSlots:{...league.rosterSlots}, customScoring:{...league.customScoring}}
+    ? {...league, rosterSlots:{...league.rosterSlots}, customScoring:{...DEFAULT_CUSTOM, ...league.customScoring}}
     : makeLeague());
   const set = (k, v) => setForm(f => ({...f, [k]: v}));
   const setSlot = (k, v) => setForm(f => ({...f, rosterSlots:{...f.rosterSlots, [k]: parseInt(v)||0}}));
@@ -270,7 +303,7 @@ function LeagueSetupModal({ league, onSave, onClose }) {
         </Field>
         <Field label="Teams">
           <Select value={form.numTeams} onChange={e=>set('numTeams',parseInt(e.target.value))}
-            options={[8,10,12,14].map(n=>({value:n,label:`${n} teams`}))} />
+            options={[8,10,12,14,16,18,20].map(n=>({value:n,label:`${n} teams`}))} />
         </Field>
         <Field label="My Draft Position">
           <Input type="number" value={form.draftPosition}
@@ -305,15 +338,20 @@ function LeagueSetupModal({ league, onSave, onClose }) {
               {k:'passTD', l:'Pass TD'},
               {k:'passYds', l:'Yds/Pass Pt', hint:'yds per 1 pt'},
               {k:'passInt', l:'Interception'},
-              {k:'reception', l:'Reception (PPR)'},
+              {k:'sackTaken', l:'Sack (off)', hint:'per QB sack'},
               {k:'rushTD', l:'Rush TD'},
-              {k:'rushYds', l:'Yds/Rush Pt'},
+              {k:'rushYds', l:'Yds/Rush Pt', hint:'yds per 1 pt'},
               {k:'recTD', l:'Rec TD'},
-              {k:'recYds', l:'Yds/Rec Pt'},
-            ].map(({k,l,hint}) => (
+              {k:'recYds', l:'Yds/Rec Pt', hint:'yds per 1 pt'},
+              {k:'reception', l:'Reception (PPR)', step:0.05, hint:'e.g. 0.25'},
+              {k:'twoPt', l:'2-PT Conv'},
+              {k:'fumbleLost', l:'Fumble Lost'},
+              {k:'fumble', l:'Fumble', hint:'any fumble'},
+              {k:'fumRetTD', l:'Off Fum Ret TD'},
+            ].map(({k,l,hint,step}) => (
               <Field key={k} label={l} hint={hint}>
                 <Input type="number" value={form.customScoring[k]}
-                  onChange={e=>setCustom(k,e.target.value)} step="0.5" />
+                  onChange={e=>setCustom(k,e.target.value)} step={step||0.5} />
               </Field>
             ))}
           </div>
@@ -409,7 +447,7 @@ function PullDataModal({ league, onClose, onComplete }) {
   const handlePull = () => {
     const endpoint = mode === 'free' ? '/api/pull-free-data' : '/api/collect-all';
     const body = mode === 'free'
-      ? { season, statsSeason, teams, adpFormat, skipFftoday: skipFf }
+      ? { season, statsSeason, history, teams, adpFormat, skipFftoday: skipFf }
       : { season, teams, scoring: adpFormat, history };
     fetch(endpoint, {
       method: 'POST',
@@ -447,6 +485,11 @@ function PullDataModal({ league, onClose, onComplete }) {
           <div style={{fontSize:14, color:T.muted, marginBottom:6}}>
             {task.result?.players} players loaded
           </div>
+          {task.result?.historySeasons?.length > 0 && (
+            <div style={{fontSize:12, color:T.muted, marginBottom:6}}>
+              History seasons kept: {task.result.historySeasons.join(', ')}
+            </div>
+          )}
           {task.result?.reports && (
             <div style={{textAlign:'left', margin:'16px auto', maxWidth:400, background:T.surfaceAlt,
               borderRadius:T.rsm, padding:12, fontSize:12}}>
@@ -503,23 +546,29 @@ function PullDataModal({ league, onClose, onComplete }) {
               <Input type="number" value={season} onChange={e => setSeason(parseInt(e.target.value) || currentYear)} />
             </Field>
             {mode === 'free' && (
-              <Field label="Stats Season">
+              <Field label="Stats Season" hint="most recent">
                 <Input type="number" value={statsSeason} onChange={e => setStats(parseInt(e.target.value) || currentYear-1)} />
               </Field>
             )}
-            {mode === 'full' && (
-              <Field label="History Seasons" hint="years of stats">
-                <Input type="number" value={history} onChange={e => setHistory(parseInt(e.target.value) || 3)}
-                  min={1} max={5} />
-              </Field>
-            )}
+            <Field label="History Seasons" hint="years of stats">
+              <Input type="number" value={history} onChange={e => setHistory(parseInt(e.target.value) || 3)}
+                min={1} max={5} />
+            </Field>
           </div>
 
           {mode === 'free' && (
-            <label style={{display:'flex', alignItems:'center', gap:8, fontSize:13, color:T.text, marginTop:8, cursor:'pointer'}}>
-              <input type="checkbox" checked={skipFf} onChange={e => setSkipFf(e.target.checked)} />
-              Skip FFToday scraping
-            </label>
+            <div style={{marginTop:8}}>
+              <label style={{display:'flex', alignItems:'center', gap:8, fontSize:13, color:T.text, cursor:'pointer'}}>
+                <input type="checkbox" checked={skipFf} onChange={e => setSkipFf(e.target.checked)} />
+                Skip FFToday scraping
+              </label>
+              <div style={{fontSize:11, color:T.muted, marginTop:4, marginLeft:24, lineHeight:1.4}}>
+                FFToday is the only source pulled by scraping web pages — the rest are fast
+                JSON/CSV feeds — so it's the slowest, most fragile step. Skip it for a quicker
+                pull; leave it on to add another projection source that fills gaps. Either way,
+                if it fails the pull still completes.
+              </div>
+            </div>
           )}
 
           <div style={{
@@ -529,7 +578,7 @@ function PullDataModal({ league, onClose, onComplete }) {
             Projections are pulled as raw stats — your league's scoring is applied
             automatically and updates in real time when you change league settings.
             ADP board matched to your league: <b style={{color:T.text}}>
-            {adpFormat === 'ppr' ? 'PPR' : adpFormat === 'half-ppr' ? 'Half PPR' : 'Standard'} · {teams} teams</b>
+            {adpFormat === 'ppr' ? 'PPR' : adpFormat === 'half-ppr' ? 'Half PPR' : 'Standard'} · {Math.min(teams,14)} teams</b>
           </div>
 
           <div style={{display:'flex', justifyContent:'flex-end', gap:10, marginTop:24, paddingTop:20, borderTop:`1px solid ${T.border}`}}>
@@ -803,6 +852,10 @@ function App() {
     setPicks(prev => ({ ...prev, [leagueId]: [...(prev[leagueId] || []), pick] }));
   };
 
+  const replacePicks = (leagueId, newPicks) => {
+    setPicks(prev => ({ ...prev, [leagueId]: newPicks }));
+  };
+
   const undoPick = leagueId => {
     setPicks(prev => ({ ...prev, [leagueId]: (prev[leagueId] || []).slice(0,-1) }));
   };
@@ -842,6 +895,7 @@ function App() {
         onAddPick={pick => addPick(selectedLeague.id, pick)}
         onUndoPick={() => undoPick(selectedLeague.id)}
         onResetPicks={() => resetPicks(selectedLeague.id)}
+        onReplacePicks={newPicks => replacePicks(selectedLeague.id, newPicks)}
         onUpdateLeague={patch => updateLeague(selectedLeague.id, patch)}
         onRefreshPlayers={refreshPlayers}
       />

@@ -1,18 +1,23 @@
-"""Suggestion engine: Monte Carlo draft-value composed with gradient need model.
+"""Suggestion engine.
 
-Base scoring: `draft_value.draft_aware_values()` runs Monte Carlo simulation of
-opponent picks via ADP to compute lineup gain, scarcity, VOR.
+`suggest_players()` ranks the board by the rest-of-draft Monte Carlo rollout in
+`rollout.rollout_values()`: each player's headline score is the expected change
+in your FINAL roster's total season points from drafting them now versus your
+default pick, accounting for who is likely to survive to each of your later
+picks. That single objective already captures positional scarcity / opportunity
+cost end to end (the "take the WR now because the WR cliff is steeper than the
+RB cliff" problem), so the older gradient need-multiplier is no longer layered
+on top.
 
-On top of that we apply:
-  - Gradient position need multiplier (unfilled starters + draft progress)
-  - FLEX overflow awareness (RB/WR/TE overflow fills FLEX slots)
-  - Extra bye-week stacking penalty
+The need / FLEX / bye helpers below are retained because other modules and the
+test-suite use them directly, and they remain a useful cheap read of roster
+needs for display.
 """
 from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 
-from .draft_value import draft_aware_values
 from .models import DraftState, LeagueConfig, Player
+from .rollout import rollout_values
 
 FLEX_ELIGIBLE = {"RB", "WR", "TE"}
 
@@ -78,6 +83,18 @@ def _position_need_multiplier(
     return multiplier
 
 
+def _apply_need_multiplier(score: float, mult: float) -> float:
+    """Scale a score by positional need without inverting negative scores.
+
+    Multiplying a negative score by a >1 need multiplier would rank a needed
+    position BELOW a filled one late in drafts; dividing instead keeps
+    "higher multiplier => ranks higher" true on both sides of zero.
+    """
+    if score >= 0:
+        return score * mult
+    return score / mult
+
+
 def _bye_week_penalty(
     player: Player,
     my_roster: Dict[str, List[Player]],
@@ -101,34 +118,22 @@ def suggest_players(
     total_picks: int = 0,
     draft_state: Optional[DraftState] = None,
 ) -> List[Tuple[Player, float, float, float]]:
-    """Return ranked (Player, points, vor, score) tuples.
+    """Return ranked ``(player, points, vor, score)`` tuples.
 
-    Uses draft_aware_values() for the Monte Carlo base then applies our
-    gradient need multiplier and extra bye penalty.
+    ``score`` is the rollout engine's *impact*: the expected change in your
+    final roster's total season points from drafting this player now versus your
+    default greedy pick (see :func:`rollout.rollout_values`). Sorting by it puts
+    the player who most improves your whole-season total at the top, which is not
+    always the player who scores the most points in isolation.
+
+    ``total_picks`` is accepted for backwards compatibility (callers still pass
+    it); pick position is now derived from ``draft_state`` inside the rollout.
     """
-    needs = needs_by_position(config, my_roster)
-    total_roster_spots = sum(int(v) for v in config.roster.values())
-    total_rounds = total_roster_spots
-
-    # Wide pool so need re-ranking can promote high-need players
-    pool_size = max(top_n * 4, 40)
-    base = draft_aware_values(
+    results = rollout_values(
         config=config,
         available=available,
         my_roster=my_roster,
         state=draft_state,
-        top_n=pool_size,
+        top_n=top_n,
     )
-
-    ranked: List[Tuple[Player, float, float, float]] = []
-    for item in base:
-        p = item.player
-        need_mult = _position_need_multiplier(
-            p.position, needs, config, my_roster, total_picks, total_rounds,
-        )
-        bye_pen = _bye_week_penalty(p, my_roster)
-        score = round(item.score * need_mult - bye_pen, 2)
-        ranked.append((p, item.points, item.vor, score))
-
-    ranked.sort(key=lambda t: (t[3], t[2], t[1]), reverse=True)
-    return ranked[:top_n]
+    return [(r.player, r.points, r.vor, r.impact) for r in results]

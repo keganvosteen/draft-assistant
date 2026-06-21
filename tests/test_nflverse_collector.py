@@ -10,6 +10,12 @@ from draft_assistant.collectors.nflverse import (
     _aggregate_injuries,
 )
 
+try:
+    import pandas  # noqa: F401
+    HAS_PANDAS = True
+except ImportError:
+    HAS_PANDAS = False
+
 
 class TestExtractStats(unittest.TestCase):
     def test_basic_passing(self):
@@ -74,6 +80,7 @@ class TestSafeConversions(unittest.TestCase):
         self.assertIsNone(_safe_float(None))
 
 
+@unittest.skipUnless(HAS_PANDAS, "pandas not installed (optional collector dependency)")
 class TestByeWeeks(unittest.TestCase):
     def test_computes_bye(self):
         import pandas as pd
@@ -87,6 +94,7 @@ class TestByeWeeks(unittest.TestCase):
         self.assertEqual(byes["TST"], 14)
 
 
+@unittest.skipUnless(HAS_PANDAS, "pandas not installed (optional collector dependency)")
 class TestAggregateInjuries(unittest.TestCase):
     def test_collects_unique_injuries(self):
         import pandas as pd
