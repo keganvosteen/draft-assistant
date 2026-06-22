@@ -5,6 +5,7 @@ from draft_assistant.models import LeagueConfig, Player
 from draft_assistant.suggest import (
     needs_by_position,
     suggest_players,
+    _apply_need_multiplier,
     _position_need_multiplier,
     _bye_week_penalty,
     FILLED_BASE,
@@ -71,6 +72,22 @@ class TestGradientNeedMultiplier(unittest.TestCase):
         m_early = _position_need_multiplier("QB", needs, _config(), {}, 10, 15)
         m_late = _position_need_multiplier("QB", needs, _config(), {}, 140, 15)
         self.assertGreater(m_late, m_early)
+
+
+class TestApplyNeedMultiplier(unittest.TestCase):
+    def test_positive_scores_scale_up_with_need(self):
+        self.assertGreater(_apply_need_multiplier(10.0, 1.25),
+                           _apply_need_multiplier(10.0, 0.60))
+
+    def test_negative_scores_do_not_invert(self):
+        # Late in drafts scores go negative; a needed position (high mult)
+        # must still rank ABOVE a filled one (low mult).
+        needed = _apply_need_multiplier(-10.0, 1.25)
+        filled = _apply_need_multiplier(-10.0, 0.60)
+        self.assertGreater(needed, filled)
+
+    def test_positive_behavior_unchanged(self):
+        self.assertAlmostEqual(_apply_need_multiplier(10.0, 1.25), 12.5)
 
 
 class TestByeWeekPenalty(unittest.TestCase):

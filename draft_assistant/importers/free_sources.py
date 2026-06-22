@@ -24,7 +24,7 @@ APP_STAT_KEYS = {
     "pass_yd", "pass_td", "pass_int", "pass_2pt",
     "rush_yd", "rush_td", "rush_2pt",
     "rec", "rec_yd", "rec_td", "rec_2pt",
-    "fumbles",
+    "fumbles", "fumbles_total", "sack_taken",
     "pat_made", "fg_miss", "fg_0_39", "fg_40_49", "fg_50_59", "fg_60_plus",
     "krt_td", "prt_td", "int_ret_td", "fum_ret_td", "blk_kick_ret_td",
     "two_pt_ret", "one_pt_safety", "sack", "blk_kick", "def_int",
@@ -107,9 +107,11 @@ def pull_free_data(
     adp_format: Optional[str] = None,
     include_fftoday: bool = True,
     espn_league_id: Optional[str] = None,
+    history_seasons: Optional[int] = 1,
 ) -> FreeDataResult:
     season = season or default_projection_season()
     stats_season = stats_season or default_stats_season()
+    history_seasons = max(1, int(history_seasons or 1))
     teams = int(teams or config.teams)
     adp_format = adp_format or scoring_format(config)
 
@@ -150,13 +152,16 @@ def pull_free_data(
     except Exception as exc:
         reports.append(SourceReport("nflverse players", ok=False, detail=str(exc)))
 
-    try:
-        nflverse_stats_rows = _fetch_nflverse_stats_rows(stats_season)
-        nflverse_stat_players = _players_from_nflverse_stats(nflverse_stats_rows, nflverse_players, stats_season)
-        _merge_many(merged, nflverse_stat_players, f"nflverse_stats_{stats_season}")
-        reports.append(SourceReport("nflverse season stats", len(nflverse_stat_players), detail=str(stats_season)))
-    except Exception as exc:
-        reports.append(SourceReport("nflverse season stats", ok=False, detail=str(exc)))
+    # Pull each requested stats season; _merge_player unions historical_stats
+    # per player, so one pull can carry a multi-year corpus.
+    for s in range(stats_season - history_seasons + 1, stats_season + 1):
+        try:
+            nflverse_stats_rows = _fetch_nflverse_stats_rows(s)
+            nflverse_stat_players = _players_from_nflverse_stats(nflverse_stats_rows, nflverse_players, s)
+            _merge_many(merged, nflverse_stat_players, f"nflverse_stats_{s}")
+            reports.append(SourceReport("nflverse season stats", len(nflverse_stat_players), detail=str(s)))
+        except Exception as exc:
+            reports.append(SourceReport("nflverse season stats", ok=False, detail=f"{s}: {exc}"))
 
     if include_fftoday:
         try:
@@ -176,6 +181,8 @@ def pull_free_data(
     else:
         reports.append(SourceReport("ESPN Fantasy API", 0, ok=False, detail="skipped; pass --espn-league-id for a public league"))
 
+    _fill_missing_byes(merged.values())
+
     players = sorted(
         merged.values(),
         key=lambda p: (
@@ -186,6 +193,47 @@ def pull_free_data(
         ),
     )
     return FreeDataResult(players=players, reports=reports)
+
+
+def merge_historical_into(new_players: List[Player], existing_players: Iterable[Player]) -> List[Player]:
+    """Carry forward prior pulls' historical seasons onto a fresh pull.
+
+    The new pull defines the current player pool, projections, and ADP; only
+    each player's ``historical_stats`` are unioned from what was saved before,
+    so repeated single-season pulls accumulate a multi-year corpus instead of
+    overwriting it. Players no longer in the latest pull are dropped (they're
+    not draftable), and the new pull's value for a season always wins.
+    """
+    existing_by_key: Dict[str, Player] = {}
+    for player in existing_players:
+        existing_by_key.setdefault(_merge_key(player), player)
+    for player in new_players:
+        prior = existing_by_key.get(_merge_key(player))
+        if not prior:
+            continue
+        for season, season_stats in prior.historical_stats.items():
+            player.historical_stats.setdefault(season, season_stats)
+    return new_players
+
+
+def _fill_missing_byes(players: Iterable[Player]) -> None:
+    """Spread known bye weeks across teammates.
+
+    Only some sources carry byes per player; every teammate shares the same
+    one, so derive a team->bye map and fill the gaps. Without this the
+    engine's bye-week penalties only see the handful of players whose source
+    happened to include a bye.
+    """
+    players = list(players)
+    team_byes: Dict[str, int] = {}
+    for player in players:
+        if player.team and player.bye_week and player.team not in team_byes:
+            team_byes[player.team] = player.bye_week
+    for player in players:
+        if player.team and not player.bye_week:
+            bye = team_byes.get(player.team)
+            if bye:
+                player.bye_week = bye
 
 
 def _fetch_json(url: str, timeout: int = 30) -> object:
@@ -246,6 +294,8 @@ def _players_from_sleeper_projection_rows(
             bye_week=_to_int(meta.get("bye_week")),
             adp=adp,
             projections=projections,
+            age=_to_int(meta.get("age")),
+            experience=_to_int(meta.get("years_exp")),
             metadata=_clean_metadata({
                 "sleeper_id": player_id,
                 "gsis_id": meta.get("gsis_id"),
@@ -263,8 +313,11 @@ def _players_from_sleeper_projection_rows(
 
 def _fetch_ffc_adp_players(adp_format: str, teams: int, season: int) -> Tuple[List[Player], int]:
     errors: List[str] = []
+    # Fantasy Football Calculator only publishes ADP for up to 14-team leagues,
+    # so cap the request for larger leagues (16/18/20) to still get a board.
+    ffc_teams = min(14, int(teams or 12))
     for year in _adp_year_candidates(season):
-        query = urlencode({"teams": teams, "year": year})
+        query = urlencode({"teams": ffc_teams, "year": year})
         url = f"{FFC_ADP_BASE}/{adp_format}?{query}"
         data = _fetch_json(url, timeout=30)
         if not isinstance(data, dict):
@@ -328,13 +381,19 @@ def _fetch_nflverse_stats_rows(season: int) -> List[dict]:
 
 
 def _players_from_nflverse_stats(rows: List[dict], player_meta: Dict[str, dict], season: int) -> List[Player]:
+    """Build players carrying last season's actuals as historical_stats.
+
+    Actuals are deliberately NOT used as projections — the engine's historical
+    layer blends them with real projections (and ages the trend forward), and
+    falls back to the trend alone for players with no published projection.
+    """
     players: List[Player] = []
     for row in rows:
         position = _normalize_position(row.get("position") or "")
         if position not in {"QB", "RB", "WR", "TE", "K"}:
             continue
-        projections = _app_stats_from_nflverse(row, position)
-        if not _has_projection_value(projections):
+        season_stats = _app_stats_from_nflverse(row, position)
+        if not _has_projection_value(season_stats):
             continue
         player_id = row.get("player_id") or row.get("gsis_id") or row.get("player_display_name")
         meta = player_meta.get(str(player_id), {})
@@ -343,11 +402,13 @@ def _players_from_nflverse_stats(rows: List[dict], player_meta: Dict[str, dict],
             name=row.get("player_display_name") or meta.get("display_name") or row.get("player_name") or str(player_id),
             position=position,
             team=row.get("recent_team") or meta.get("latest_team") or None,
-            projections=projections,
+            projections={},
+            age=_age_from_birth_date(meta.get("birth_date")),
+            experience=_to_int(meta.get("years_of_experience")),
+            historical_stats={season: season_stats},
             metadata=_clean_metadata({
                 "gsis_id": player_id,
                 "historical_stats_season": season,
-                "projection_source": f"nflverse {season} actuals",
                 "birth_date": meta.get("birth_date"),
                 "age": _age_from_birth_date(meta.get("birth_date")),
                 "status": meta.get("status"),
@@ -373,6 +434,10 @@ def _enrich_from_nflverse_players(players: Dict[str, Player], nflverse_players: 
             continue
         if not player.team and row.get("latest_team"):
             player.team = row.get("latest_team")
+        if player.age is None:
+            player.age = _age_from_birth_date(row.get("birth_date"))
+        if player.experience is None:
+            player.experience = _to_int(row.get("years_of_experience"))
         player.metadata.update(_clean_metadata({
             "birth_date": row.get("birth_date"),
             "age": player.metadata.get("age") or _age_from_birth_date(row.get("birth_date")),
@@ -397,8 +462,9 @@ def _fetch_espn_players(season: int, league_id: str, adp_format: str) -> List[Pl
         if position not in {"QB", "RB", "WR", "TE", "K", "DST"}:
             continue
         stats = _espn_projection_stats(player)
-        ratings = row.get("ratings") or player.get("ratings") or {}
-        adp = _valid_adp(_nested_get(ratings, [adp_format, "positionalRanking"]) or _nested_get(row, ["draftRanksByRankType", "STANDARD", "rank"]))
+        # Only overall draft rank is comparable to ADP; positionalRanking
+        # (e.g. WR12) would poison the ADP merge, which keeps the minimum.
+        adp = _valid_adp(_nested_get(row, ["draftRanksByRankType", "STANDARD", "rank"]))
         players.append(Player(
             id=f"espn:{player.get('id') or player.get('fullName')}",
             name=player.get("fullName") or player.get("name") or "",
@@ -460,14 +526,25 @@ def _read_csv_url(url: str) -> List[dict]:
 
 def _app_stats_from_sleeper(row: dict, position: str) -> Dict[str, float]:
     stats = _copy_stats(row, APP_STAT_KEYS)
-    stats["fumbles"] = _first_float(row, ["fum_lost", "fumbles_lost", "fum"])
+    # Yahoo scores "Fumbles" (any fumble) and "Fumbles Lost" separately, so keep
+    # both: `fumbles` = lost (what most formats penalize), `fumbles_total` = all.
+    stats["fumbles"] = _first_float(row, ["fum_lost", "fumbles_lost"])
+    stats["fumbles_total"] = _first_float(row, ["fum", "fumbles"])
     stats["pat_made"] = _first_float(row, ["pat_made", "xpm"])
     stats["fg_0_39"] = _first_float(row, ["fg_0_39", "fgm_0_19"]) + _first_float(row, ["fgm_20_29"]) + _first_float(row, ["fgm_30_39"])
     stats["fg_40_49"] = _first_float(row, ["fg_40_49", "fgm_40_49"])
     stats["fg_50_59"] = _first_float(row, ["fg_50_59", "fgm_50_59", "fgm_50p"])
     stats["fg_60_plus"] = _first_float(row, ["fg_60_plus", "fgm_60p"])
     stats["fg_miss"] = _first_float(row, ["fg_miss", "fgmiss", "fgmiss_0_19"]) + _first_float(row, ["fgmiss_20_29"]) + _first_float(row, ["fgmiss_30_39"]) + _first_float(row, ["fgmiss_40_49"]) + _first_float(row, ["fgmiss_50_59", "fgmiss_50p"]) + _first_float(row, ["fgmiss_60p"])
-    stats["sack"] = _first_float(row, ["sack", "sacks"])
+    # "sack" is overloaded: for a defense it's sacks recorded (a positive), for
+    # an offensive player it's times the QB was sacked (a negative). Route to
+    # distinct keys so the two never share a scoring weight.
+    sack_val = _first_float(row, ["sack", "sacks"])
+    stats.pop("sack", None)
+    if position == "DST":
+        stats["sack"] = sack_val
+    else:
+        stats["sack_taken"] = sack_val
     stats["def_int"] = _first_float(row, ["def_int", "int"])
     stats["fumble_recovery"] = _first_float(row, ["fumble_recovery", "fum_rec"])
     stats["safety"] = _first_float(row, ["safety"])
@@ -492,6 +569,8 @@ def _app_stats_from_nflverse(row: dict, position: str) -> Dict[str, float]:
         "rec_td": _to_float(row.get("receiving_tds")),
         "rec_2pt": _to_float(row.get("receiving_2pt_conversions")),
         "fumbles": _to_float(row.get("rushing_fumbles_lost")) + _to_float(row.get("receiving_fumbles_lost")) + _to_float(row.get("sack_fumbles_lost")),
+        "fumbles_total": _to_float(row.get("rushing_fumbles")) + _to_float(row.get("receiving_fumbles")) + _to_float(row.get("sack_fumbles")),
+        "sack_taken": _to_float(row.get("sacks")),
         "pat_made": _to_float(row.get("pat_made")),
         "fg_miss": _to_float(row.get("fg_missed")),
         "fg_0_39": _to_float(row.get("fg_made_0_19")) + _to_float(row.get("fg_made_20_29")) + _to_float(row.get("fg_made_30_39")),
@@ -525,6 +604,12 @@ def _merge_player(base: Player, incoming: Player, source: str) -> None:
         base.bye_week = incoming.bye_week
     if incoming.adp is not None and (base.adp is None or incoming.adp < base.adp):
         base.adp = incoming.adp
+    if base.age is None and incoming.age is not None:
+        base.age = incoming.age
+    if base.experience is None and incoming.experience is not None:
+        base.experience = incoming.experience
+    for season, season_stats in incoming.historical_stats.items():
+        base.historical_stats.setdefault(season, season_stats)
     if not _has_projection_value(base.projections) and _has_projection_value(incoming.projections):
         base.projections.update(incoming.projections)
         if incoming.metadata.get("projection_source"):

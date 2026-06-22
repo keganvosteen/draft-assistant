@@ -1,10 +1,12 @@
 from __future__ import annotations
 import json
 import os
+import sys
 from dataclasses import asdict
 from typing import Any, Dict
 
 from .models import LeagueConfig
+from .storage import atomic_write_json
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -51,24 +53,48 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 
 def load_config(path: str = "league.config.yaml") -> LeagueConfig:
-    # Minimal YAML reader without external deps: accept JSON superset
-    # If YAML is desired, user can still write JSON; otherwise this loader
-    # tries a simple parse.
+    # The config file is JSON (despite the historical .yaml extension).
     if not os.path.exists(path):
-        return LeagueConfig(**DEFAULT_CONFIG)
+        return LeagueConfig(**_defaults_copy())
     try:
-        # Try JSON first
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except json.JSONDecodeError:
-        # Fallback naive YAML-like parser: key: value per line, very limited
-        # Users should prefer JSON in the same file for now.
-        data = DEFAULT_CONFIG
-    data.setdefault("draft", dict(DEFAULT_CONFIG["draft"]))
-    return LeagueConfig(**data)
+    except json.JSONDecodeError as exc:
+        print(
+            f"WARNING: could not parse {path} as JSON ({exc}). "
+            "Falling back to DEFAULT league settings — your teams/scoring/roster "
+            "are NOT being used. Fix the file (it must be valid JSON).",
+            file=sys.stderr,
+        )
+        data = {}
+    if not isinstance(data, dict):
+        print(
+            f"WARNING: {path} must contain a JSON object; using default league settings.",
+            file=sys.stderr,
+        )
+        data = {}
+
+    unknown = sorted(set(data) - set(DEFAULT_CONFIG))
+    if unknown:
+        print(
+            f"WARNING: ignoring unknown keys in {path}: {', '.join(unknown)}",
+            file=sys.stderr,
+        )
+
+    merged = _defaults_copy()
+    for key in DEFAULT_CONFIG:
+        if key in data:
+            merged[key] = data[key]
+    return LeagueConfig(**merged)
+
+
+def _defaults_copy() -> Dict[str, Any]:
+    return {
+        key: dict(value) if isinstance(value, dict) else value
+        for key, value in DEFAULT_CONFIG.items()
+    }
 
 
 def save_config(config: LeagueConfig, path: str = "league.config.yaml") -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(asdict(config), f, indent=2)
+    atomic_write_json(path, asdict(config))
 

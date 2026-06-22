@@ -46,8 +46,6 @@
   <script>
   const TWEAK_DEFAULTS = {
     "scarcityWeight": 0.6,
-    "nextPickWeight": 0.25,
-    "vorWeight": 0.2,
     "adpSigma": 18,
     "byePenalty": 1,
     "benchRBWR": 0.18,
@@ -56,13 +54,16 @@
   };
   </script>
 
-  <!-- React via CDN -->
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone@7/babel.min.js" crossorigin></script>
+  <!-- React + Babel vendored locally so the draft UI works without internet
+       (react@18.3.1, react-dom@18.3.1, @babel/standalone@7.26.4) -->
+  <script src="vendor/react.production.min.js"></script>
+  <script src="vendor/react-dom.production.min.js"></script>
+  <script src="vendor/babel.min.js"></script>
 
-  <!-- Scoring engine + opponent model (plain JS) -->
-  <script src="components/scoring-engine.js"></script>
+  <!-- Recommendation scoring now comes from the Python rest-of-draft rollout
+       engine via POST /api/suggest (see draft-screen.jsx). The old client-side
+       scoring-engine.js is retired so there is a single source of truth.
+       opponent-model.js is kept: it powers the Opponents panel only. -->
   <script src="components/opponent-model.js"></script>
 
   <!-- React components (transpiled in-browser by Babel) -->

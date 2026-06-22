@@ -75,26 +75,46 @@ def age_curve_factor(position: str, age: Optional[int]) -> float:
     return 1.0
 
 
+def age_progression_factor(position: str, age: Optional[int]) -> float:
+    """Expected year-over-year production change going into the upcoming season.
+
+    Returns curve(age) / curve(age - 1). Projections (and last seasons' stats)
+    already reflect the player's established level — what they don't price is
+    the change the next year of aging brings, so only that ratio is applied.
+    Using the absolute curve value here would double-count age and, e.g., dock
+    a 30-year-old RB 34% on top of an already age-aware projection.
+    """
+    if age is None:
+        return 1.0
+    if not AGE_CURVES.get(position):
+        return 1.0
+    prev = age_curve_factor(position, age - 1)
+    if prev <= 0:
+        return 1.0
+    return age_curve_factor(position, age) / prev
+
+
 def _historical_trend(
     historical: Dict[int, Dict[str, float]],
     stat: str,
 ) -> Optional[float]:
-    """Compute a weighted trend value from multiple seasons.
+    """Compute a recency-weighted trend value across all accumulated seasons.
 
-    Uses exponential recency weighting: most recent season gets weight 3,
-    prior season weight 2, earlier seasons weight 1.
-    Returns None if no historical data exists for this stat.
+    Weight decays exponentially from the most recent season
+    (1.0, 0.6, 0.36, 0.216, ...), so recent form dominates while a longer
+    history still contributes. Returns None if no data exists for this stat.
     """
     if not historical:
         return None
     years = sorted(historical.keys(), reverse=True)
+    decay = 0.6
     total_weight = 0.0
     weighted_sum = 0.0
-    for i, year in enumerate(years[:3]):
+    for i, year in enumerate(years):
         val = historical[year].get(stat)
         if val is None:
             continue
-        weight = max(3 - i, 1)
+        weight = decay ** i
         weighted_sum += val * weight
         total_weight += weight
     if total_weight == 0:
@@ -112,16 +132,26 @@ def adjust_projections(player: Player, scoring: Dict[str, float]) -> Dict[str, f
 
     Priority:
       1. If the player has historical stats, blend with raw projection (60/40
-         raw/historical) and apply age curve.
-      2. If only age is known, apply the age curve to raw projections.
-      3. If the player changed teams, apply a small penalty.
-      4. Otherwise, return raw projections unchanged.
+         raw/historical), then apply the year-over-year age progression.
+      2. If only age is known, apply the age progression to raw projections.
+      3. If there is no published projection at all, fall back to the
+         recency-weighted trend aged forward one season.
+      4. If the player changed teams, apply a small penalty.
     """
     raw = dict(player.projections)
     adjusted = {}
 
     has_history = bool(player.historical_stats)
-    age_factor = age_curve_factor(player.position, player.age)
+    age_factor = age_progression_factor(player.position, player.age)
+
+    if not raw and has_history:
+        stat_keys = set()
+        for season_stats in player.historical_stats.values():
+            stat_keys.update(season_stats.keys())
+        for stat in sorted(stat_keys):
+            trend_val = _historical_trend(player.historical_stats, stat)
+            if trend_val is not None:
+                adjusted[stat] = round(trend_val * age_factor, 2)
 
     for stat, raw_val in raw.items():
         trend_val = _historical_trend(player.historical_stats, stat) if has_history else None
@@ -131,7 +161,7 @@ def adjust_projections(player: Player, scoring: Dict[str, float]) -> Dict[str, f
         else:
             blended = raw_val
 
-        # Apply age curve
+        # Expected change from one more year of aging
         blended *= age_factor
 
         adjusted[stat] = round(blended, 2)

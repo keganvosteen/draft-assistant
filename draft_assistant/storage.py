@@ -1,19 +1,36 @@
 from __future__ import annotations
 import json
 import os
+import tempfile
 from typing import List
 
 from .models import DraftState, Player
 
 
+def atomic_write_json(path: str, payload: object) -> None:
+    """Write JSON via a temp file + rename so a crash mid-write can't leave a
+    corrupt file behind (draft state is saved after every live pick)."""
+    directory = os.path.dirname(path) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 def save_state(state: DraftState, path: str = "draft_state.json") -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({
-            "my_team_name": state.my_team_name,
-            "league_teams": state.league_teams,
-            "picks": state.picks,
-            "my_picks": state.my_picks,
-        }, f, indent=2)
+    atomic_write_json(path, {
+        "my_team_name": state.my_team_name,
+        "league_teams": state.league_teams,
+        "picks": state.picks,
+        "my_picks": state.my_picks,
+    })
 
 
 def load_state(path: str = "draft_state.json") -> DraftState:
@@ -85,12 +102,7 @@ def _player_from_dict(raw: dict) -> Player:
 
 def save_players(players: List[Player], path: str = "data/projections.json") -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(
-            {"players": [_player_to_dict(p) for p in players]},
-            f,
-            indent=2,
-        )
+    atomic_write_json(path, {"players": [_player_to_dict(p) for p in players]})
 
 
 def load_players(path: str = "data/projections.json") -> List[Player]:

@@ -31,7 +31,9 @@
 
   function totalSlots(slots) {
     var t = 0;
-    Object.keys(slots).forEach(function (k) { t += slots[k] || 0; });
+    Object.keys(slots).forEach(function (k) {
+      if (k !== 'IR') t += slots[k] || 0;  // IR slots aren't drafted
+    });
     return t;
   }
 

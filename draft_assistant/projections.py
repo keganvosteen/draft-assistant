@@ -50,12 +50,15 @@ def replacement_levels(
     teams: int,
     roster: Dict[str, int],
     use_historical: bool = True,
+    points_map: Dict[str, float] = None,
 ) -> Dict[str, float]:
     # Build per-position sorted lists
     by_pos: Dict[str, List[Player]] = {}
     for p in players:
         by_pos.setdefault(p.position, []).append(p)
-    pts_map = compute_points(players, scoring, use_historical=use_historical)
+    # Callers that already computed points pass them in; recomputing runs the
+    # historical adjustment over every player a second time.
+    pts_map = points_map if points_map is not None else compute_points(players, scoring, use_historical=use_historical)
     points_by_pos: Dict[str, List[Tuple[str, float]]] = {}
     for pos, plist in by_pos.items():
         points_by_pos[pos] = sorted(

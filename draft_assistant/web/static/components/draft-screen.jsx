@@ -465,6 +465,16 @@ function RecommendationBar({ scored, myPlayers, league, oppData }) {
   );
 }
 
+// Sort by rollout impact (draftScore), descending. Players the engine did not
+// deeply analyze this pick (outside the returned top-N) have draftScore == null
+// and fall to the bottom, sub-sorted by VORP so the tail still browses sensibly.
+function cmpScore(a, b) {
+  const sa = a.draftScore == null ? -Infinity : a.draftScore;
+  const sb = b.draftScore == null ? -Infinity : b.draftScore;
+  if (sa === sb) return (b.vorp || 0) - (a.vorp || 0);
+  return sb - sa;
+}
+
 // ─── PLAYER LIST ──────────────────────────────────────────────────────────────
 function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
   const [search,    setSearch]    = React.useState('');
@@ -490,7 +500,7 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
       if (sortBy === 'adp')      return a.adp - b.adp;
       if (sortBy === 'projPts')  return b.projPts - a.projPts;
       if (sortBy === 'vorp')     return b.vorp - a.vorp;
-      return b.draftScore - a.draftScore;
+      return cmpScore(a, b);
     });
 
   const GRID = '30px 1fr 52px 44px 44px 54px 54px 66px 78px';
@@ -637,7 +647,9 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
 function DraftBoardModal({ league, picks, allPlayers, onClose }) {
   const { numTeams, draftPosition } = league;
   const playerById = Object.fromEntries(allPlayers.map(p=>[p.id,p]));
-  const totalSlots = Object.values(league.rosterSlots).reduce((s,v)=>s+v,0);
+  // IR slots aren't drafted, so they don't add a round to the board.
+  const totalSlots = Object.entries(league.rosterSlots)
+    .reduce((s,[k,v]) => k === 'IR' ? s : s + v, 0);
   const rounds     = Math.max(totalSlots, Math.ceil(picks.length / numTeams));
   const teamNums   = Array.from({length:numTeams},(_,i)=>i+1);
   const roundNums  = Array.from({length:rounds||1},(_,i)=>i+1);
@@ -706,7 +718,7 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
 }
 
 // ─── DRAFT SCREEN ─────────────────────────────────────────────────────────────
-function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick, onResetPicks, onUpdateLeague, onRefreshPlayers }) {
+function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick, onResetPicks, onReplacePicks, onUpdateLeague, onRefreshPlayers }) {
   const [showDraftBoard, setShowDraftBoard] = React.useState(false);
   const [showDrafted,    setShowDrafted]    = React.useState(false);
   const [showOpponents,  setShowOpponents]  = React.useState(true);
@@ -716,8 +728,8 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   const [saveMsg,        setSaveMsg]        = React.useState(null);
 
   const tweakDefaults = typeof TWEAK_DEFAULTS !== 'undefined' ? TWEAK_DEFAULTS : {
-    scarcityWeight:0.60, nextPickWeight:0.25, vorWeight:0.20,
-    adpSigma:18, byePenalty:1.0, benchRBWR:0.18, benchTE:0.12, benchQB:0.08,
+    scarcityWeight:0.60, adpSigma:18, byePenalty:1.0,
+    benchRBWR:0.18, benchTE:0.12, benchQB:0.08,
   };
   const [tweaks, setTweaks] = useTweaks(tweakDefaults);
 
@@ -766,13 +778,74 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     onUpdateLeague({ teamModes: { ...(league.teamModes || {}), [teamNum]: mode } });
   };
 
+  // Recommendation scores now come from the Python rest-of-draft rollout engine
+  // (POST /api/suggest). It ranks the board by the expected effect of each pick
+  // on your FINAL roster's total season points — accounting for who survives to
+  // your later picks — instead of a one-pick heuristic. The request is debounced
+  // and stale responses are aborted so rapid picks don't race.
+  const [suggest, setSuggest] = React.useState({ rows: {}, loading: false, sims: 0, err: null });
+
+  React.useEffect(() => {
+    const pickKeys = picks.map(pk => pk.playerId);
+    const myKeys = picks
+      .filter(pk => pk.teamNum === league.draftPosition)
+      .map(pk => pk.playerId);
+    const body = {
+      picks: pickKeys,
+      my_picks: myKeys,
+      top: 40,
+      league: {
+        numTeams: league.numTeams,
+        draftPosition: league.draftPosition,
+        rosterSlots: league.rosterSlots,
+        sims: (tweaks && tweaks.sims) || undefined,
+      },
+    };
+    const ctrl = new AbortController();
+    setSuggest(s => ({ ...s, loading: true, err: null }));
+    const timer = setTimeout(() => {
+      fetch('/api/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      })
+        .then(r => r.json())
+        .then(d => {
+          if (d.error) { setSuggest({ rows: {}, loading: false, sims: 0, err: d.error }); return; }
+          const rows = {};
+          (d.suggestions || []).forEach(row => { rows[row.id] = row; });
+          setSuggest({ rows, loading: false, sims: d.sims || 0, err: null });
+        })
+        .catch(e => {
+          if (e.name !== 'AbortError') setSuggest({ rows: {}, loading: false, sims: 0, err: String(e) });
+        });
+    }, 120);
+    return () => { ctrl.abort(); clearTimeout(timer); };
+  }, [picks, league.numTeams, league.draftPosition, league.rosterSlots, tweaks && tweaks.sims]);
+
+  // Merge the engine's impact + supporting numbers onto the available board.
+  // Players outside the returned top-N get draftScore: null (badge hidden,
+  // sorted to the bottom by cmpScore). projPts / vorp stay client-computed.
   const scored = React.useMemo(() => {
-    if (typeof window.computeDraftScores !== 'function') return available;
-    return window.computeDraftScores(
-      available, myPlayers, league, picks.length, tweaks,
-      oppData ? oppData.survival : null
-    );
-  }, [available, myPlayers, league, picks.length, tweaks, oppData]);
+    const rows = suggest.rows;
+    return available.map(p => {
+      const r = rows[p.id];
+      if (!r) return { ...p, draftScore: null };
+      return {
+        ...p,
+        draftScore: r.impact,
+        impact: r.impact,
+        projRoster: r.projRoster,
+        goneRisk: r.goneRisk,
+        availPct: Math.max(0, Math.round(100 * (1 - (r.goneRisk || 0)))),
+        lineupGain: r.immediateGain,
+        scarcityBonus: +(r.impact - r.immediateGain).toFixed(1),
+        needMult: 1,
+        slotType: '',
+      };
+    });
+  }, [available, suggest]);
 
   const enriched = React.useMemo(() => {
     const scoredMap = Object.fromEntries(scored.map(p=>[p.id,p]));
@@ -789,7 +862,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   };
 
   const handleGetHint = () => {
-    const sortedScored = [...scored].sort((a,b) => b.draftScore - a.draftScore);
+    const sortedScored = [...scored].sort(cmpScore);
     setHint(generateRoundHint(round, myPlayers, sortedScored, league));
   };
 
@@ -807,6 +880,32 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
         setTimeout(() => setSaveMsg(null), 2000);
       })
       .catch(() => { setSaveMsg('Save failed'); setTimeout(() => setSaveMsg(null), 2000); });
+  };
+
+  // Restore picks from the server's draft_state.json (saved here or recorded
+  // via the CLI/terminal UI). Team ownership is reconstructed from snake order.
+  const handleLoad = () => {
+    if (picks.length > 0 &&
+        !window.confirm('Replace the current picks with the saved draft state?')) return;
+    fetch('/api/load-draft')
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) { setSaveMsg(d.error); setTimeout(() => setSaveMsg(null), 2500); return; }
+        const keys = Array.isArray(d.picks) ? d.picks : [];
+        const known = new Set(allPlayers.map(p => p.id));
+        const loaded = keys
+          .filter(k => known.has(k))
+          .map((k, i) => ({
+            pickNum: i + 1,
+            teamNum: getSnakeTeam(i + 1, league.numTeams),
+            playerId: k,
+          }));
+        onReplacePicks(loaded);
+        const skipped = keys.length - loaded.length;
+        setSaveMsg(skipped > 0 ? `Loaded ${loaded.length} (${skipped} unknown)` : `Loaded ${loaded.length}`);
+        setTimeout(() => setSaveMsg(null), 2500);
+      })
+      .catch(() => { setSaveMsg('Load failed'); setTimeout(() => setSaveMsg(null), 2500); });
   };
 
   const handleExportLog = () => {
@@ -868,6 +967,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
           <Btn variant="ghost" size="sm" onClick={handleSave}>
             {saveMsg || 'Save'}
           </Btn>
+          <Btn variant="ghost" size="sm" onClick={handleLoad}>Load</Btn>
           <Btn variant="ghost" size="sm" onClick={handleExportLog} disabled={picks.length===0}>Export CSV</Btn>
           <div style={{width:1, height:20, background:T.border}} />
           <Btn variant="ghost" size="sm" onClick={()=>setShowOpponents(v=>!v)}
@@ -885,6 +985,16 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
           onGetHint={handleGetHint}
         />
         <div style={{flex:1, display:'flex', flexDirection:'column', minWidth:0}}>
+          <div style={{
+            padding:'3px 16px', fontSize:11, color:T.muted, background:T.surface,
+            borderBottom:`1px solid ${T.border}`, display:'flex', gap:8, alignItems:'center',
+          }}>
+            {suggest.err
+              ? <span style={{color:T.danger || '#c0392b'}}>⚠ recommendations: {suggest.err}</span>
+              : suggest.loading
+                ? <span>⏳ Computing season-points rollout…</span>
+                : <span>✓ Rollout engine · {suggest.sims} sims/pick · ranked by season-point impact</span>}
+          </div>
           <RecommendationBar scored={scored} myPlayers={myPlayers} league={league} oppData={oppData} />
           <PlayerList
             players={enriched}

@@ -45,7 +45,7 @@ On top of the base score, we apply:
 - **Gradient position need** — multiplier scales smoothly from 0.60 (position fully filled) to ~1.25 (position empty), factoring in draft progress.
 - **FLEX awareness** — RB/WR/TE overflow fills FLEX slots first, then need kicks in for additional picks.
 - **Bye-week stacking penalty** — small subtraction when a player shares a bye week with someone already on your roster.
-- **Age curves + historical blending** — projections are blended 60/40 with a weighted multi-year trend (when `age` and `historical_stats` are available), then scaled by positional age curves (RBs decline faster than WRs or QBs).
+- **Age curves + historical blending** — projections are blended 60/40 with a weighted multi-year trend (when `age` and `historical_stats` are available), then adjusted by the year-over-year change in the positional age curve (RBs decline faster than WRs or QBs). Players with past stats but no published projection fall back to their age-adjusted trend.
 - **Team-change haircut** — players who switched NFL teams get a small projection discount.
 - **Confidence score** — 0–1 rating shown in the UI reflecting data richness (seasons of history, injury flags, team stability).
 
@@ -130,7 +130,7 @@ pip install -r requirements-data.txt
 python -m draft_assistant collect-all --season 2026 --scoring ppr --teams 12
 ```
 
-Both paths populate each player with: projections, ADP, age, experience, historical stats, bye week, team, injury history, and previous team (for team-change detection).
+Both paths populate each player with: projections, ADP, age, experience, historical stats, bye week, and team. `collect-all` additionally fills injury history and previous team (for team-change detection); `pull-free-data` carries one season of historical stats (more via `--stats-season` runs merged with `consensus`).
 
 ### Other importers
 
@@ -195,7 +195,7 @@ draft_assistant/
     ├── base.py
     └── sleeper.py
 
-tests/                     # 98 tests
+tests/                     # 131 tests
 ├── test_scoring.py
 ├── test_projections.py
 ├── test_suggest.py
@@ -205,6 +205,9 @@ tests/                     # 98 tests
 ├── test_profiles.py       # Profile system
 ├── test_fuzzy.py
 ├── test_auction.py
+├── test_config.py         # Config robustness + round trip
+├── test_storage.py        # Atomic persistence
+├── test_free_sources.py   # Free-data collector field mapping
 ├── test_nflverse_collector.py
 └── test_combined_collector.py
 ```
@@ -217,12 +220,12 @@ tests/                     # 98 tests
 python -m unittest discover tests -v
 ```
 
-98 tests cover scoring, VOR/replacement levels, gradient needs, FLEX, bye-week penalty, Monte Carlo snake-pick math, historical adjustments + age curves, fuzzy matching, draft tracking (pick/undo/log), auction values, data collectors, and profile management.
+131 tests cover scoring, VOR/replacement levels, gradient needs, FLEX, bye-week penalty, Monte Carlo snake-pick math, historical adjustments + age curves, fuzzy matching, draft tracking (pick/undo/log), auction values, data collectors, config/persistence robustness, and profile management.
 
 ---
 
 ## Notes
 
-- Network fetches are optional. Both UIs and the CLI work offline with the built-in sample data.
+- Network fetches are optional. All UIs and the CLI work offline with the built-in sample data — the web UI's React/Babel assets are vendored locally, so draft day doesn't depend on a CDN (only the optional web fonts load remotely, with system-font fallback).
 - Draft state persists to `draft_state.json` (or `.draft_assistant_profiles/<name>/draft_state.json` for non-default profiles).
 - For Pro Football Reference and sites that block scraping, prefer the `collect-all` + `pull-free-data` paths which use public API endpoints and GitHub-hosted datasets.

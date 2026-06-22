@@ -4,7 +4,7 @@ from __future__ import annotations
 import socket
 import threading
 from functools import partial
-from http.server import HTTPServer
+from http.server import ThreadingHTTPServer
 
 from .profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from .providers.base import build_provider
@@ -58,7 +58,7 @@ def run_desktop(profile: str = DEFAULT_PROFILE, debug: bool = False) -> None:
 
     port = _find_free_port()
     handler = partial(DraftAPIHandler, profile=profile)
-    server = HTTPServer(("127.0.0.1", port), handler)
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 

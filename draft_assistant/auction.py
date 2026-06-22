@@ -3,11 +3,10 @@
 Computes dollar values from VOR distribution and tracks budgets.
 """
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from .models import LeagueConfig, Player
 from .projections import compute_points, replacement_levels
-from .scoring import fantasy_points
 
 
 def compute_dollar_values(
@@ -23,7 +22,9 @@ def compute_dollar_values(
       3. Reserve $1 per bench spot, distribute the rest proportional to VOR.
     """
     pts_map = compute_points(players, config.scoring)
-    repl = replacement_levels(players, config.scoring, config.teams, config.roster)
+    repl = replacement_levels(
+        players, config.scoring, config.teams, config.roster, points_map=pts_map
+    )
 
     # Compute VOR for each player
     vors: Dict[str, float] = {}
@@ -42,8 +43,7 @@ def compute_dollar_values(
     # Total league budget
     total_budget = budget_per_team * config.teams
 
-    # Reserve $1 per roster spot for bench/minimum bids
-    bench_slots = int(config.roster.get("BN", 0)) + int(config.roster.get("IR", 0))
+    # Reserve $1 per roster slot for minimum bids
     total_roster = sum(int(v) for v in config.roster.values())
     reserved = config.teams * total_roster  # $1 min per slot
     distributable = max(total_budget - reserved, 0)
@@ -96,26 +96,3 @@ class AuctionTracker:
         filled = len(self.won.get(team, []))
         remaining_slots = max(total_slots - filled - 1, 0)  # -1 for current nomination
         return max(self.budgets.get(team, 0) - remaining_slots, 1)
-
-    def suggest_auction(
-        self,
-        players: List[Player],
-        my_roster: Dict[str, List[Player]],
-    ) -> List[Tuple[Player, float, float]]:
-        """Return players sorted by value minus estimated cost.
-
-        Returns: [(player, dollar_value, surplus)]
-        where surplus = dollar_value - adp-based estimated price.
-        """
-        values = compute_dollar_values(self.config, players, self.budget_per_team)
-
-        results: List[Tuple[Player, float, float]] = []
-        for p in players:
-            val = values.get(p.key(), 1.0)
-            # Use ADP as a rough proxy for market price if available
-            est_price = p.adp if p.adp and p.adp > 0 else val
-            surplus = val - est_price
-            results.append((p, val, surplus))
-
-        results.sort(key=lambda t: t[2], reverse=True)
-        return results

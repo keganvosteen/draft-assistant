@@ -5,6 +5,8 @@ from draft_assistant.draft_value import (
     _snake_pick_numbers,
     _draft_slot,
     _bench_multiplier,
+    _bye_week_penalty,
+    _simulate_boards,
     draft_window,
     roster_value,
     draft_aware_values,
@@ -84,6 +86,50 @@ class TestRosterValue(unittest.TestCase):
         self.assertIn(qb, result.starters)
         self.assertIn(rb1, result.starters)
         self.assertIn(rb2, result.starters)
+
+
+class TestSimulateBoards(unittest.TestCase):
+    def test_boards_truncated_to_window(self):
+        players = [_make_player(f"P{i}", "WR", adp=float(i + 1)) for i in range(50)]
+        boards = _simulate_boards(players, picks_until_next=8, sims=20, adp_noise=5.0, seed=7)
+        self.assertEqual(len(boards), 20)
+        for board in boards:
+            self.assertEqual(len(board), 9)  # picks_until_next + 1
+
+    def test_deterministic_for_same_seed(self):
+        players = [_make_player(f"P{i}", "WR", adp=float(i + 1)) for i in range(30)]
+        a = _simulate_boards(players, picks_until_next=5, sims=10, adp_noise=8.0, seed=42)
+        b = _simulate_boards(players, picks_until_next=5, sims=10, adp_noise=8.0, seed=42)
+        self.assertEqual(a, b)
+
+    def test_low_adp_players_dominate_board_tops(self):
+        players = [_make_player(f"P{i}", "WR", adp=float((i + 1) * 10)) for i in range(30)]
+        boards = _simulate_boards(players, picks_until_next=3, sims=50, adp_noise=2.0, seed=1)
+        first_keys = {board[0] for board in boards}
+        # With tiny noise, the best-ADP player should top nearly every board.
+        self.assertIn("P0|WR", first_keys)
+        self.assertLessEqual(len(first_keys), 3)
+
+
+class TestByeWeekPenalty(unittest.TestCase):
+    def test_counts_starters_sharing_bye_when_candidate_is_bench(self):
+        # Two locked-in starters share bye 9; the weak candidate lands on the
+        # bench but still gets penalized for stacking the same bye.
+        rb1 = _make_player("RB1", "RB", bye=9)
+        rb2 = _make_player("RB2", "RB", bye=9)
+        cand = _make_player("RB3", "RB", bye=9)
+        pts = {rb1.key(): 200.0, rb2.key(): 190.0, cand.key(): 10.0}
+        roster = {"RB": 2, "FLEX": 0, "BN": 3}
+        penalty = _bye_week_penalty(cand, [rb1, rb2], pts, roster)
+        # Two same-position starters share the bye: 2*0.75 + 2*0.75 = 3.0
+        self.assertAlmostEqual(penalty, 3.0)
+
+    def test_no_penalty_when_no_shared_bye(self):
+        rb1 = _make_player("RB1", "RB", bye=5)
+        cand = _make_player("RB2", "RB", bye=9)
+        pts = {rb1.key(): 200.0, cand.key(): 150.0}
+        penalty = _bye_week_penalty(cand, [rb1], pts, {"RB": 2, "BN": 2})
+        self.assertEqual(penalty, 0.0)
 
 
 class TestDraftAwareValues(unittest.TestCase):

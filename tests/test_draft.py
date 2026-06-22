@@ -5,8 +5,8 @@ from draft_assistant.models import DraftState, LeagueConfig, Player
 from draft_assistant.draft import DraftTracker
 
 
-def _make_player(name, pos):
-    return Player(id=f"{name}|{pos}", name=name, position=pos, projections={})
+def _make_player(name, pos, adp=None):
+    return Player(id=f"{name}|{pos}", name=name, position=pos, projections={}, adp=adp)
 
 
 ROSTER = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 0, "DST": 0, "BN": 5}
@@ -54,6 +54,27 @@ class TestRecordPick(unittest.TestCase):
         tracker = DraftTracker(_config(), _state(), players)
         result = tracker.record_pick("ZZZZZZZZZZZZZZZ")
         self.assertIsNone(result)
+
+    def test_ambiguous_match_prefers_lower_adp(self):
+        # Two "Lamb" substring matches: the one with the better ADP is the
+        # player far more likely to be the one actually drafted.
+        players = [
+            _make_player("Backup Lamb", "WR", adp=180.0),
+            _make_player("CeeDee Lamb", "WR", adp=8.0),
+        ]
+        tracker = DraftTracker(_config(), _state(), players)
+        result = tracker.record_pick("Lamb")
+        self.assertEqual(result.name, "CeeDee Lamb")
+
+    def test_short_query_requires_close_match(self):
+        # Short queries only get 1 edit of slack: "Ba Nx" (2 edits from
+        # "Bo Nix") must not match, while a 1-edit typo still does.
+        players = [_make_player("Bo Nix", "QB")]
+        tracker = DraftTracker(_config(), _state(), players)
+        self.assertIsNone(tracker.record_pick("Ba Nx"))
+        result = tracker.record_pick("Bo Nyx")
+        self.assertIsNotNone(result)
+        self.assertEqual(result.name, "Bo Nix")
 
 
 class TestUndo(unittest.TestCase):

@@ -27,6 +27,43 @@ def _match_key(name: str, position: str) -> str:
     return f"{_normalize_name(name)}|{position}"
 
 
+def _pair_fuzzy_keys(
+    nfl_keys: set,
+    sleeper_keys: set,
+    max_distance: int = 2,
+) -> Dict[str, str]:
+    """Pair near-miss normalized keys between the two sources.
+
+    Returns {nfl_key: sleeper_key} for names that differ by small typos or
+    punctuation within the same position. Keys with exact matches in the other
+    source are excluded, and each sleeper key is claimed at most once so the
+    same record can't merge into two players.
+    """
+    sleeper_names_by_pos: Dict[str, List[str]] = {}
+    for key in sleeper_keys:
+        if key in nfl_keys:
+            continue
+        name, pos = key.rsplit("|", 1)
+        sleeper_names_by_pos.setdefault(pos, []).append(name)
+
+    pairs: Dict[str, str] = {}
+    claimed: set = set()
+    for key in sorted(nfl_keys):
+        if key in sleeper_keys:
+            continue
+        name, pos = key.rsplit("|", 1)
+        candidates = [
+            cand for cand in sleeper_names_by_pos.get(pos, [])
+            if f"{cand}|{pos}" not in claimed
+        ]
+        match = best_match(name, candidates, max_distance=max_distance)
+        if match:
+            sleeper_key = f"{match}|{pos}"
+            pairs[key] = sleeper_key
+            claimed.add(sleeper_key)
+    return pairs
+
+
 def collect_all(
     current_season: int = 2025,
     history_seasons: int = 3,
@@ -128,42 +165,36 @@ def collect_all(
     # Start with nflverse players as the base (richest metadata)
     all_keys = set(nfl_by_key.keys()) | set(sleeper_by_key.keys())
 
-    # For fuzzy matching Sleeper players to nflverse
-    nfl_names_by_pos: Dict[str, List[str]] = {}
-    for key in nfl_by_key:
-        name, pos = key.rsplit("|", 1)
-        nfl_names_by_pos.setdefault(pos, []).append(name)
+    # Pair near-miss names (typos/punctuation) across sources so a player
+    # doesn't split into one record with history and one with projections.
+    fuzzy_pairs = _pair_fuzzy_keys(set(nfl_by_key), set(sleeper_by_key))
+    matched_sleeper_keys = set(fuzzy_pairs.values())
+    if fuzzy_pairs:
+        print(f"Fuzzy-paired {len(fuzzy_pairs)} name variants across sources.")
 
     merged: List[Player] = []
-    matched_sleeper_keys: set = set()
 
     for key in sorted(all_keys):
+        # This sleeper record merges into its fuzzy-paired nflverse player.
+        if key in matched_sleeper_keys:
+            continue
+
         nfl_p = nfl_by_key.get(key)
         slp_p = sleeper_by_key.get(key)
-
-        # Try fuzzy match if exact key doesn't match
         if nfl_p and not slp_p:
-            name, pos = key.rsplit("|", 1)
-            for skey, sp in sleeper_by_key.items():
-                sname, spos = skey.rsplit("|", 1)
-                if spos == pos and _normalize_name(sp.name) == name:
-                    slp_p = sp
-                    matched_sleeper_keys.add(skey)
-                    break
-
-        if slp_p and not nfl_p:
-            name, pos = key.rsplit("|", 1)
-            for nkey, np in nfl_by_key.items():
-                nname, npos = nkey.rsplit("|", 1)
-                if npos == pos and _normalize_name(np.name) == name:
-                    nfl_p = np
-                    break
+            paired = fuzzy_pairs.get(key)
+            if paired:
+                slp_p = sleeper_by_key.get(paired)
 
         # Merge: nflverse base + Sleeper projections + ADP
         if nfl_p:
             base = nfl_p
             projections = slp_p.projections if slp_p and slp_p.projections else {}
-            adp = adp_map.get(key) or (slp_p.adp if slp_p else None)
+            adp = (
+                adp_map.get(key)
+                or adp_map.get(fuzzy_pairs.get(key, ""))
+                or (slp_p.adp if slp_p else None)
+            )
             # Prefer Sleeper bye_week if nflverse didn't have it
             bye = base.bye_week or (slp_p.bye_week if slp_p else None)
             # Merge injury lists
