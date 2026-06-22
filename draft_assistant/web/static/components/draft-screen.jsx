@@ -798,6 +798,8 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
         numTeams: league.numTeams,
         draftPosition: league.draftPosition,
         rosterSlots: league.rosterSlots,
+        scoringType: league.scoringType,
+        customScoring: league.customScoring,
         sims: (tweaks && tweaks.sims) || undefined,
       },
     };
@@ -822,7 +824,8 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
         });
     }, 120);
     return () => { ctrl.abort(); clearTimeout(timer); };
-  }, [picks, league.numTeams, league.draftPosition, league.rosterSlots, tweaks && tweaks.sims]);
+  }, [picks, league.numTeams, league.draftPosition, league.rosterSlots,
+      league.scoringType, league.customScoring, tweaks && tweaks.sims]);
 
   // Merge the engine's impact + supporting numbers onto the available board.
   // Players outside the returned top-N get draftScore: null (badge hidden,
