@@ -44,11 +44,22 @@ class DraftValue:
 
 
 def roster_value(players: Sequence[Player], points_map: Dict[str, float], roster: Dict[str, int]) -> LineupResult:
+    # Resolve each player's key + points ONCE (keyed by object identity). This
+    # is the rollout engine's hottest function; previously `p.key()` rebuilt the
+    # "name|POS" string inside every sort comparison and every sum, which the
+    # profiler showed dominating runtime. Caching here is exact — same result,
+    # far fewer string builds and dict lookups.
+    pts: Dict[int, float] = {}
+    pkey: Dict[int, str] = {}
     by_pos: Dict[str, List[Player]] = {}
     for player in players:
+        pid = id(player)
+        key = player.key()
+        pkey[pid] = key
+        pts[pid] = points_map.get(key, 0.0)
         by_pos.setdefault(player.position, []).append(player)
     for group in by_pos.values():
-        group.sort(key=lambda p: points_map.get(p.key(), 0.0), reverse=True)
+        group.sort(key=lambda p: pts[id(p)], reverse=True)
 
     starters: List[Player] = []
     used: Set[str] = set()
@@ -56,26 +67,26 @@ def roster_value(players: Sequence[Player], points_map: Dict[str, float], roster
         count = max(0, int(roster.get(position, 0)))
         for player in by_pos.get(position, [])[:count]:
             starters.append(player)
-            used.add(player.key())
+            used.add(pkey[id(player)])
 
     flex_count = max(0, int(roster.get("FLEX", 0)))
     flex_pool = [
         player
         for player in players
-        if player.position in FLEX_ELIGIBLE and player.key() not in used
+        if player.position in FLEX_ELIGIBLE and pkey[id(player)] not in used
     ]
-    flex_pool.sort(key=lambda p: points_map.get(p.key(), 0.0), reverse=True)
+    flex_pool.sort(key=lambda p: pts[id(p)], reverse=True)
     for player in flex_pool[:flex_count]:
         starters.append(player)
-        used.add(player.key())
+        used.add(pkey[id(player)])
 
     bench_count = max(0, int(roster.get("BN", roster.get("BENCH", 0))))
-    bench_pool = [player for player in players if player.key() not in used]
-    bench_pool.sort(key=lambda p: points_map.get(p.key(), 0.0), reverse=True)
+    bench_pool = [player for player in players if pkey[id(player)] not in used]
+    bench_pool.sort(key=lambda p: pts[id(p)], reverse=True)
     bench = bench_pool[:bench_count]
 
-    starter_value = sum(points_map.get(player.key(), 0.0) for player in starters)
-    bench_value = sum(points_map.get(player.key(), 0.0) * _bench_multiplier(player) for player in bench)
+    starter_value = sum(pts[id(player)] for player in starters)
+    bench_value = sum(pts[id(player)] * _bench_multiplier(player) for player in bench)
     return LineupResult(
         starter_value=round(starter_value, 2),
         bench_value=round(bench_value, 2),

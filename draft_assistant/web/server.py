@@ -328,6 +328,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             draft["slot"] = max(1, min(int(league["draftPosition"]), teams))
         if league.get("sims"):
             draft["rollout_sims"] = max(1, int(league["sims"]))
+        # Opponent ADP noise: the UI derives this from how many opponents are
+        # autodrafting (more autodrafters -> they follow ADP -> less noise).
+        if league.get("adpNoise") is not None:
+            draft["adp_noise"] = max(0.0, float(league["adpNoise"]))
         # Common-random-numbers keeps impact stable at modest sim counts, so the
         # web default favors responsiveness; bump via league.sims for precision.
         draft.setdefault("rollout_sims", 24)

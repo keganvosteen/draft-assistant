@@ -475,6 +475,15 @@ function cmpScore(a, b) {
   return sb - sa;
 }
 
+// How many picks until it's my turn (0 = on the clock now). Used to defer the
+// expensive rollout to when my pick is near instead of every opponent pick.
+function picksUntilMyTurn(picksMade, numTeams, draftPosition) {
+  for (let i = 0; i <= numTeams * 2 + 2; i++) {
+    if (getSnakeTeam(picksMade + 1 + i, numTeams) === draftPosition) return i;
+  }
+  return numTeams;
+}
+
 // ─── PLAYER LIST ──────────────────────────────────────────────────────────────
 function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
   const [search,    setSearch]    = React.useState('');
@@ -728,8 +737,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   const [saveMsg,        setSaveMsg]        = React.useState(null);
 
   const tweakDefaults = typeof TWEAK_DEFAULTS !== 'undefined' ? TWEAK_DEFAULTS : {
-    scarcityWeight:0.60, adpSigma:18, byePenalty:1.0,
-    benchRBWR:0.18, benchTE:0.12, benchQB:0.08,
+    sims: 24, autoDrafters: 0,
   };
   const [tweaks, setTweaks] = useTweaks(tweakDefaults);
 
@@ -778,14 +786,36 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     onUpdateLeague({ teamModes: { ...(league.teamModes || {}), [teamNum]: mode } });
   };
 
-  // Recommendation scores now come from the Python rest-of-draft rollout engine
-  // (POST /api/suggest). It ranks the board by the expected effect of each pick
-  // on your FINAL roster's total season points — accounting for who survives to
-  // your later picks — instead of a one-pick heuristic. The request is debounced
-  // and stale responses are aborted so rapid picks don't race.
-  const [suggest, setSuggest] = React.useState({ rows: {}, loading: false, sims: 0, err: null });
+  // Recommendation scores come from the Python rest-of-draft rollout engine
+  // (POST /api/suggest): it ranks the board by each pick's expected effect on
+  // your FINAL roster's total season points, accounting for who survives to your
+  // later picks. The rollout is the expensive part, so we DON'T re-run it on
+  // every opponent pick — only on the opening board, when your pick is one away
+  // (precompute "on deck"), or on a manual Refresh. In between, opponents' picks
+  // just update availability (cheap, client-side). This is exact: the rollout
+  // reads the current board, so computing it once before your pick equals the
+  // last of the per-pick recomputes — minus the wasted work and the wait.
+  const untilMyTurn = picksUntilMyTurn(picks.length, league.numTeams, league.draftPosition);
+
+  // More opponents autodrafting => they follow ADP => fewer surprises. Map the
+  // count to the engine's opponent ADP-noise (0 auto -> 8.0 chaos, all auto -> 1.0).
+  const opponentCount = Math.max(1, league.numTeams - 1);
+  const autoFrac = Math.min(1, Math.max(0, (tweaks.autoDrafters || 0) / opponentCount));
+  const adpNoise = +(1 + (8 - 1) * (1 - autoFrac)).toFixed(1);
+
+  const [suggest, setSuggest] = React.useState({ rows: {}, loading: false, sims: 0, err: null, stale: false });
+  const [refreshNonce, setRefreshNonce] = React.useState(0);
+  const forceRef = React.useRef(false);
+  const handleRefreshRecs = () => { forceRef.current = true; setRefreshNonce(n => n + 1); };
 
   React.useEffect(() => {
+    const force = forceRef.current;
+    forceRef.current = false;
+    const shouldCompute = force || picks.length === 0 || untilMyTurn <= 1;
+    if (!shouldCompute) {
+      setSuggest(s => ({ ...s, loading: false, stale: true }));
+      return;
+    }
     const pickKeys = picks.map(pk => pk.playerId);
     const myKeys = picks
       .filter(pk => pk.teamNum === league.draftPosition)
@@ -793,13 +823,14 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     const body = {
       picks: pickKeys,
       my_picks: myKeys,
-      top: 40,
+      top: 30,
       league: {
         numTeams: league.numTeams,
         draftPosition: league.draftPosition,
         rosterSlots: league.rosterSlots,
         scoringType: league.scoringType,
         customScoring: league.customScoring,
+        adpNoise,
         sims: (tweaks && tweaks.sims) || undefined,
       },
     };
@@ -814,18 +845,30 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       })
         .then(r => r.json())
         .then(d => {
-          if (d.error) { setSuggest({ rows: {}, loading: false, sims: 0, err: d.error }); return; }
+          if (d.error) { setSuggest({ rows: {}, loading: false, sims: 0, err: d.error, stale: false }); return; }
           const rows = {};
           (d.suggestions || []).forEach(row => { rows[row.id] = row; });
-          setSuggest({ rows, loading: false, sims: d.sims || 0, err: null });
+          setSuggest({ rows, loading: false, sims: d.sims || 0, err: null, stale: false });
         })
         .catch(e => {
-          if (e.name !== 'AbortError') setSuggest({ rows: {}, loading: false, sims: 0, err: String(e) });
+          if (e.name !== 'AbortError') setSuggest({ rows: {}, loading: false, sims: 0, err: String(e), stale: false });
         });
     }, 120);
     return () => { ctrl.abort(); clearTimeout(timer); };
-  }, [picks, league.numTeams, league.draftPosition, league.rosterSlots,
-      league.scoringType, league.customScoring, tweaks && tweaks.sims]);
+  }, [picks, untilMyTurn, league.numTeams, league.draftPosition, league.rosterSlots,
+      league.scoringType, league.customScoring, refreshNonce]);
+
+  // Changing an engine tweak (precision / autodrafters) is an explicit "apply
+  // this" action, so force a recompute even when your pick isn't near — instead
+  // of waiting for the gate. (adpNoise/sims are read from the live closure.)
+  const tweakSig = `${tweaks.sims}|${tweaks.autoDrafters}`;
+  const prevTweakSig = React.useRef(tweakSig);
+  React.useEffect(() => {
+    if (prevTweakSig.current !== tweakSig) {
+      prevTweakSig.current = tweakSig;
+      handleRefreshRecs();
+    }
+  }, [tweakSig]);
 
   // Merge the engine's impact + supporting numbers onto the available board.
   // Players outside the returned top-N get draftScore: null (badge hidden,
@@ -996,7 +1039,15 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
               ? <span style={{color:T.danger || '#c0392b'}}>⚠ recommendations: {suggest.err}</span>
               : suggest.loading
                 ? <span>⏳ Computing season-points rollout…</span>
-                : <span>✓ Rollout engine · {suggest.sims} sims/pick · ranked by season-point impact</span>}
+                : suggest.stale
+                  ? <span>↺ Board held since your last update — recomputes when your pick is near
+                      {untilMyTurn > 0 ? ` (${untilMyTurn} pick${untilMyTurn === 1 ? '' : 's'} away)` : ''}.</span>
+                  : <span>✓ Rollout engine · {suggest.sims} sims/pick · ranked by season-point impact</span>}
+            <button onClick={handleRefreshRecs} title="Recompute recommendations now"
+              style={{marginLeft:'auto', background:'none', border:`1px solid ${T.border}`, borderRadius:6,
+                padding:'1px 8px', cursor:'pointer', color:T.muted, fontSize:11, fontFamily:'inherit'}}>
+              ↻ Refresh
+            </button>
           </div>
           <RecommendationBar scored={scored} myPlayers={myPlayers} league={league} oppData={oppData} />
           <PlayerList
@@ -1016,17 +1067,17 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       </div>
 
       <TweaksPanel title="Draft Tweaks">
-        <TweakSection title="DRAFT SCORE">
-          <TweakSlider id="scarcityWeight" label="Scarcity Weight" min={0} max={1} step={0.05} tweaks={tweaks} setTweaks={setTweaks} />
-          <TweakSlider id="adpSigma" label="ADP Noise σ" min={5} max={35} step={1} tweaks={tweaks} setTweaks={setTweaks} />
-        </TweakSection>
-        <TweakSection title="BYE PENALTY">
-          <TweakSlider id="byePenalty" label="Per shared bye" min={0} max={6} step={0.5} tweaks={tweaks} setTweaks={setTweaks} />
-        </TweakSection>
-        <TweakSection title="BENCH DISCOUNTS">
-          <TweakSlider id="benchRBWR" label="RB / WR" min={0} max={0.35} step={0.01} tweaks={tweaks} setTweaks={setTweaks} />
-          <TweakSlider id="benchTE" label="TE" min={0} max={0.25} step={0.01} tweaks={tweaks} setTweaks={setTweaks} />
-          <TweakSlider id="benchQB" label="QB" min={0} max={0.2} step={0.01} tweaks={tweaks} setTweaks={setTweaks} />
+        <TweakSection title="ENGINE">
+          <TweakSlider id="autoDrafters" label="Opponents autodrafting"
+            min={0} max={Math.max(1, league.numTeams - 1)} step={1}
+            tweaks={tweaks} setTweaks={setTweaks} />
+          <TweakSlider id="sims" label="Precision (sims/pick)"
+            min={16} max={96} step={8} tweaks={tweaks} setTweaks={setTweaks} />
+          <div style={{fontSize:10.5, color:'rgba(41,38,27,.6)', lineHeight:1.45, marginTop:2}}>
+            More autodrafters → opponents stick to ADP → less board chaos
+            (opponent noise σ ≈ {adpNoise}). Higher precision = steadier numbers,
+            a little slower per pick.
+          </div>
         </TweakSection>
       </TweaksPanel>
 
