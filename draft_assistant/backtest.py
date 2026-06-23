@@ -35,6 +35,7 @@ import pandas as pd
 
 from .importers.free_sources import (
     _app_stats_from_nflverse,
+    _fetch_nflverse_players,
     _fetch_nflverse_stats_rows,
     _fetch_sleeper_players,
     _fetch_sleeper_projection_rows,
@@ -175,6 +176,155 @@ def evaluate(seasons: List[int], scoring: dict, include_sleeper: bool = True) ->
                     "spearman": spearman, "mae": mae, "coverage": cov,
                 })
     return pd.DataFrame(rows)
+
+
+# ── stat-level data (for blend calibration + grading the engine's adjustments) ─
+# These operate on STAT lines, not points, so calibration is scoring-agnostic
+# (the owner runs two leagues with different rules).
+
+SCORINGS = {
+    "standard": {**DEFAULT_SCORING, "rec": 0.0},
+    "half": {**DEFAULT_SCORING, "rec": 0.5},
+    "ppr": {**DEFAULT_SCORING, "rec": 1.0},
+}
+
+
+def actual_stats(season: int) -> Dict[str, list]:
+    """{nkey: [pos, stat_dict]} of a completed season's actual stat lines."""
+    def build():
+        out: Dict[str, list] = {}
+        for row in _fetch_nflverse_stats_rows(season):
+            pos = _normalize_position(row.get("position") or "")
+            if pos not in POSITIONS:
+                continue
+            name = row.get("player_display_name") or row.get("player_name")
+            if not name:
+                continue
+            out[_nkey(name, pos)] = [pos, _app_stats_from_nflverse(row, pos)]
+        return out
+    return _cache(f"actualstats_{season}.json", build)
+
+
+def fftoday_stats(season: int) -> Dict[str, list]:
+    def build():
+        return {
+            _nkey(p.name, p.position): [p.position, p.projections]
+            for p in fetch_all_fftoday(season)
+        }
+    return _cache(f"fftodaystats_{season}.json", build)
+
+
+def age_map(season: int) -> Dict[str, int]:
+    """{nkey: age at `season`} derived from nflverse birth dates."""
+    def build():
+        out: Dict[str, int] = {}
+        for row in _fetch_nflverse_players().values():
+            name = row.get("display_name") or row.get("player_name")
+            pos = _normalize_position(row.get("position") or "")
+            bd = row.get("birth_date")
+            if not name or pos not in POSITIONS or not bd:
+                continue
+            try:
+                out[_nkey(name, pos)] = season - int(str(bd)[:4])
+            except ValueError:
+                continue
+        return out
+    return _cache(f"agemap_{season}.json", build)
+
+
+def trend_stats(season: int, decay: float = 0.6, n: int = 3) -> Dict[str, Dict[str, float]]:
+    """Per-stat recency-weighted trend from the prior n seasons' actual stats."""
+    acc: Dict[str, Dict[str, list]] = {}
+    for i, y in enumerate(range(season - 1, season - 1 - n, -1)):
+        try:
+            a = actual_stats(y)
+        except Exception:
+            continue
+        w = decay ** i
+        for k, (_pos, stats) in a.items():
+            d = acc.setdefault(k, {})
+            for stat, val in stats.items():
+                pair = d.setdefault(stat, [0.0, 0.0])
+                pair[0] += val * w
+                pair[1] += w
+    return {k: {s: ws / wt for s, (ws, wt) in d.items() if wt > 0} for k, d in acc.items()}
+
+
+def _spearman(a: List[float], b: List[float]) -> float:
+    return float(pd.Series(a).rank().corr(pd.Series(b).rank()))
+
+
+def calibrate_blend(seasons: List[int]) -> Dict[str, float]:
+    """Sweep the projection/history blend weight per position.
+
+    blended_stat = w*FFToday + (1-w)*trend  (w=1 → all projection, 0 → all history).
+    Accuracy = mean Spearman across seasons AND scorings (standard/half/ppr), so
+    the chosen weights are league-rule-agnostic. Returns {pos: best_w}.
+    """
+    grid = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    rows: List[dict] = []
+    for season in seasons:
+        ff, tr, act = fftoday_stats(season), trend_stats(season), actual_stats(season)
+        for pos in POSITIONS:
+            keys = [k for k, (p, _s) in ff.items() if p == pos and k in tr and k in act]
+            if len(keys) < 8:
+                continue
+            for w in grid:
+                for sc_name, sc in SCORINGS.items():
+                    proj_pts, act_pts = [], []
+                    for k in keys:
+                        ffs, trs = ff[k][1], tr[k]
+                        stats = set(ffs) | set(trs)
+                        blended = {s: w * ffs.get(s, 0.0) + (1 - w) * trs.get(s, 0.0) for s in stats}
+                        proj_pts.append(fantasy_points(blended, sc))
+                        act_pts.append(fantasy_points(act[k][1], sc))
+                    rows.append({"pos": pos, "w": w, "spearman": _spearman(proj_pts, act_pts)})
+    df = pd.DataFrame(rows)
+    table = df.groupby(["pos", "w"])["spearman"].mean().unstack("w")
+    print("=== blend calibration: mean Spearman by projection-weight w (per position) ===")
+    print(table.to_string())
+    best = {pos: float(table.loc[pos].idxmax()) for pos in table.index}
+    print(f"\nOptimal projection weight w per position (rest = recent-production trend):\n  {best}\n")
+    return best
+
+
+def grade_adjusted(seasons: List[int]) -> None:
+    """Does the engine's adjust_projections (history blend + age + team) beat raw?
+
+    Uses FFToday (clean) as the base projection, real prior-season actuals as
+    history, and nflverse ages. Reports raw vs adjusted rank accuracy.
+    """
+    from .historical import adjust_projections
+    from .models import Player
+    rows: List[dict] = []
+    for season in seasons:
+        ff, act, ages = fftoday_stats(season), actual_stats(season), age_map(season)
+        h1, h2 = actual_stats(season - 1), actual_stats(season - 2)
+        for pos in POSITIONS:
+            keys = [k for k, (p, _s) in ff.items() if p == pos and k in act]
+            if len(keys) < 8:
+                continue
+            raw_pts, adj_pts, act_pts = [], [], []
+            for k in keys:
+                hist = {}
+                if k in h1:
+                    hist[season - 1] = h1[k][1]
+                if k in h2:
+                    hist[season - 2] = h2[k][1]
+                player = Player(id=k, name=k.rsplit("|", 1)[0], position=pos,
+                                projections=dict(ff[k][1]), historical_stats=hist, age=ages.get(k))
+                adj = adjust_projections(player, SCORINGS["half"])
+                raw_pts.append(fantasy_points(ff[k][1], SCORINGS["half"]))
+                adj_pts.append(fantasy_points(adj, SCORINGS["half"]))
+                act_pts.append(fantasy_points(act[k][1], SCORINGS["half"]))
+            rows.append({"pos": pos, "raw": _spearman(raw_pts, act_pts),
+                         "adjusted": _spearman(adj_pts, act_pts)})
+    df = pd.DataFrame(rows).groupby("pos")[["raw", "adjusted"]].mean()
+    df["delta"] = df["adjusted"] - df["raw"]
+    print("=== engine adjustment grade: raw FFToday vs adjust_projections (half-PPR) ===")
+    print(df.to_string())
+    print(f"\nOverall: raw={df['raw'].mean():.3f}  adjusted={df['adjusted'].mean():.3f}  "
+          f"delta={df['delta'].mean():+.3f}  (positive = the adjustments help)\n")
 
 
 def main(seasons: List[int] = None, include_sleeper: bool = True) -> None:

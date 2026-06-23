@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import re
+import statistics
 from dataclasses import dataclass
 from datetime import date
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -117,6 +118,7 @@ def pull_free_data(
 
     reports: List[SourceReport] = []
     merged: Dict[str, Player] = {}
+    proj_samples: Dict[str, List[Dict[str, float]]] = {}
     sleeper_players: Dict[str, dict] = {}
     nflverse_players: Dict[str, dict] = {}
 
@@ -133,7 +135,7 @@ def pull_free_data(
             sleeper_players,
             adp_format,
         )
-        _merge_many(merged, sleeper_projection_players, "sleeper_projections")
+        _merge_many(merged, sleeper_projection_players, "sleeper_projections", proj_samples)
         reports.append(SourceReport("Sleeper projections", len(sleeper_projection_players), detail=str(season)))
     except Exception as exc:
         reports.append(SourceReport("Sleeper projections", ok=False, detail=str(exc)))
@@ -166,7 +168,7 @@ def pull_free_data(
     if include_fftoday:
         try:
             fftoday_players = fetch_all_fftoday(season)
-            _merge_many(merged, fftoday_players, "fftoday")
+            _merge_many(merged, fftoday_players, "fftoday", proj_samples)
             reports.append(SourceReport("FFToday projections", len(fftoday_players), detail=str(season)))
         except Exception as exc:
             reports.append(SourceReport("FFToday projections", ok=False, detail=str(exc)))
@@ -174,12 +176,22 @@ def pull_free_data(
     if espn_league_id:
         try:
             espn_players = _fetch_espn_players(season, espn_league_id, adp_format)
-            _merge_many(merged, espn_players, "espn")
+            _merge_many(merged, espn_players, "espn", proj_samples)
             reports.append(SourceReport("ESPN Fantasy API", len(espn_players), detail=str(espn_league_id)))
         except Exception as exc:
             reports.append(SourceReport("ESPN Fantasy API", ok=False, detail=str(exc)))
     else:
         reports.append(SourceReport("ESPN Fantasy API", 0, ok=False, detail="skipped; pass --espn-league-id for a public league"))
+
+    # Combine projection sources by per-stat median (scoring-agnostic). For a
+    # player only one source projected, that source stands; where two or more
+    # overlap (e.g. Sleeper + FFToday), each stat becomes their consensus.
+    for key, player in merged.items():
+        samples = proj_samples.get(key)
+        if samples and len(samples) > 1:
+            player.projections = _consensus_projection(samples)
+            player.metadata["projection_source"] = "consensus"
+            player.metadata["projection_sources_n"] = len(samples)
 
     _fill_missing_byes(merged.values())
 
@@ -584,11 +596,35 @@ def _app_stats_from_nflverse(row: dict, position: str) -> Dict[str, float]:
     return {k: v for k, v in stats.items() if v}
 
 
-def _merge_many(merged: Dict[str, Player], players: Iterable[Player], source: str) -> None:
+def _consensus_projection(samples: List[Dict[str, float]]) -> Dict[str, float]:
+    """Per-stat median across projection sources (Sleeper / FFToday / ESPN).
+
+    Operates on STAT lines, not points, so it's scoring-agnostic — the owner runs
+    two leagues with different rules, so the right product is a consensus stat
+    line that each league's scoring is then applied to. With two sources the
+    median equals their average; with three or more it's robust to one outlier.
+    """
+    by_stat: Dict[str, List[float]] = {}
+    for proj in samples:
+        for stat, val in proj.items():
+            by_stat.setdefault(stat, []).append(val)
+    return {stat: round(statistics.median(vals), 2) for stat, vals in by_stat.items() if vals}
+
+
+def _merge_many(
+    merged: Dict[str, Player],
+    players: Iterable[Player],
+    source: str,
+    proj_samples: Optional[Dict[str, List[Dict[str, float]]]] = None,
+) -> None:
     for player in players:
         if not player.name or player.position not in {"QB", "RB", "WR", "TE", "K", "DST"}:
             continue
         key = _merge_key(player)
+        # Collect each source's raw projection so projections can be combined by
+        # per-stat median at the end, instead of first-source-wins gap-fill.
+        if proj_samples is not None and _has_projection_value(player.projections):
+            proj_samples.setdefault(key, []).append(dict(player.projections))
         existing = merged.get(key)
         if existing is None:
             _add_source(player, source)

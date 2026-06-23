@@ -122,17 +122,26 @@ def _historical_trend(
     return weighted_sum / total_weight
 
 
+# Per-position blend weight: w = the share given to the raw PROJECTION, with
+# (1-w) given to the recency-weighted historical trend. Calibrated on 2019-2025
+# preseason-vs-actual backtests (see draft_assistant/backtest.py): projections
+# dominate at every position — most strongly at QB, where history adds nothing —
+# while WR/TE benefit most from leaning on recent production. This replaces the
+# old uniform 0.6, which the backtest showed was too much history for QB/RB/TE.
+BLEND_WEIGHTS: Dict[str, float] = {"QB": 0.9, "RB": 0.8, "WR": 0.7, "TE": 0.6}
+DEFAULT_BLEND_WEIGHT = 0.7
+
 # Situation-change adjustments: empirical multipliers for common scenarios
 TEAM_CHANGE_PENALTY = 0.92       # Changing teams hurts ~8% on average in year 1
-COACHING_CHANGE_FACTOR = 0.97    # New OC: small uncertainty penalty
+COACHING_CHANGE_FACTOR = 0.97    # New OC: small uncertainty penalty (unused)
 
 
 def adjust_projections(player: Player, scoring: Dict[str, float]) -> Dict[str, float]:
     """Return adjusted projections blending raw projection with historical trends.
 
     Priority:
-      1. If the player has historical stats, blend with raw projection (60/40
-         raw/historical), then apply the year-over-year age progression.
+      1. If the player has historical stats, blend with raw projection using the
+         position-aware BLEND_WEIGHTS, then apply the year-over-year age progression.
       2. If only age is known, apply the age progression to raw projections.
       3. If there is no published projection at all, fall back to the
          recency-weighted trend aged forward one season.
@@ -143,6 +152,7 @@ def adjust_projections(player: Player, scoring: Dict[str, float]) -> Dict[str, f
 
     has_history = bool(player.historical_stats)
     age_factor = age_progression_factor(player.position, player.age)
+    weight = BLEND_WEIGHTS.get(player.position, DEFAULT_BLEND_WEIGHT)
 
     if not raw and has_history:
         stat_keys = set()
@@ -156,8 +166,8 @@ def adjust_projections(player: Player, scoring: Dict[str, float]) -> Dict[str, f
     for stat, raw_val in raw.items():
         trend_val = _historical_trend(player.historical_stats, stat) if has_history else None
         if trend_val is not None:
-            # Blend: 60% raw projection, 40% historical trend
-            blended = 0.6 * raw_val + 0.4 * trend_val
+            # Position-aware blend: w*projection + (1-w)*historical trend.
+            blended = weight * raw_val + (1 - weight) * trend_val
         else:
             blended = raw_val
 
