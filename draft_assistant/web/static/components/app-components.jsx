@@ -348,6 +348,45 @@ function LeagueSetupModal({ league, onSave, onClose }) {
       .finally(() => setImporting(false));
   };
 
+  // ── Yahoo OAuth import (multi-step: credentials -> authorize -> pick league) ──
+  const [yh, setYh] = React.useState({
+    clientId: '', clientSecret: '', redirectUri: 'https://localhost/',
+    authUrl: '', code: '', leagues: null, leagueKey: '', busy: false, msg: null,
+  });
+  const yhSet = patch => setYh(s => ({ ...s, ...patch }));
+  const yhPost = (url, body, onOk) => {
+    yhSet({ busy: true, msg: null });
+    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(r => r.json())
+      .then(d => { if (d.error) yhSet({ msg: { ok: false, text: d.error } }); else onOk(d); })
+      .catch(() => yhSet({ msg: { ok: false, text: 'Request failed' } }))
+      .finally(() => setYh(s => ({ ...s, busy: false })));
+  };
+  const yahooConnect = () => {
+    if (!yh.clientId.trim() || !yh.clientSecret.trim()) { yhSet({ msg: { ok: false, text: 'Enter Client ID and Secret' } }); return; }
+    yhPost('/api/yahoo/connect',
+      { clientId: yh.clientId.trim(), clientSecret: yh.clientSecret.trim(), redirectUri: yh.redirectUri.trim() },
+      d => { yhSet({ authUrl: d.authUrl, msg: { ok: true, text: 'Authorize in the opened tab, then paste the code below.' } }); window.open(d.authUrl, '_blank'); });
+  };
+  const yahooExchange = () => {
+    if (!yh.code.trim()) { yhSet({ msg: { ok: false, text: 'Paste the authorization code' } }); return; }
+    yhPost('/api/yahoo/exchange', { code: yh.code.trim() }, d => {
+      const lgs = d.leagues || [];
+      yhSet({ leagues: lgs, leagueKey: (lgs[0] && lgs[0].league_key) || '', msg: { ok: true, text: `Connected — ${lgs.length} league(s) found.` } });
+    });
+  };
+  const yahooImport = () => {
+    if (!yh.leagueKey) return;
+    yhPost('/api/yahoo/import', { leagueKey: yh.leagueKey }, d => {
+      setForm(f => ({
+        ...f, name: d.name || f.name, platform: 'Yahoo', numTeams: d.numTeams || f.numTeams,
+        scoringType: d.scoringType || f.scoringType, rosterSlots: { ...DEFAULT_SLOTS, ...(d.rosterSlots || {}) },
+        teamNames: d.teamNames || [], yahooLeagueKey: d.yahooLeagueKey,
+      }));
+      yhSet({ msg: { ok: true, text: `Imported "${d.name}" — ${d.numTeams} teams, ${(d.teamNames || []).length} names, ${d.scoringType}` } });
+    });
+  };
+
   const FLEX_SLOT_LABELS = { WRTE:'W/T flex', RBWR:'R/W flex', SUPERFLEX:'Superflex', OP:'Superflex' };
   const slotFields = [
     {k:'QB',label:'QB'},{k:'RB',label:'RB'},{k:'WR',label:'WR'},
@@ -379,9 +418,58 @@ function LeagueSetupModal({ league, onSave, onClose }) {
         )}
         <div style={{marginTop:6, fontSize:11, color:T.muted}}>
           Auto-fills teams, roster, scoring, and your league-mates' names. Find the ID in your
-          ESPN league URL (…/leagues/<b>THIS</b>). Yahoo isn't supported yet (needs OAuth).
+          ESPN league URL (…/leagues/<b>THIS</b>).
         </div>
       </div>
+
+      <div style={{marginBottom:16, padding:12, background:T.surfaceAlt, borderRadius:T.r, border:`1px solid ${T.border}`}}>
+        <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:8, letterSpacing:.5}}>
+          IMPORT FROM YAHOO (OAuth)
+        </div>
+        {!yh.leagues ? (
+          <>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
+              <Input value={yh.clientId} onChange={e=>yhSet({clientId:e.target.value})} placeholder="Client ID (Consumer Key)" />
+              <Input value={yh.clientSecret} onChange={e=>yhSet({clientSecret:e.target.value})} placeholder="Client Secret" type="password" />
+            </div>
+            <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
+              <Input value={yh.redirectUri} onChange={e=>yhSet({redirectUri:e.target.value})} placeholder="Redirect URI" style={{flex:1}} />
+              <Btn variant="ghost" onClick={yahooConnect} disabled={yh.busy}>{yh.busy?'…':'Get link'}</Btn>
+            </div>
+            {yh.authUrl && (
+              <div style={{marginTop:8}}>
+                <a href={yh.authUrl} target="_blank" rel="noreferrer" style={{fontSize:12, color:T.primary, fontWeight:600}}>
+                  Open Yahoo authorize page ↗
+                </a>
+                <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
+                  <Input value={yh.code} onChange={e=>yhSet({code:e.target.value})} placeholder="Paste authorization code" style={{flex:1}} />
+                  <Btn variant="ghost" onClick={yahooExchange} disabled={yh.busy}>Connect</Btn>
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+            <div style={{flex:1}}>
+              <Select value={yh.leagueKey} onChange={e=>yhSet({leagueKey:e.target.value})}
+                options={yh.leagues.map(l=>({value:l.league_key, label:`${l.name}${l.season?` (${l.season})`:''}`}))} />
+            </div>
+            <Btn variant="ghost" onClick={yahooImport} disabled={yh.busy || !yh.leagueKey}>Import</Btn>
+          </div>
+        )}
+        {yh.msg && (
+          <div style={{marginTop:8, fontSize:12, color: yh.msg.ok ? T.primary : '#c0392b'}}>
+            {(yh.msg.ok ? '✓ ' : '⚠ ') + yh.msg.text}
+          </div>
+        )}
+        <div style={{marginTop:6, fontSize:11, color:T.muted, lineHeight:1.45}}>
+          Register a free app at developer.yahoo.com (Installed App · Fantasy → Read · redirect
+          <b> https://localhost/</b>). After authorizing, copy the <b>code</b> from the address bar.
+          Imports settings + names (Yahoo has no projections — those stay from the consensus). Your
+          secret is stored only on this machine.
+        </div>
+      </div>
+
       <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
         <Field label="League Name">
           <Input value={form.name} onChange={e=>set('name',e.target.value)} />

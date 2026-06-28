@@ -251,6 +251,12 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_suggest()
         elif self.path == "/api/import-espn":
             self._handle_import_espn()
+        elif self.path == "/api/yahoo/connect":
+            self._handle_yahoo_connect()
+        elif self.path == "/api/yahoo/exchange":
+            self._handle_yahoo_exchange()
+        elif self.path == "/api/yahoo/import":
+            self._handle_yahoo_import()
         elif self.path == "/api/save-draft":
             self._handle_save_draft()
         elif self.path == "/api/load-draft":
@@ -421,6 +427,94 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._send_json(info)
         except Exception as exc:
             self._send_json({"error": f"Could not import league {league_id!r}: {exc}"}, 500)
+
+    # ── Yahoo OAuth import ────────────────────────────────────────────────
+    # Credentials + tokens are stored in the profile dir (local machine only).
+
+    def _yahoo_store_path(self) -> str:
+        paths = ensure_profile(self.profile)
+        return os.path.join(os.path.dirname(str(paths.state_path)), "yahoo.json")
+
+    def _yahoo_load(self) -> dict:
+        path = self._yahoo_store_path()
+        if os.path.exists(path):
+            try:
+                with open(path) as fh:
+                    return json.load(fh)
+            except (OSError, json.JSONDecodeError):
+                return {}
+        return {}
+
+    def _yahoo_save(self, data: dict) -> None:
+        from ..storage import atomic_write_json
+        atomic_write_json(self._yahoo_store_path(), data)
+
+    def _handle_yahoo_connect(self):
+        """Store Yahoo app credentials locally and return the authorize URL."""
+        try:
+            from ..importers import yahoo
+            body = self._read_body()
+            client_id = str(body.get("clientId") or "").strip()
+            client_secret = str(body.get("clientSecret") or "").strip()
+            redirect = str(body.get("redirectUri") or yahoo.DEFAULT_REDIRECT).strip()
+            if not client_id or not client_secret:
+                self._send_json({"error": "clientId and clientSecret are required"}, 400)
+                return
+            data = self._yahoo_load()
+            data.update({"client_id": client_id, "client_secret": client_secret,
+                         "redirect_uri": redirect})
+            self._yahoo_save(data)
+            self._send_json({"authUrl": yahoo.auth_url(client_id, redirect)})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_yahoo_exchange(self):
+        """Exchange the pasted authorization code for tokens; list NFL leagues."""
+        try:
+            from ..importers import yahoo
+            body = self._read_body()
+            code = str(body.get("code") or "").strip()
+            data = self._yahoo_load()
+            if not data.get("client_id"):
+                self._send_json({"error": "Enter your Yahoo credentials first"}, 400)
+                return
+            if not code:
+                self._send_json({"error": "Paste the authorization code"}, 400)
+                return
+            token = yahoo.exchange_code(data["client_id"], data["client_secret"], code,
+                                        data.get("redirect_uri", yahoo.DEFAULT_REDIRECT))
+            data["token"] = token
+            self._yahoo_save(data)
+            self._send_json({"ok": True, "leagues": yahoo.list_leagues(token["access_token"])})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_yahoo_import(self):
+        """Import a chosen Yahoo league as a form-ready payload (like ESPN)."""
+        try:
+            from ..importers import yahoo
+            body = self._read_body()
+            league_key = str(body.get("leagueKey") or "").strip()
+            if not league_key:
+                self._send_json({"error": "leagueKey required"}, 400)
+                return
+            data = self._yahoo_load()
+            token = data.get("token") or {}
+            if not token.get("access_token"):
+                self._send_json({"error": "Authorize with Yahoo first"}, 400)
+                return
+            if yahoo.token_is_expired(token):
+                token = yahoo.refresh_access_token(
+                    data["client_id"], data["client_secret"], token["refresh_token"],
+                    data.get("redirect_uri", yahoo.DEFAULT_REDIRECT))
+                data["token"] = token
+                self._yahoo_save(data)
+            info = yahoo.fetch_league(token["access_token"], league_key)
+            rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
+            info["scoringType"] = "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"
+            self._send_json(info)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
 
     def _handle_get_state(self):
         try:
