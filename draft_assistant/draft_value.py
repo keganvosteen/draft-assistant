@@ -5,12 +5,12 @@ import heapq
 import random
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
-from .models import DraftState, LeagueConfig, Player
+from .models import DraftState, FLEX_TYPES, LeagueConfig, Player
 from .projections import compute_points, replacement_levels
 
 
 LINEUP_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"]
-FLEX_ELIGIBLE = {"RB", "WR", "TE"}
+FLEX_ELIGIBLE = set(FLEX_TYPES["FLEX"])
 
 
 @dataclass(frozen=True)
@@ -62,24 +62,35 @@ def roster_value(players: Sequence[Player], points_map: Dict[str, float], roster
         group.sort(key=lambda p: pts[id(p)], reverse=True)
 
     starters: List[Player] = []
-    used: Set[str] = set()
+    ptr: Dict[str, int] = {}  # how many of each position are already starting
     for position in LINEUP_POSITIONS:
         count = max(0, int(roster.get(position, 0)))
-        for player in by_pos.get(position, [])[:count]:
-            starters.append(player)
-            used.add(pkey[id(player)])
+        group = by_pos.get(position, [])
+        starters.extend(group[:count])
+        ptr[position] = min(count, len(group))
 
-    flex_count = max(0, int(roster.get("FLEX", 0)))
-    flex_pool = [
-        player
-        for player in players
-        if player.position in FLEX_ELIGIBLE and pkey[id(player)] not in used
-    ]
-    flex_pool.sort(key=lambda p: pts[id(p)], reverse=True)
-    for player in flex_pool[:flex_count]:
-        starters.append(player)
-        used.add(pkey[id(player)])
+    # Typed flex slots: fill the most restrictive (e.g. WR/TE) first, each taking
+    # the best still-unstarted ELIGIBLE player — so a WR/TE slot never takes an
+    # RB, a superflex can take a QB, etc.
+    flex_slots: List[tuple] = []
+    for fkey, elig in FLEX_TYPES.items():
+        flex_slots.extend([elig] * max(0, int(roster.get(fkey, 0))))
+    flex_slots.sort(key=len)
+    for elig in flex_slots:
+        best_pos = None
+        best_pts = 0.0
+        for pos in elig:
+            group = by_pos.get(pos, [])
+            i = ptr.get(pos, 0)
+            if i < len(group):
+                pv = pts[id(group[i])]
+                if best_pos is None or pv > best_pts:
+                    best_pos, best_pts = pos, pv
+        if best_pos is not None:
+            starters.append(by_pos[best_pos][ptr[best_pos]])
+            ptr[best_pos] += 1
 
+    used: Set[str] = {pkey[id(player)] for player in starters}
     bench_count = max(0, int(roster.get("BN", roster.get("BENCH", 0))))
     bench_pool = [player for player in players if pkey[id(player)] not in used]
     bench_pool.sort(key=lambda p: pts[id(p)], reverse=True)

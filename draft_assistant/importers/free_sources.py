@@ -524,11 +524,13 @@ def _fetch_espn_players(season: int, league_id: str, adp_format: str) -> List[Pl
     return [p for p in players if p.name]
 
 
-# ESPN lineup slot IDs -> our roster keys. Flex-like and superflex slots fold
-# into FLEX so they map onto the editor's standard slot set.
+# ESPN lineup slot IDs -> our roster keys. Flex variants map to TYPED flex keys
+# (models.FLEX_TYPES) so eligibility is preserved — a WR/TE slot (5) must not be
+# fillable by an RB, a superflex (7) can take a QB, etc.
 _ESPN_SLOT_TO_ROSTER = {
     0: "QB", 2: "RB", 4: "WR", 6: "TE", 16: "DST", 17: "K",
-    20: "BN", 21: "IR", 23: "FLEX", 3: "FLEX", 5: "FLEX", 7: "FLEX",
+    20: "BN", 21: "IR",
+    23: "FLEX", 3: "RBWR", 5: "WRTE", 7: "SUPERFLEX",
 }
 
 

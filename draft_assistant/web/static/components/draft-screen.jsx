@@ -96,19 +96,29 @@ function MyTeamPanel({ league, myPlayers, round, hint, onGetHint }) {
   for (let i=0;i<(slots.RB||0);i++)   slotDefs.push({label:'RB',  pos:'RB'});
   for (let i=0;i<(slots.WR||0);i++)   slotDefs.push({label:'WR',  pos:'WR'});
   for (let i=0;i<(slots.TE||0);i++)   slotDefs.push({label:'TE',  pos:'TE'});
-  for (let i=0;i<(slots.FLEX||0);i++) slotDefs.push({label:'FLX', pos:'FLEX'});
+  // Typed flex slots, most restrictive first (a W/T slot fills before a FLEX),
+  // each carrying its eligible positions so it never holds an ineligible player.
+  const flexMap = (typeof FLEX_TYPES_JS !== 'undefined') ? FLEX_TYPES_JS
+    : { FLEX: { label:'FLX', elig:['RB','WR','TE'] } };
+  Object.keys(flexMap)
+    .filter(fk => (slots[fk]||0) > 0)
+    .sort((a,b) => flexMap[a].elig.length - flexMap[b].elig.length)
+    .forEach(fk => {
+      for (let i=0;i<(slots[fk]||0);i++)
+        slotDefs.push({label:flexMap[fk].label, pos:'FLEX', elig:flexMap[fk].elig});
+    });
   for (let i=0;i<(slots.K||0);i++)    slotDefs.push({label:'K',   pos:'K'});
   for (let i=0;i<(slots.DST||0);i++)  slotDefs.push({label:'DST', pos:'DST'});
   for (let i=0;i<(slots.BN||0);i++)   slotDefs.push({label:'BN',  pos:null});
 
   const filled = [];
   const remaining = [...myPlayers];
-  const flexElig  = new Set(['RB','WR','TE']);
 
   slotDefs.forEach(slot => {
     if (!slot.pos) { filled.push({slot, player: remaining.shift()||null}); return; }
     if (slot.pos === 'FLEX') {
-      const idx = remaining.findIndex(p => flexElig.has(p.pos));
+      const elig = new Set(slot.elig || ['RB','WR','TE']);
+      const idx = remaining.findIndex(p => elig.has(p.pos));
       filled.push({slot, player: idx>=0 ? remaining.splice(idx,1)[0] : null});
       return;
     }

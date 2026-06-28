@@ -67,16 +67,47 @@ function withProjections(players, league) {
   return players.map(p => ({ ...p, projPts: calcProjection(p, league.scoringType, league.customScoring) }));
 }
 
+// Flex slot types (mirror of models.FLEX_TYPES): roster key -> eligible
+// positions + a short label for the roster display.
+const FLEX_TYPES_JS = {
+  FLEX:      { label: 'FLX', elig: ['RB','WR','TE'] },
+  WRTE:      { label: 'W/T', elig: ['WR','TE'] },
+  RBWR:      { label: 'R/W', elig: ['RB','WR'] },
+  SUPERFLEX: { label: 'SF',  elig: ['QB','RB','WR','TE'] },
+  OP:        { label: 'OP',  elig: ['QB','RB','WR','TE'] },
+};
+
+// Roster slot count, respecting an explicit 0 (so TE:0 != TE missing).
+function slotCount(rosterSlots, key, dflt) {
+  return rosterSlots[key] == null ? dflt : rosterSlots[key];
+}
+
+// Spread typed-flex slot counts across eligible positions for the client-side
+// VORP / needs heuristics. The server engine does the exact lineup math; this
+// just keeps the badges/needs roughly right (RB/WR likelier flex fills than TE/QB).
+function flexExpectation(rosterSlots) {
+  const add = { QB: 0, RB: 0, WR: 0, TE: 0 };
+  Object.keys(FLEX_TYPES_JS).forEach(fk => {
+    const n = rosterSlots[fk] || 0;
+    if (!n) return;
+    const elig = FLEX_TYPES_JS[fk].elig;
+    const w = {}; let tot = 0;
+    elig.forEach(pos => { w[pos] = (pos === 'RB' || pos === 'WR') ? 1.0 : 0.4; tot += w[pos]; });
+    elig.forEach(pos => { add[pos] += n * w[pos] / tot; });
+  });
+  return add;
+}
+
 function withVORP(players, league) {
   const { numTeams, rosterSlots } = league;
-  const flex = rosterSlots.FLEX || 0;
+  const fx = flexExpectation(rosterSlots);
   const repRank = {
-    QB:  Math.floor(numTeams * (rosterSlots.QB  || 1) + 1),
-    RB:  Math.floor(numTeams * ((rosterSlots.RB  || 2) + flex * 0.5) + 1),
-    WR:  Math.floor(numTeams * ((rosterSlots.WR  || 2) + flex * 0.5) + 1),
-    TE:  Math.floor(numTeams * (rosterSlots.TE  || 1) + 1),
-    K:   Math.floor(numTeams * (rosterSlots.K   || 1) + 1),
-    DST: Math.floor(numTeams * (rosterSlots.DST || 1) + 1),
+    QB:  Math.floor(numTeams * (slotCount(rosterSlots,'QB',1) + fx.QB) + 1),
+    RB:  Math.floor(numTeams * (slotCount(rosterSlots,'RB',2) + fx.RB) + 1),
+    WR:  Math.floor(numTeams * (slotCount(rosterSlots,'WR',2) + fx.WR) + 1),
+    TE:  Math.floor(numTeams * (slotCount(rosterSlots,'TE',1) + fx.TE) + 1),
+    K:   Math.floor(numTeams * slotCount(rosterSlots,'K',1) + 1),
+    DST: Math.floor(numTeams * slotCount(rosterSlots,'DST',1) + 1),
   };
   const byPos = {};
   players.forEach(p => { (byPos[p.pos] = byPos[p.pos] || []).push(p); });
@@ -104,14 +135,14 @@ function getCurrentRoundPick(totalPicks, numTeams) {
 function getRosterNeeds(myPlayers, rosterSlots) {
   const counts = {};
   myPlayers.forEach(p => { counts[p.pos] = (counts[p.pos] || 0) + 1; });
-  const flex = rosterSlots.FLEX || 0;
+  const fx = flexExpectation(rosterSlots);
   const maxByPos = {
-    QB:  rosterSlots.QB  || 1,
-    RB:  (rosterSlots.RB  || 2) + Math.ceil(flex * 0.6),
-    WR:  (rosterSlots.WR  || 2) + Math.ceil(flex * 0.6),
-    TE:  (rosterSlots.TE  || 1) + Math.floor(flex * 0.2),
-    K:   rosterSlots.K   || 1,
-    DST: rosterSlots.DST || 1,
+    QB:  slotCount(rosterSlots,'QB',1) + Math.round(fx.QB),
+    RB:  slotCount(rosterSlots,'RB',2) + Math.ceil(fx.RB),
+    WR:  slotCount(rosterSlots,'WR',2) + Math.ceil(fx.WR),
+    TE:  slotCount(rosterSlots,'TE',1) + Math.floor(fx.TE),
+    K:   slotCount(rosterSlots,'K',1),
+    DST: slotCount(rosterSlots,'DST',1),
   };
   // Open dedicated starting slots first, depth-only needs after.
   return Object.entries(maxByPos)
@@ -317,10 +348,15 @@ function LeagueSetupModal({ league, onSave, onClose }) {
       .finally(() => setImporting(false));
   };
 
+  const FLEX_SLOT_LABELS = { WRTE:'W/T flex', RBWR:'R/W flex', SUPERFLEX:'Superflex', OP:'Superflex' };
   const slotFields = [
     {k:'QB',label:'QB'},{k:'RB',label:'RB'},{k:'WR',label:'WR'},
-    {k:'TE',label:'TE'},{k:'FLEX',label:'FLEX (RB/WR/TE)'},{k:'K',label:'K'},
-    {k:'DST',label:'DST'},{k:'BN',label:'Bench'},
+    {k:'TE',label:'TE'},{k:'FLEX',label:'FLEX (RB/WR/TE)'},
+    // Typed flex slots present on this league (e.g. an imported WR/TE slot).
+    ...Object.keys(FLEX_SLOT_LABELS)
+      .filter(fk => (form.rosterSlots[fk] || 0) > 0)
+      .map(fk => ({ k: fk, label: FLEX_SLOT_LABELS[fk] })),
+    {k:'K',label:'K'},{k:'DST',label:'DST'},{k:'BN',label:'Bench'},
   ];
 
   return (

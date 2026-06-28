@@ -1,11 +1,11 @@
 from __future__ import annotations
 from typing import Dict, List, Tuple
 
-from .models import Player
+from .models import FLEX_TYPES, Player
 from .scoring import fantasy_points
 
 
-FLEX_ELIGIBLE = {"RB", "WR", "TE"}
+FLEX_ELIGIBLE = set(FLEX_TYPES["FLEX"])
 
 
 def compute_points(
@@ -28,20 +28,6 @@ def compute_points(
         else:
             pts[p.key()] = fantasy_points(p.projections, scoring)
     return pts
-
-
-def _allocate_flex_baseline(points_by_pos: Dict[str, List[Tuple[str, float]]], flex_slots: int) -> Dict[str, int]:
-    # Merge top candidates across eligible positions and allocate flex to those with
-    # highest points, then count how many per position.
-    pool: List[Tuple[str, float, str]] = []  # (key, pts, pos)
-    for pos in FLEX_ELIGIBLE:
-        for key, pts in points_by_pos.get(pos, []):
-            pool.append((key, pts, pos))
-    pool.sort(key=lambda t: t[1], reverse=True)
-    alloc: Dict[str, int] = {"RB": 0, "WR": 0, "TE": 0}
-    for i in range(min(flex_slots, len(pool))):
-        alloc[pool[i][2]] += 1
-    return alloc
 
 
 def replacement_levels(
@@ -69,12 +55,25 @@ def replacement_levels(
     for pos in ["QB", "RB", "WR", "TE", "K", "DST"]:
         starters[pos] = teams * int(roster.get(pos, 0))
 
-    # Distribute FLEX among eligible positions
-    flex_slots = teams * int(roster.get("FLEX", 0))
-    flex_alloc = _allocate_flex_baseline(points_by_pos, flex_slots)
-    starters["RB"] += flex_alloc.get("RB", 0)
-    starters["WR"] += flex_alloc.get("WR", 0)
-    starters["TE"] += flex_alloc.get("TE", 0)
+    # Allocate typed flex slots league-wide, most restrictive first, each to the
+    # eligible position whose next-best available player is highest. A WR/TE slot
+    # only deepens WR/TE replacement; it never lifts RB.
+    flex_slots: List[tuple] = []
+    for fkey, elig in FLEX_TYPES.items():
+        flex_slots.extend([elig] * (teams * int(roster.get(fkey, 0))))
+    flex_slots.sort(key=len)
+    for elig in flex_slots:
+        best_pos = None
+        best_pts = 0.0
+        for pos in elig:
+            lst = points_by_pos.get(pos, [])
+            i = starters.get(pos, 0)
+            if i < len(lst):
+                pv = lst[i][1]
+                if best_pos is None or pv > best_pts:
+                    best_pos, best_pts = pos, pv
+        if best_pos is not None:
+            starters[best_pos] += 1
 
     repl: Dict[str, float] = {}
     for pos, count in starters.items():
