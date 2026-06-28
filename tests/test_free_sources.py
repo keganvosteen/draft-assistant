@@ -121,5 +121,25 @@ class TestMergeCollectsProjectionSamples(unittest.TestCase):
         self.assertEqual(len(merged), 1)  # still merges fine without sample tracking
 
 
+class TestEspnProjectionStats(unittest.TestCase):
+    def test_maps_numeric_stat_ids_for_target_season_only(self):
+        from draft_assistant.importers.free_sources import _espn_projection_stats
+        player = {"stats": [
+            {"statSourceId": 0, "statSplitTypeId": 0, "seasonId": 2026, "stats": {"3": 9999}},  # actual
+            {"statSourceId": 1, "statSplitTypeId": 2, "seasonId": 2026, "stats": {"3": 1}},      # per-game split
+            {"statSourceId": 1, "statSplitTypeId": 0, "seasonId": 2025, "stats": {"3": 1}},      # wrong season
+            {"statSourceId": 1, "statSplitTypeId": 0, "seasonId": 2026,
+             "stats": {"3": 4200, "4": 30, "24": 500, "25": 6, "42": 900, "53": 80, "999": 7}},
+        ]}
+        out = _espn_projection_stats(player, 2026)
+        self.assertEqual(out["pass_yd"], 4200.0)
+        self.assertEqual(out["pass_td"], 30.0)
+        self.assertEqual(out["rush_yd"], 500.0)
+        self.assertEqual(out["rec_yd"], 900.0)
+        self.assertEqual(out["rec"], 80.0)
+        self.assertNotIn("999", out)            # unknown stat id dropped
+        self.assertNotIn("pass_yd", {k: v for k, v in out.items() if v == 9999.0})  # ignored actual
+
+
 if __name__ == "__main__":
     unittest.main()
