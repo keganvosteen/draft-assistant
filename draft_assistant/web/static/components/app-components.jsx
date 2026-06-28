@@ -285,6 +285,38 @@ function LeagueSetupModal({ league, onSave, onClose }) {
   const setSlot = (k, v) => setForm(f => ({...f, rosterSlots:{...f.rosterSlots, [k]: parseInt(v)||0}}));
   const setCustom = (k, v) => setForm(f => ({...f, customScoring:{...f.customScoring, [k]: parseFloat(v)||0}}));
 
+  // Auto-fill the form from a public ESPN league (teams, roster, scoring, names).
+  const [espnId, setEspnId] = React.useState(form.espnLeagueId || '');
+  const [importing, setImporting] = React.useState(false);
+  const [importMsg, setImportMsg] = React.useState(null);
+  const importEspn = () => {
+    const id = espnId.trim();
+    if (!id) return;
+    setImporting(true); setImportMsg(null);
+    fetch('/api/import-espn', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leagueId: id }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) { setImportMsg({ ok: false, text: d.error }); return; }
+        setForm(f => ({
+          ...f,
+          name: d.name || f.name,
+          platform: 'ESPN',
+          numTeams: d.numTeams || f.numTeams,
+          scoringType: d.scoringType || f.scoringType,
+          rosterSlots: { ...DEFAULT_SLOTS, ...(d.rosterSlots || {}) },
+          teamNames: d.teamNames || [],
+          espnLeagueId: d.espnLeagueId || id,
+        }));
+        setImportMsg({ ok: true,
+          text: `Imported "${d.name}" — ${d.numTeams} teams, ${(d.teamNames || []).length} names, ${d.scoringType}` });
+      })
+      .catch(() => setImportMsg({ ok: false, text: 'Import failed — is the league public?' }))
+      .finally(() => setImporting(false));
+  };
+
   const slotFields = [
     {k:'QB',label:'QB'},{k:'RB',label:'RB'},{k:'WR',label:'WR'},
     {k:'TE',label:'TE'},{k:'FLEX',label:'FLEX (RB/WR/TE)'},{k:'K',label:'K'},
@@ -293,6 +325,27 @@ function LeagueSetupModal({ league, onSave, onClose }) {
 
   return (
     <Modal title={league ? 'Edit League' : 'Add New League'} onClose={onClose} width={600}>
+      <div style={{marginBottom:16, padding:12, background:T.surfaceAlt, borderRadius:T.r, border:`1px solid ${T.border}`}}>
+        <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:8, letterSpacing:.5}}>
+          IMPORT FROM ESPN (public league)
+        </div>
+        <div style={{display:'flex', gap:8, alignItems:'center'}}>
+          <Input value={espnId} onChange={e=>setEspnId(e.target.value)}
+            placeholder="ESPN League ID (e.g. 75034031)" style={{flex:1}} />
+          <Btn variant="ghost" onClick={importEspn} disabled={importing || !espnId.trim()}>
+            {importing ? 'Importing…' : 'Import'}
+          </Btn>
+        </div>
+        {importMsg && (
+          <div style={{marginTop:8, fontSize:12, color: importMsg.ok ? T.primary : '#c0392b'}}>
+            {(importMsg.ok ? '✓ ' : '⚠ ') + importMsg.text}
+          </div>
+        )}
+        <div style={{marginTop:6, fontSize:11, color:T.muted}}>
+          Auto-fills teams, roster, scoring, and your league-mates' names. Find the ID in your
+          ESPN league URL (…/leagues/<b>THIS</b>). Yahoo isn't supported yet (needs OAuth).
+        </div>
+      </div>
       <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
         <Field label="League Name">
           <Input value={form.name} onChange={e=>set('name',e.target.value)} />

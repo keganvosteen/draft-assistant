@@ -524,6 +524,65 @@ def _fetch_espn_players(season: int, league_id: str, adp_format: str) -> List[Pl
     return [p for p in players if p.name]
 
 
+# ESPN lineup slot IDs -> our roster keys. Flex-like and superflex slots fold
+# into FLEX so they map onto the editor's standard slot set.
+_ESPN_SLOT_TO_ROSTER = {
+    0: "QB", 2: "RB", 4: "WR", 6: "TE", 16: "DST", 17: "K",
+    20: "BN", 21: "IR", 23: "FLEX", 3: "FLEX", 5: "FLEX", 7: "FLEX",
+}
+
+
+def fetch_espn_league(season: int, league_id: str) -> Dict[str, object]:
+    """Read a public ESPN league's settings: teams, roster, scoring, team names.
+
+    Returns a dict the web LeagueSetup can consume to auto-fill a league. Public
+    leagues need only the id; private leagues would need espn_s2 / SWID cookies.
+    """
+    url = (
+        "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
+        f"{season}/segments/0/leagues/{league_id}?view=mSettings&view=mTeam"
+    )
+    data = _fetch_json(url, timeout=45)
+    settings = data.get("settings", {}) if isinstance(data, dict) else {}
+
+    roster: Dict[str, int] = {}
+    slot_counts = (settings.get("rosterSettings") or {}).get("lineupSlotCounts") or {}
+    for slot, count in slot_counts.items():
+        key = _ESPN_SLOT_TO_ROSTER.get(_to_int(slot))
+        if key and count:
+            roster[key] = roster.get(key, 0) + int(count)
+    # Make standard editor slots explicit (0 if absent) so the imported roster
+    # overrides the form defaults rather than inheriting them — e.g. a league
+    # with no dedicated TE slot must show TE 0, not the default 1.
+    for key in ("QB", "RB", "WR", "TE", "FLEX", "K", "DST", "BN"):
+        roster.setdefault(key, 0)
+
+    scoring: Dict[str, float] = {}
+    for item in (settings.get("scoringSettings") or {}).get("scoringItems") or []:
+        key = ESPN_STAT_IDS.get(str(item.get("statId")))
+        if not key:
+            continue
+        pts = item.get("points")
+        if pts is None:
+            overrides = item.get("pointsOverrides") or {}
+            pts = next(iter(overrides.values()), None)
+        if pts is not None:
+            scoring[key] = float(pts)
+
+    team_names: List[str] = []
+    for team in data.get("teams") or []:
+        name = team.get("name") or f"{team.get('location', '')} {team.get('nickname', '')}".strip()
+        team_names.append(name or f"Team {team.get('id')}")
+
+    return {
+        "name": settings.get("name") or f"ESPN {league_id}",
+        "numTeams": int(settings.get("size") or len(team_names) or 10),
+        "rosterSlots": roster,
+        "scoring": scoring,
+        "teamNames": team_names,
+    }
+
+
 def _espn_projection_stats(player: dict, season: int) -> Dict[str, float]:
     """Map ESPN's full-season projection (statSourceId=1, split=0) to app keys."""
     for stat_row in player.get("stats") or []:

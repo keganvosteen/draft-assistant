@@ -249,6 +249,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_auction()
         elif self.path == "/api/suggest":
             self._handle_suggest()
+        elif self.path == "/api/import-espn":
+            self._handle_import_espn()
         elif self.path == "/api/save-draft":
             self._handle_save_draft()
         elif self.path == "/api/load-draft":
@@ -396,6 +398,29 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
+
+    def _handle_import_espn(self):
+        """Read a public ESPN league's settings to auto-fill a league in the UI.
+
+        Body: {leagueId, season?}. Returns name / numTeams / rosterSlots /
+        scoringType / teamNames / espnLeagueId for the LeagueSetup form.
+        """
+        try:
+            body = self._read_body()
+            league_id = str(body.get("leagueId") or "").strip()
+            if not league_id:
+                self._send_json({"error": "leagueId required"}, 400)
+                return
+            from ..importers.free_sources import default_projection_season, fetch_espn_league
+            season = int(body.get("season") or 0) or default_projection_season()
+            info = fetch_espn_league(season, league_id)
+            rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
+            info["scoringType"] = "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"
+            info["espnLeagueId"] = league_id
+            info["season"] = season
+            self._send_json(info)
+        except Exception as exc:
+            self._send_json({"error": f"Could not import league {league_id!r}: {exc}"}, 500)
 
     def _handle_get_state(self):
         try:

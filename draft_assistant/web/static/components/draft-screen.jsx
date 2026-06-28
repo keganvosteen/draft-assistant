@@ -206,7 +206,7 @@ function ModeToggle({ mode, onChange }) {
   );
 }
 
-function OpponentTeamRow({ teamNum, mode, counts, posProbs, pickLabel, onSetMode, highlight }) {
+function OpponentTeamRow({ teamNum, teamName, mode, counts, posProbs, pickLabel, onSetMode, highlight }) {
   const topPos = posProbs
     ? Object.entries(posProbs).sort((a,b) => b[1]-a[1]).filter(([,p]) => p >= 0.08).slice(0,3)
     : null;
@@ -218,7 +218,7 @@ function OpponentTeamRow({ teamNum, mode, counts, posProbs, pickLabel, onSetMode
     }}>
       <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:3}}>
         <span style={{fontSize:12, fontWeight:700, color:T.text}}>
-          Team {teamNum}
+          {teamName || `Team ${teamNum}`}
           {pickLabel && <span style={{fontWeight:600, color:T.muted, marginLeft:6, fontSize:10}}>{pickLabel}</span>}
         </span>
         <ModeToggle mode={mode} onChange={onSetMode} />
@@ -289,6 +289,7 @@ function OpponentsPanel({ league, oppData, picksMade, onSetTeamMode }) {
         {oppData.upcoming.map(u => (
           <OpponentTeamRow key={u.teamNum}
             teamNum={u.teamNum}
+            teamName={(league.teamNames || [])[u.teamNum - 1]}
             mode={modes[u.teamNum] === 'auto' ? 'auto' : 'live'}
             counts={u.rosterCounts}
             posProbs={u.posProbs}
@@ -306,6 +307,7 @@ function OpponentsPanel({ league, oppData, picksMade, onSetTeamMode }) {
         {others.map(t => (
           <OpponentTeamRow key={t}
             teamNum={t}
+            teamName={(league.teamNames || [])[t - 1]}
             mode={modes[t] === 'auto' ? 'auto' : 'live'}
             counts={oppData.rosters[t] ? oppData.rosters[t].reduce((c,p) => { c[p.pos]=(c[p.pos]||0)+1; return c; }, {}) : {}}
             posProbs={null}
