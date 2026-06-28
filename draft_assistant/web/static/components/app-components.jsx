@@ -520,7 +520,7 @@ function adpFormatForLeague(league) {
 }
 
 // ─── PULL DATA MODAL ─────────────────────────────────────────────────────────
-function PullDataModal({ league, onClose, onComplete }) {
+function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
   const currentYear = new Date().getFullYear();
   const [mode, setMode]         = React.useState('free');
   const [season, setSeason]     = React.useState(currentYear);
@@ -535,8 +535,9 @@ function PullDataModal({ league, onClose, onComplete }) {
 
   const handlePull = () => {
     const endpoint = mode === 'free' ? '/api/pull-free-data' : '/api/collect-all';
+    // Fold an imported ESPN league's projections into the consensus automatically.
     const body = mode === 'free'
-      ? { season, statsSeason, history, teams, adpFormat, skipFftoday: skipFf }
+      ? { season, statsSeason, history, teams, adpFormat, skipFftoday: skipFf, espnLeagueId }
       : { season, teams, scoring: adpFormat, history };
     fetch(endpoint, {
       method: 'POST',
@@ -862,7 +863,9 @@ function HomeScreen({ leagues, onSelectLeague, onAddLeague, onEditLeague, onDele
         </div>
       </div>
 
-      {showPull && <PullDataModal league={leagues[0]} onClose={() => setShowPull(false)} onComplete={onRefreshPlayers} />}
+      {showPull && <PullDataModal league={leagues[0]}
+        espnLeagueId={(leagues.find(l => l.espnLeagueId) || {}).espnLeagueId}
+        onClose={() => setShowPull(false)} onComplete={onRefreshPlayers} />}
       {showAuction && <AuctionModal onClose={() => setShowAuction(false)} />}
     </div>
   );
