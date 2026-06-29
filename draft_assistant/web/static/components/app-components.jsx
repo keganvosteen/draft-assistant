@@ -564,6 +564,24 @@ function LeagueSetupModal({ league, onSave, onClose }) {
         </div>
       </div>
 
+      <div style={{marginTop:20}}>
+        <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:8, letterSpacing:.5}}>
+          OPPONENT TEAM NAMES (optional)
+        </div>
+        <textarea
+          value={(form.teamNames || []).join('\n')}
+          onChange={e => set('teamNames', e.target.value.split('\n').map(s => s.trim()))}
+          placeholder={'One team name per line (order = draft slot 1…N). Labels the Opponents panel. Auto-filled when you import from ESPN/Yahoo.'}
+          rows={4}
+          style={{width:'100%', boxSizing:'border-box', padding:'8px 12px', border:`1.5px solid ${T.border}`,
+            borderRadius:T.rsm, fontSize:13, color:T.text, background:T.surface, fontFamily:'inherit',
+            outline:'none', resize:'vertical'}}
+        />
+        <div style={{fontSize:11, color:T.muted, marginTop:4}}>
+          {(form.teamNames || []).filter(Boolean).length} names entered
+        </div>
+      </div>
+
       <div style={{display:'flex', justifyContent:'flex-end', gap:10, marginTop:24, paddingTop:20, borderTop:`1px solid ${T.border}`}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
         <Btn onClick={() => onSave(form)}>Save League</Btn>
