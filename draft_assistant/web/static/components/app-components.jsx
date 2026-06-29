@@ -352,8 +352,15 @@ function LeagueSetupModal({ league, onSave, onClose }) {
   const [yh, setYh] = React.useState({
     clientId: '', clientSecret: '', redirectUri: 'https://localhost/',
     authUrl: '', code: '', leagues: null, leagueKey: '', busy: false, msg: null,
+    credsSaved: false, showCredForm: false,
   });
   const yhSet = patch => setYh(s => ({ ...s, ...patch }));
+  // Pick up credentials already saved on this machine (so re-auth is one click).
+  React.useEffect(() => {
+    fetch('/api/yahoo/status').then(r => r.json()).then(d => {
+      if (d && d.hasCredentials) yhSet({ credsSaved: true, redirectUri: d.redirectUri || 'https://localhost/' });
+    }).catch(() => {});
+  }, []);
   const yhPost = (url, body, onOk) => {
     yhSet({ busy: true, msg: null });
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
@@ -363,9 +370,12 @@ function LeagueSetupModal({ league, onSave, onClose }) {
       .finally(() => setYh(s => ({ ...s, busy: false })));
   };
   const yahooConnect = () => {
-    if (!yh.clientId.trim() || !yh.clientSecret.trim()) { yhSet({ msg: { ok: false, text: 'Enter Client ID and Secret' } }); return; }
-    yhPost('/api/yahoo/connect',
-      { clientId: yh.clientId.trim(), clientSecret: yh.clientSecret.trim(), redirectUri: yh.redirectUri.trim() },
+    const useStored = yh.credsSaved && !yh.showCredForm;
+    if (!useStored && (!yh.clientId.trim() || !yh.clientSecret.trim())) { yhSet({ msg: { ok: false, text: 'Enter Client ID and Secret' } }); return; }
+    const body = useStored
+      ? { redirectUri: yh.redirectUri.trim() }
+      : { clientId: yh.clientId.trim(), clientSecret: yh.clientSecret.trim(), redirectUri: yh.redirectUri.trim() };
+    yhPost('/api/yahoo/connect', body,
       d => { yhSet({ authUrl: d.authUrl, msg: { ok: true, text: 'Authorize in the opened tab, then paste the code below.' } }); window.open(d.authUrl, '_blank'); });
   };
   const yahooExchange = () => {
@@ -428,13 +438,20 @@ function LeagueSetupModal({ league, onSave, onClose }) {
         </div>
         {!yh.leagues ? (
           <>
-            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
-              <Input value={yh.clientId} onChange={e=>yhSet({clientId:e.target.value})} placeholder="Client ID (Consumer Key)" />
-              <Input value={yh.clientSecret} onChange={e=>yhSet({clientSecret:e.target.value})} placeholder="Client Secret" type="password" />
-            </div>
+            {yh.credsSaved && !yh.showCredForm ? (
+              <div style={{fontSize:12, color:T.text, marginBottom:4}}>
+                ✓ Yahoo credentials saved on this machine.{' '}
+                <a onClick={()=>yhSet({showCredForm:true})} style={{color:T.muted, cursor:'pointer', textDecoration:'underline'}}>use different</a>
+              </div>
+            ) : (
+              <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
+                <Input value={yh.clientId} onChange={e=>yhSet({clientId:e.target.value})} placeholder="Client ID (Consumer Key)" />
+                <Input value={yh.clientSecret} onChange={e=>yhSet({clientSecret:e.target.value})} placeholder="Client Secret" type="password" />
+              </div>
+            )}
             <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
               <Input value={yh.redirectUri} onChange={e=>yhSet({redirectUri:e.target.value})} placeholder="Redirect URI" style={{flex:1}} />
-              <Btn variant="ghost" onClick={yahooConnect} disabled={yh.busy}>{yh.busy?'…':'Get link'}</Btn>
+              <Btn variant="ghost" onClick={yahooConnect} disabled={yh.busy}>{yh.busy?'…':(yh.credsSaved && !yh.showCredForm ?'Get authorize link':'Get link')}</Btn>
             </div>
             {yh.authUrl && (
               <div style={{marginTop:8}}>

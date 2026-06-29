@@ -45,11 +45,17 @@ YAHOO_POS = {
 # ── OAuth ─────────────────────────────────────────────────────────────────────
 
 def auth_url(client_id: str, redirect_uri: str = DEFAULT_REDIRECT) -> str:
-    """Authorization URL the user opens to grant access."""
+    """Authorization URL the user opens to grant access.
+
+    Requests the Fantasy Sports READ scope (fspt-r) explicitly — without it Yahoo
+    issues a token that 401s the Fantasy API with
+    oauth_problem="additional_authorization_required".
+    """
     return AUTH_URL + "?" + urlencode({
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
+        "scope": "fspt-r",
         "language": "en-us",
     })
 

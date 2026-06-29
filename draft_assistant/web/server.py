@@ -231,6 +231,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_config()
         elif self.path == "/api/state":
             self._handle_get_state()
+        elif self.path == "/api/yahoo/status":
+            self._handle_yahoo_status()
         elif self.path.startswith("/api/task/"):
             self._handle_task_status()
         else:
@@ -449,18 +451,34 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         from ..storage import atomic_write_json
         atomic_write_json(self._yahoo_store_path(), data)
 
+    def _handle_yahoo_status(self):
+        """Report whether Yahoo credentials/token are already saved locally."""
+        try:
+            data = self._yahoo_load()
+            self._send_json({
+                "hasCredentials": bool(data.get("client_id") and data.get("client_secret")),
+                "hasToken": bool((data.get("token") or {}).get("access_token")),
+                "redirectUri": data.get("redirect_uri") or "https://localhost/",
+            })
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
     def _handle_yahoo_connect(self):
-        """Store Yahoo app credentials locally and return the authorize URL."""
+        """Store/confirm Yahoo app credentials locally and return the authorize URL.
+
+        Falls back to already-saved credentials when the body omits them, so a
+        re-authorize doesn't require re-typing the Client ID/Secret.
+        """
         try:
             from ..importers import yahoo
             body = self._read_body()
-            client_id = str(body.get("clientId") or "").strip()
-            client_secret = str(body.get("clientSecret") or "").strip()
-            redirect = str(body.get("redirectUri") or yahoo.DEFAULT_REDIRECT).strip()
+            data = self._yahoo_load()
+            client_id = str(body.get("clientId") or data.get("client_id") or "").strip()
+            client_secret = str(body.get("clientSecret") or data.get("client_secret") or "").strip()
+            redirect = str(body.get("redirectUri") or data.get("redirect_uri") or yahoo.DEFAULT_REDIRECT).strip()
             if not client_id or not client_secret:
                 self._send_json({"error": "clientId and clientSecret are required"}, 400)
                 return
-            data = self._yahoo_load()
             data.update({"client_id": client_id, "client_secret": client_secret,
                          "redirect_uri": redirect})
             self._yahoo_save(data)
