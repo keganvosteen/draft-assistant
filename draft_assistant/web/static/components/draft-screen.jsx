@@ -379,66 +379,89 @@ function RecommendationBar({ scored, myPlayers, league, oppData }) {
     );
   }
 
-  // Only rank players the engine actually simulated this pick (draftScore set);
-  // others have no impact/availPct and would otherwise sort as 0 and show
-  // "undefined%" in the cards.
+  // Every card below is driven by the rollout engine's per-pick outputs — the
+  // same season-points impact that ranks the board — not the retired JS engine's
+  // tier/heuristic scoring:
+  //   draftScore    = impact (Δ expected final-roster season pts vs. the greedy pick)
+  //   scarcityBonus = impact − immediate lineup gain (value that comes purely from
+  //                   taking the player NOW rather than later — the scarcity signal)
+  //   availPct      = 100·(1 − goneRisk) (chance they survive to your next pick)
+  // Only players the engine actually simulated this pick carry these (draftScore
+  // != null); the rest are ignored here so nothing surfaces at a phantom 0 score.
   const rolled = scored.filter(p => p.draftScore != null);
-  const sortedByScore = (rolled.length ? rolled : scored).sort((a,b) => b.draftScore - a.draftScore);
+  if (rolled.length === 0) {
+    return (
+      <div style={{padding:'12px 16px', background:T.surface, borderBottom:`1px solid ${T.border}`}}>
+        <div style={{fontSize:12, color:T.muted}}>Waiting for the engine…</div>
+      </div>
+    );
+  }
+  const sortedByScore = [...rolled].sort((a,b) => b.draftScore - a.draftScore);
   const bestOverall   = sortedByScore[0];
 
+  // "Need" = an open dedicated starting slot first; fall back to soft depth caps
+  // (getRosterNeeds, incl. FLEX) only when every starter is filled — otherwise a
+  // 4th RB masquerades as a need via the flex/bench allowance.
   const needs     = getRosterNeeds(myPlayers, league.rosterSlots);
   const flexElig  = new Set(['RB','WR','TE']);
-
-  // "Need" means an open dedicated starting slot first; only fall back to
-  // soft depth caps when every starter is filled. Otherwise a 4th RB keeps
-  // masquerading as a need via the flex/bench allowance.
   const posCounts = {};
   myPlayers.forEach(p => { posCounts[p.pos] = (posCounts[p.pos] || 0) + 1; });
   const starterNeeds = ['QB','RB','WR','TE','K','DST'].filter(pos =>
     (posCounts[pos] || 0) < (league.rosterSlots[pos] || 0)
   );
-  const needPool = starterNeeds.length > 0 ? starterNeeds : needs;
-  const bestByNeed = sortedByScore.find(p =>
-    needPool.includes(p.pos) ||
-    (starterNeeds.length === 0 && needs.includes('FLEX') && flexElig.has(p.pos))
-  ) || bestOverall;
+  const fillsNeed = p => starterNeeds.includes(p.pos) ||
+    (starterNeeds.length === 0 && needs.includes('FLEX') && flexElig.has(p.pos));
 
-  const isSame = bestOverall.id === bestByNeed.id;
+  // BEST BY NEED: highest-impact player at an open starting slot. Require real
+  // positive impact so a deferred K/DST sitting at ~0 never masquerades as a
+  // need pick (the old bug). If nothing meaningful fills a need, drop the card.
+  const NEED_EPS = 0.5;
+  const bestByNeed = sortedByScore.find(p => p.draftScore > NEED_EPS && fillsNeed(p)) || null;
+  const isSame = bestByNeed && bestOverall.id === bestByNeed.id;
 
-  let scarcityAlert = null;
-  needs.forEach(pos => {
-    const elites = scored.filter(p => p.pos === pos && p.tier <= 2);
-    if (elites.length > 0 && elites.length <= 2) {
-      const top = [...elites].sort((a,b) => b.draftScore - a.draftScore)[0];
-      if (!scarcityAlert || top.draftScore > scarcityAlert.player.draftScore) {
-        scarcityAlert = { player: top, count: elites.length, pos };
-      }
+  // Situational card — the single most salient of three rollout-native signals.
+  // 1) SCARCE: a big share of the pick's value is scarcity (scarcityBonus) and the
+  //    player is unlikely to survive (low availPct) — the engine says "grab now".
+  let scarce = null;
+  rolled.forEach(p => {
+    if (p.scarcityBonus == null || p.availPct == null) return;
+    if (p.scarcityBonus >= 4 && p.availPct <= 60) {
+      if (!scarce || p.scarcityBonus > scarce.scarcityBonus) scarce = p;
     }
   });
 
-  // Position run: opponents picking before my next turn are collectively
-  // likely to take 2+ players at a position I still need.
+  // 2) POSITION RUN: opponents before your next pick are collectively likely to
+  //    clear a position you still need (opponent model — kept, it is not the
+  //    retired scoring engine). Surface the top-impact survivor there.
   let runAlert = null;
   if (oppData && oppData.expectedByPos) {
     needs.forEach(pos => {
       const exp = oppData.expectedByPos[pos] || 0;
       if (exp >= 1.6) {
-        const top = sortedByScore.find(p => p.pos === pos);
+        const top = sortedByScore.find(p => p.pos === pos && p.draftScore > NEED_EPS);
         if (top && (!runAlert || exp > runAlert.exp)) runAlert = { pos, exp, player: top };
       }
     });
   }
 
-  let crossPos = null, crossReason = null;
-  if (!isSame && bestOverall.draftScore - bestByNeed.draftScore > 12) {
-    const nextAtPos = sortedByScore.filter(p => p.pos === bestOverall.pos && p.id !== bestOverall.id)[0];
-    const tierDrop  = nextAtPos ? bestOverall.projPts - nextAtPos.projPts : 999;
-    if (tierDrop >= 14 || bestOverall.draftScore - bestByNeed.draftScore > 20) {
-      crossPos = bestOverall;
-      crossReason = tierDrop >= 14
-        ? `${bestOverall.name} is last in their ${bestOverall.pos} tier — next is ${Math.round(tierDrop)} pts lower.`
-        : `+${Math.round(bestOverall.draftScore - bestByNeed.draftScore)} Draft Score gap over your top need.`;
-    }
+  // 3) REACH: the top pick is off-need, but its season-points edge over your best
+  //    need pick is large enough to justify reaching past need.
+  let reach = null;
+  if (bestByNeed && !isSame) {
+    const gap = bestOverall.draftScore - bestByNeed.draftScore;
+    if (gap >= 12) reach = { player: bestOverall, gap };
+  }
+
+  // Priority: an imminent run is the most time-sensitive, then scarcity, then
+  // reach. Never repeat the two headline cards.
+  const dupId = id => id === bestOverall.id || (bestByNeed && id === bestByNeed.id);
+  let situational = null;
+  if (runAlert && !dupId(runAlert.player.id)) {
+    situational = { kind:'run', ...runAlert };
+  } else if (scarce && !dupId(scarce.id)) {
+    situational = { kind:'scarce', player: scarce };
+  } else if (reach && reach.player.id !== bestOverall.id) {
+    situational = { kind:'reach', ...reach };
   }
 
   return (
@@ -447,33 +470,39 @@ function RecommendationBar({ scored, myPlayers, league, oppData }) {
       <div style={{display:'flex', gap:10}}>
         <RecCard icon="▲" label="BEST DRAFT SCORE"
           player={bestOverall}
-          reason={isSame ? 'Top score AND fills your positional need.' : `${bestOverall.availPct}% chance still available next pick.`}
+          reason={isSame
+            ? 'Top season-points impact AND fills an open starting slot.'
+            : `${bestOverall.availPct}% chance still there at your next pick.`}
           highlight={isSame} />
-        {!isSame && (
+        {bestByNeed && !isSame && (
           <RecCard icon="◎" label="BEST BY NEED"
             player={bestByNeed}
-            reason={`Fills ${bestByNeed.pos} need · ${bestByNeed.availPct}% avail at next pick`} />
+            reason={`Top ${bestByNeed.pos} for an open starting slot · ${bestByNeed.availPct}% avail next pick`} />
         )}
-        {crossPos && crossPos.id !== bestOverall.id && (
-          <RecCard icon="⚡" label="REACH ALERT" player={crossPos} reason={crossReason} highlight />
-        )}
-        {scarcityAlert && (
-          <RecCard icon="⚠" label={`${scarcityAlert.pos} SCARCE`}
-            player={scarcityAlert.player}
-            reason={`Only ${scarcityAlert.count} elite ${scarcityAlert.pos} left.`} />
-        )}
-        {runAlert && (
-          <RecCard icon="⏳" label={`${runAlert.pos} RUN LIKELY`}
-            player={runAlert.player}
-            reason={`~${runAlert.exp.toFixed(1)} ${runAlert.pos}s expected to go before your next pick — only ${runAlert.player.availPct}% chance ${runAlert.player.name.split(' ').pop()} survives.`}
+        {situational && situational.kind === 'run' && (
+          <RecCard icon="⏳" label={`${situational.pos} RUN LIKELY`}
+            player={situational.player}
+            reason={`~${situational.exp.toFixed(1)} ${situational.pos}s likely gone before your next pick — only ${situational.player.availPct}% chance ${situational.player.name.split(' ').pop()} survives.`}
             highlight />
         )}
-        {!crossPos && !scarcityAlert && !runAlert && !isSame && (
+        {situational && situational.kind === 'scarce' && (
+          <RecCard icon="⚠" label={`${situational.player.pos} SCARCE`}
+            player={situational.player}
+            reason={`+${Math.round(situational.player.scarcityBonus)} pts of this pick's value is scarcity — only ${situational.player.availPct}% chance they last.`}
+            highlight />
+        )}
+        {situational && situational.kind === 'reach' && (
+          <RecCard icon="⚡" label="WORTH THE REACH"
+            player={situational.player}
+            reason={`+${Math.round(situational.gap)} season-pts impact over your best need — worth taking now.`}
+            highlight />
+        )}
+        {!situational && !isSame && (
           <div style={{
             flex:1, background:T.surfaceAlt, border:`1.5px dashed ${T.border}`,
             borderRadius:T.r, padding:'12px 14px', display:'flex', alignItems:'center', justifyContent:'center',
           }}>
-            <span style={{fontSize:12, color:T.muted}}>No scarcity or cross-position alerts.</span>
+            <span style={{fontSize:12, color:T.muted}}>No run, scarcity, or reach alerts.</span>
           </div>
         )}
       </div>
@@ -743,13 +772,14 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
 }
 
 // ─── DRAFT SCREEN ─────────────────────────────────────────────────────────────
-function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick, onResetPicks, onReplacePicks, onUpdateLeague, onRefreshPlayers }) {
+function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, onAddPick, onUndoPick, onResetPicks, onReplacePicks, onUpdateLeague, onRefreshPlayers }) {
   const [showDraftBoard, setShowDraftBoard] = React.useState(false);
   const [showDrafted,    setShowDrafted]    = React.useState(false);
   const [showOpponents,  setShowOpponents]  = React.useState(true);
   const [hint,           setHint]           = React.useState('');
   const [showPullModal,  setShowPullModal]  = React.useState(false);
   const [showAuction,    setShowAuction]    = React.useState(false);
+  const [showFreeAgents, setShowFreeAgents] = React.useState(false);
   const [saveMsg,        setSaveMsg]        = React.useState(null);
 
   const tweakDefaults = typeof TWEAK_DEFAULTS !== 'undefined' ? TWEAK_DEFAULTS : {
@@ -1025,6 +1055,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
             </div>
           </div>
           <Btn variant="green" size="sm" onClick={() => setShowPullModal(true)}>Pull Data</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => setShowFreeAgents(true)}>Free Agents</Btn>
           <Btn variant="ghost" size="sm" onClick={() => setShowAuction(true)}>Auction $</Btn>
           <Btn variant="ghost" size="sm" onClick={handleSave}>
             {saveMsg || 'Save'}
@@ -1113,6 +1144,13 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       )}
       {showAuction && (
         <AuctionModal onClose={() => setShowAuction(false)} />
+      )}
+      {showFreeAgents && (
+        <FreeAgentFinderModal
+          leagues={allLeagues || [league]}
+          picks={allPicks || { [league.id]: picks }}
+          onClose={() => setShowFreeAgents(false)}
+        />
       )}
     </div>
   );
