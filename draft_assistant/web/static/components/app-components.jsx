@@ -1232,7 +1232,7 @@ function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague,
                         background:'none', border:`1px solid ${T.border}`, borderRadius:T.rxs,
                         padding:'4px 8px', cursor: syncingId === lg.id ? 'default' : 'pointer',
                         fontSize:12, color: syncingId === lg.id ? T.mutedLight : T.primary,
-                      }}>{syncingId === lg.id ? 'Syncing…' : 'Sync'}</button>
+                      }}>{syncingId === lg.id ? 'Syncing...' : 'Sync'}</button>
                     )}
                     <button onClick={e=>{e.stopPropagation();onEditLeague(lg.id);}} style={{
                       background:'none', border:`1px solid ${T.border}`, borderRadius:T.rxs,

@@ -70,8 +70,11 @@ def synced_rosters_to_picks(
         "matched": len(picks),
         "unmatched": unmatched,
         "teams": [
-            {"name": team.name, "players": len(team.players),
-             "teamNum": team_nums.get(_norm(team.name), i + 1)}
+            {
+                "name": team.name,
+                "players": len(team.players),
+                "teamNum": team_nums.get(_norm(team.name), i + 1),
+            }
             for i, team in enumerate(synced_teams)
         ],
     }

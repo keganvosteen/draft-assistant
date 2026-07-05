@@ -540,6 +540,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             if not isinstance(league, dict):
                 self._send_json({"error": "league must be an object"}, 400)
                 return
+
             platform = str(league.get("platform") or "").lower()
             players, _config = _load_players(self.profile)
 
@@ -633,8 +634,11 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             raise RuntimeError("Authorize with Yahoo first")
         if yahoo.token_is_expired(token):
             token = yahoo.refresh_access_token(
-                data["client_id"], data["client_secret"], token["refresh_token"],
-                data.get("redirect_uri", yahoo.DEFAULT_REDIRECT))
+                data["client_id"],
+                data["client_secret"],
+                token["refresh_token"],
+                data.get("redirect_uri", yahoo.DEFAULT_REDIRECT),
+            )
             data["token"] = token
             self._yahoo_save(data)
         return token["access_token"]
