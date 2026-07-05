@@ -1,7 +1,7 @@
 """Offline tests for the Yahoo importer's OAuth URL + nested-JSON parsing."""
 import unittest
 
-from draft_assistant.importers.yahoo import _parse_league, auth_url
+from draft_assistant.importers.yahoo import _parse_league, _parse_roster_players, auth_url
 
 
 SETTINGS = {"fantasy_content": {"league": [
@@ -65,6 +65,29 @@ class TestYahooParse(unittest.TestCase):
         url = auth_url("ABC", "https://localhost/")
         self.assertIn("client_id=ABC", url)
         self.assertIn("response_type=code", url)
+
+    def test_roster_players_flatten_nested_yahoo_shape(self):
+        roster = {"fantasy_content": {"team": [
+            {"team_key": "461.l.123.t.1"},
+            {"roster": {"0": {"players": {
+                "0": {"player": [
+                    {"player_key": "461.p.7200"},
+                    {"player_id": "7200"},
+                    {"name": {"full": "Josh Allen"}},
+                    {"display_position": "QB"},
+                    {"editorial_team_abbr": "BUF"},
+                ]},
+                "count": 1,
+            }}}},
+        ]}}
+
+        players = _parse_roster_players(roster, "461.l.123")
+
+        self.assertEqual(len(players), 1)
+        self.assertEqual(players[0].name, "Josh Allen")
+        self.assertEqual(players[0].position, "QB")
+        self.assertEqual(players[0].team, "BUF")
+        self.assertEqual(players[0].provider_id, "yahoo:7200")
 
 
 if __name__ == "__main__":

@@ -529,6 +529,166 @@ function picksUntilMyTurn(picksMade, numTeams, draftPosition) {
   return numTeams;
 }
 
+// ─── QUICK PICK FUZZY MATCH HELPER ──────────────────────────────────────────
+function matchQuickPickCandidates(query, players, limit = 5) {
+  if (!query || !query.trim()) return [];
+  const rawQ = query.trim().toLowerCase();
+  const tokens = rawQ.split(/\s+/);
+
+  const POSITIONS = new Set(['QB', 'RB', 'WR', 'TE', 'K', 'DST', 'DEF']);
+  let queryPos = null;
+  const nameTokens = [];
+
+  tokens.forEach(t => {
+    const tu = t.toUpperCase();
+    if (POSITIONS.has(tu)) queryPos = tu === 'DEF' ? 'DST' : tu;
+    else nameTokens.push(t.toLowerCase());
+  });
+
+  const scored = [];
+  players.forEach(p => {
+    if (p.drafted) return;
+    const pos = (p.pos || '').toUpperCase();
+    if (queryPos && pos !== queryPos) return;
+
+    let score = 0;
+    const nameLower = (p.name || '').toLowerCase();
+    const words = nameLower.split(/\s+/);
+    const teamLower = (p.nflTeam || p.team || '').toLowerCase();
+
+    let matchesCount = 0;
+    nameTokens.forEach(qt => {
+      let tScore = 0;
+      if (teamLower && teamLower === qt) tScore = Math.max(tScore, 40);
+      if (nameLower.startsWith(qt)) tScore = Math.max(tScore, 85);
+      words.forEach(w => {
+        if (w === qt) tScore = Math.max(tScore, 90);
+        else if (w.startsWith(qt)) tScore = Math.max(tScore, 75);
+      });
+      if (tScore > 0) {
+        matchesCount++;
+        score += tScore;
+      }
+    });
+
+    if (nameTokens.length > 0 && matchesCount < nameTokens.length) return;
+    if (nameTokens.length === 0) score = 1;
+
+    scored.push({ player: p, score, adp: p.adp != null ? p.adp : 999 });
+  });
+
+  scored.sort((a, b) => b.score - a.score || a.adp - b.adp);
+  return scored.slice(0, limit).map(s => s.player);
+}
+
+function QuickPickInput({ players, search, setSearch, onSelectPlayer }) {
+  const [selectedIndex, setSelectedIndex] = React.useState(0);
+  const [isOpen, setIsOpen] = React.useState(false);
+
+  const candidates = React.useMemo(() => {
+    return matchQuickPickCandidates(search, players, 5);
+  }, [search, players]);
+
+  React.useEffect(() => {
+    setSelectedIndex(0);
+  }, [search]);
+
+  const handleKeyDown = (e) => {
+    if (!isOpen || candidates.length === 0) {
+      if (e.key === 'ArrowDown') setIsOpen(true);
+      return;
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSelectedIndex(i => (i + 1) % candidates.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSelectedIndex(i => (i - 1 + candidates.length) % candidates.length);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (candidates[selectedIndex]) {
+        onSelectPlayer(candidates[selectedIndex]);
+        setSearch(candidates[selectedIndex].name);
+        setIsOpen(false);
+      }
+    } else if (['1', '2', '3'].includes(e.key) && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+      const idx = parseInt(e.key, 10) - 1;
+      if (candidates[idx]) {
+        e.preventDefault();
+        onSelectPlayer(candidates[idx]);
+        setSearch(candidates[idx].name);
+        setIsOpen(false);
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setSearch('');
+      setIsOpen(false);
+    }
+  };
+
+  return (
+    <div style={{position:'relative', flex:1, minWidth:220}}>
+      <input
+        type="text"
+        placeholder="⚡ Quick Pick search ('bij', 'allen qb', 'kc dst') — Enter to confirm"
+        value={search}
+        onChange={e => { setSearch(e.target.value); setIsOpen(true); }}
+        onFocus={() => setIsOpen(true)}
+        onKeyDown={handleKeyDown}
+        style={{
+          width:'100%', padding:'7px 12px', border:`1.5px solid ${T.primary}`,
+          borderRadius:T.rsm, fontSize:13, fontFamily:'inherit', color:T.text,
+          background: T.surface, outline:'none', boxShadow:'0 1px 4px rgba(0,0,0,.06)',
+        }}
+      />
+      {isOpen && candidates.length > 0 && (
+        <div style={{
+          position:'absolute', top:'100%', left:0, right:0, zIndex:999,
+          background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.rsm,
+          boxShadow:'0 8px 24px rgba(0,0,0,.18)', marginTop:4, overflow:'hidden',
+        }}>
+          <div style={{padding:'4px 8px', fontSize:10, color:T.muted, background:T.surfaceAlt, borderBottom:`1px solid ${T.borderLight}`, display:'flex', justifyContent:'space-between'}}>
+            <span>Enter to confirm search · 1/2/3 hotkeys</span>
+            <span>Esc to close</span>
+          </div>
+          {candidates.map((p, idx) => (
+            <div
+              key={p.id}
+              onClick={() => {
+                onSelectPlayer(p);
+                setSearch(p.name);
+                setIsOpen(false);
+              }}
+              onMouseEnter={() => setSelectedIndex(idx)}
+              style={{
+                padding:'8px 12px', display:'flex', alignItems:'center', justifyContent:'space-between',
+                cursor:'pointer', background: idx === selectedIndex ? T.primaryLight : 'transparent',
+                borderBottom: idx < candidates.length - 1 ? `1px solid ${T.borderLight}` : 'none',
+              }}
+            >
+              <div style={{display:'flex', alignItems:'center', gap:8}}>
+                <span style={{
+                  fontSize:11, fontWeight:700, width:16, height:16, borderRadius:8,
+                  background: idx === selectedIndex ? T.primary : T.border,
+                  color:'#fff', display:'inline-flex', alignItems:'center', justifyContent:'center'
+                }}>{idx + 1}</span>
+                <span style={{fontWeight:700, fontSize:13, color:T.text}}>{p.name}</span>
+                <PosBadge pos={p.pos} />
+                <span style={{fontSize:11, color:T.muted}}>{p.nflTeam || p.team}</span>
+              </div>
+              <div style={{display:'flex', alignItems:'center', gap:8}}>
+                <span style={{fontSize:11, color:T.muted}}>ADP {p.adp || '-'}</span>
+                {p.vorp != null && <VORPBadge vorp={p.vorp} />}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── PLAYER LIST ──────────────────────────────────────────────────────────────
 function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
   const [search,    setSearch]    = React.useState('');
@@ -565,12 +725,12 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
         padding:'10px 16px', background:T.surface, borderBottom:`1px solid ${T.border}`,
         display:'flex', gap:10, alignItems:'center', flexWrap:'wrap',
       }}>
-        <input placeholder="Search player or team…" value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{
-            flex:1, minWidth:140, padding:'7px 12px', border:`1.5px solid ${T.border}`,
-            borderRadius:T.rsm, fontSize:13, fontFamily:'inherit', color:T.text, outline:'none',
-          }} />
+        <QuickPickInput
+          players={players}
+          search={search}
+          setSearch={setSearch}
+          onSelectPlayer={(p) => setSearch(p.name)}
+        />
         <div style={{display:'flex', gap:5}}>
           {['ALL',...window.POSITIONS].map(pos => (
             <button key={pos} onClick={() => setPosFilter(pos)} style={{
@@ -771,11 +931,165 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
   );
 }
 
+// ─── PASTE DRAFT ROOM HISTORY MODAL ───────────────────────────────────────────
+function PasteDraftModal({ league, picks, allPlayers, onClose, onBatchDraft }) {
+  const [rawText, setRawText] = React.useState('');
+  const [parsedItems, setParsedItems] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+
+  const handleParse = () => {
+    if (!rawText.trim()) return;
+    setLoading(true);
+    setErr(null);
+
+    const playersPayload = (allPlayers || []).map(p => ({
+      id: p.id,
+      name: p.name,
+      pos: p.pos,
+      team: p.nflTeam || p.team,
+    }));
+
+    fetch('/api/parse-draft-text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: rawText,
+        numTeams: league.numTeams,
+        startPick: picks.length + 1,
+        players: playersPayload,
+      }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        setLoading(false);
+        if (d.error) { setErr(d.error); return; }
+        setParsedItems(d.items || []);
+      })
+      .catch(e => {
+        setLoading(false);
+        setErr(String(e));
+      });
+  };
+
+  const handleToggleConfirm = (idx) => {
+    setParsedItems(items => items.map((item, i) => i === idx ? { ...item, isConfirmed: !item.isConfirmed } : item));
+  };
+
+  const handleApply = () => {
+    const confirmed = parsedItems.filter(item => item.isConfirmed && item.matchedPlayerId);
+    if (confirmed.length === 0) return;
+    onBatchDraft(confirmed);
+    onClose();
+  };
+
+  const confidenceBadge = (conf) => {
+    const map = {
+      HIGH: { bg: T.greenLight, fg: T.green, label: 'High' },
+      MEDIUM: { bg: '#fef3c7', fg: '#92400e', label: 'Med' },
+      LOW: { bg: T.redLight, fg: T.red, label: 'Low' },
+      UNMATCHED: { bg: T.borderLight, fg: T.muted, label: 'Unmatched' },
+    };
+    const c = map[conf] || map.UNMATCHED;
+    return (
+      <span style={{
+        background: c.bg, color: c.fg, borderRadius: 4, padding: '2px 6px',
+        fontSize: 10, fontWeight: 700, display: 'inline-block',
+      }}>{c.label}</span>
+    );
+  };
+
+  return (
+    <Modal title="Paste Draft Room History" onClose={onClose} width={760}>
+      <div style={{display:'flex', flexDirection:'column', gap:14}}>
+        <div style={{fontSize:12, color:T.muted, lineHeight:1.4}}>
+          Paste copied text from ESPN, Yahoo, Sleeper, or a list of player names. The parser will map picks sequentially starting from pick <strong>#{picks.length + 1}</strong>.
+        </div>
+
+        <textarea
+          rows={5}
+          placeholder="Paste draft room log text here..."
+          value={rawText}
+          onChange={e => setRawText(e.target.value)}
+          style={{
+            width:'100%', padding:10, border:`1.5px solid ${T.border}`, borderRadius:T.rsm,
+            fontSize:12, fontFamily:'DM Mono, monospace', color:T.text, outline:'none',
+          }}
+        />
+
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+          <Btn variant="primary" size="sm" onClick={handleParse} disabled={loading || !rawText.trim()}>
+            {loading ? 'Parsing...' : 'Parse & Preview Draft Picks'}
+          </Btn>
+          {err && <span style={{fontSize:12, color:T.red}}>⚠ {err}</span>}
+        </div>
+
+        {parsedItems.length > 0 && (
+          <div style={{marginTop:10, borderTop:`1px solid ${T.border}`, paddingTop:12}}>
+            <div style={{fontSize:13, fontWeight:700, color:T.text, marginBottom:8}}>
+              Parsed Pick Preview ({parsedItems.filter(i=>i.isConfirmed).length}/{parsedItems.length} confirmed)
+            </div>
+
+            <div style={{maxHeight:260, overflowY:'auto', border:`1px solid ${T.borderLight}`, borderRadius:T.rsm}}>
+              <table style={{width:'100%', borderCollapse:'collapse', fontSize:11}}>
+                <thead>
+                  <tr style={{background:T.surfaceAlt, borderBottom:`1px solid ${T.borderLight}`, textAlign:'left'}}>
+                    <th style={{padding:6}}>CONFIRM</th>
+                    <th style={{padding:6}}>PICK</th>
+                    <th style={{padding:6}}>TEAM</th>
+                    <th style={{padding:6}}>MATCHED PLAYER</th>
+                    <th style={{padding:6}}>MATCH</th>
+                    <th style={{padding:6}}>ORIGINAL TEXT</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parsedItems.map((item, idx) => (
+                    <tr key={idx} style={{
+                      borderBottom:`1px solid ${T.borderLight}`,
+                      background: item.isConfirmed ? 'rgba(58,91,239,.04)' : 'transparent',
+                    }}>
+                      <td style={{padding:6, textAlign:'center'}}>
+                        <input
+                          type="checkbox"
+                          checked={!!item.isConfirmed}
+                          disabled={!item.matchedPlayerId}
+                          onChange={() => handleToggleConfirm(idx)}
+                        />
+                      </td>
+                      <td style={{padding:6, fontWeight:700, fontFamily:'DM Mono, monospace'}}>#{item.pickNum}</td>
+                      <td style={{padding:6, color:T.muted}}>T{item.teamNum}</td>
+                      <td style={{padding:6, fontWeight:600, color: item.matchedPlayerId ? T.text : T.muted}}>
+                        {item.matchedPlayerName} {item.matchedPlayerPos && <PosBadge pos={item.matchedPlayerPos} />}
+                      </td>
+                      <td style={{padding:6}}>{confidenceBadge(item.confidence)}</td>
+                      <td style={{padding:6, color:T.muted, fontSize:10, fontFamily:'DM Mono, monospace', maxWidth:220, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                        {item.rawText}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{marginTop:14, display:'flex', justifyContent:'flex-end', gap:10}}>
+              <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
+              <Btn variant="green" size="sm" onClick={handleApply} disabled={parsedItems.filter(i=>i.isConfirmed && i.matchedPlayerId).length === 0}>
+                Apply {parsedItems.filter(i=>i.isConfirmed && i.matchedPlayerId).length} Confirmed Picks
+              </Btn>
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 // ─── DRAFT SCREEN ─────────────────────────────────────────────────────────────
 function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, onAddPick, onUndoPick, onResetPicks, onReplacePicks, onUpdateLeague, onRefreshPlayers }) {
   const [showDraftBoard, setShowDraftBoard] = React.useState(false);
   const [showDrafted,    setShowDrafted]    = React.useState(false);
   const [showOpponents,  setShowOpponents]  = React.useState(true);
+  const [showPasteModal, setShowPasteModal] = React.useState(false);
   const [hint,           setHint]           = React.useState('');
   const [showPullModal,  setShowPullModal]  = React.useState(false);
   const [showAuction,    setShowAuction]    = React.useState(false);
@@ -1000,6 +1314,15 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
       .catch(() => { setSaveMsg('Load failed'); setTimeout(() => setSaveMsg(null), 2500); });
   };
 
+  const handleBatchDraft = (confirmedItems) => {
+    let count = picks.length;
+    confirmedItems.forEach(item => {
+      count++;
+      const team = getSnakeTeam(count, league.numTeams);
+      onAddPick({ pickNum: count, teamNum: team, playerId: item.matchedPlayerId });
+    });
+  };
+
   const handleExportLog = () => {
     const playerMap = {};
     allPlayers.forEach(p => { playerMap[p.id] = { name: p.name, pos: p.pos }; });
@@ -1055,6 +1378,7 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
             </div>
           </div>
           <Btn variant="green" size="sm" onClick={() => setShowPullModal(true)}>Pull Data</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => setShowPasteModal(true)}>Paste History</Btn>
           <Btn variant="ghost" size="sm" onClick={() => setShowFreeAgents(true)}>Free Agents</Btn>
           <Btn variant="ghost" size="sm" onClick={() => setShowAuction(true)}>Auction $</Btn>
           <Btn variant="ghost" size="sm" onClick={handleSave}>
@@ -1132,6 +1456,15 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
         <DraftBoardModal
           league={league} picks={picks} allPlayers={enriched}
           onClose={()=>setShowDraftBoard(false)}
+        />
+      )}
+      {showPasteModal && (
+        <PasteDraftModal
+          league={league}
+          picks={picks}
+          allPlayers={enriched}
+          onClose={() => setShowPasteModal(false)}
+          onBatchDraft={handleBatchDraft}
         />
       )}
       {showPullModal && (

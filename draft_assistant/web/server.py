@@ -19,6 +19,7 @@ from ..models import DraftState, LeagueConfig
 from ..profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from ..providers.base import build_provider
 from ..free_agents import free_agent_recommendations
+from ..platform_sync import synced_rosters_to_picks
 from ..rollout import rollout_values
 from ..sample_data import sample_players
 from ..scoring import fantasy_points
@@ -313,6 +314,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_suggest()
         elif self.path == "/api/free-agents":
             self._handle_free_agents()
+        elif self.path == "/api/sync-league":
+            self._handle_sync_league()
         elif self.path == "/api/import-espn":
             self._handle_import_espn()
         elif self.path == "/api/yahoo/connect":
@@ -327,6 +330,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_load_draft()
         elif self.path == "/api/export-log":
             self._handle_export_log()
+        elif self.path == "/api/parse-draft-text":
+            self._handle_parse_draft_text()
         else:
             self._send_json({"error": "not found"}, 404)
 
@@ -527,6 +532,55 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
+    def _handle_sync_league(self):
+        """Sync provider rosters into local synthetic picks for one web league."""
+        try:
+            body = self._read_body()
+            league = body.get("league") or {}
+            if not isinstance(league, dict):
+                self._send_json({"error": "league must be an object"}, 400)
+                return
+            platform = str(league.get("platform") or "").lower()
+            players, _config = _load_players(self.profile)
+
+            if platform == "yahoo" or league.get("yahooLeagueKey"):
+                league_key = str(league.get("yahooLeagueKey") or body.get("leagueKey") or "").strip()
+                if not league_key:
+                    self._send_json({"error": "Yahoo league is missing yahooLeagueKey"}, 400)
+                    return
+                from ..importers import yahoo
+                rosters = yahoo.fetch_league_rosters(self._yahoo_access_token(), league_key)
+                source = "Yahoo"
+            elif platform == "espn" or league.get("espnLeagueId"):
+                league_id = str(league.get("espnLeagueId") or body.get("leagueId") or "").strip()
+                if not league_id:
+                    self._send_json({"error": "ESPN league is missing espnLeagueId"}, 400)
+                    return
+                from ..importers.free_sources import default_projection_season, fetch_espn_rosters
+                season = int(league.get("season") or body.get("season") or 0) or default_projection_season()
+                rosters = fetch_espn_rosters(
+                    season,
+                    league_id,
+                    espn_s2=body.get("espnS2") or league.get("espnS2"),
+                    swid=body.get("swid") or league.get("swid"),
+                )
+                source = "ESPN"
+            else:
+                self._send_json({"error": "Sync supports imported ESPN or Yahoo leagues"}, 400)
+                return
+
+            result = synced_rosters_to_picks(rosters, players, league)
+            result.update({
+                "ok": True,
+                "source": source,
+                "leagueId": league.get("id"),
+                "leagueName": league.get("name"),
+                "rostered": sum(team["players"] for team in result["teams"]),
+            })
+            self._send_json(result)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
     def _handle_import_espn(self):
         """Read a public ESPN league's settings to auto-fill a league in the UI.
 
@@ -570,6 +624,20 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     def _yahoo_save(self, data: dict) -> None:
         from ..storage import atomic_write_json
         atomic_write_json(self._yahoo_store_path(), data)
+
+    def _yahoo_access_token(self) -> str:
+        from ..importers import yahoo
+        data = self._yahoo_load()
+        token = data.get("token") or {}
+        if not token.get("access_token"):
+            raise RuntimeError("Authorize with Yahoo first")
+        if yahoo.token_is_expired(token):
+            token = yahoo.refresh_access_token(
+                data["client_id"], data["client_secret"], token["refresh_token"],
+                data.get("redirect_uri", yahoo.DEFAULT_REDIRECT))
+            data["token"] = token
+            self._yahoo_save(data)
+        return token["access_token"]
 
     def _handle_yahoo_status(self):
         """Report whether Yahoo credentials/token are already saved locally."""
@@ -637,17 +705,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 self._send_json({"error": "leagueKey required"}, 400)
                 return
             data = self._yahoo_load()
-            token = data.get("token") or {}
-            if not token.get("access_token"):
+            if not (data.get("token") or {}).get("access_token"):
                 self._send_json({"error": "Authorize with Yahoo first"}, 400)
                 return
-            if yahoo.token_is_expired(token):
-                token = yahoo.refresh_access_token(
-                    data["client_id"], data["client_secret"], token["refresh_token"],
-                    data.get("redirect_uri", yahoo.DEFAULT_REDIRECT))
-                data["token"] = token
-                self._yahoo_save(data)
-            info = yahoo.fetch_league(token["access_token"], league_key)
+            info = yahoo.fetch_league(self._yahoo_access_token(), league_key)
             rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
             info["scoringType"] = "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"
             self._send_json(info)
@@ -865,6 +926,38 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body_bytes)))
             self.end_headers()
             self.wfile.write(body_bytes)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    # ── parse draft room text (paste modal) ────────────────────────────────
+
+    def _handle_parse_draft_text(self):
+        try:
+            body = self._read_body()
+            raw_text = str(body.get("text") or "").strip()
+            num_teams = int(body.get("numTeams") or 12)
+            start_pick = int(body.get("startPick") or 1)
+
+            players_in_body = body.get("players")
+            if isinstance(players_in_body, list) and len(players_in_body) > 0:
+                available_players = players_in_body
+            else:
+                loaded, _ = _load_players(self.profile)
+                available_players = [{
+                    "id": p.key(),
+                    "name": p.name,
+                    "pos": p.position,
+                    "team": p.team or "",
+                } for p in loaded]
+
+            from ..draft_paste_parser import parse_draft_text
+            parsed_items = parse_draft_text(
+                raw_text=raw_text,
+                all_players=available_players,
+                num_teams=num_teams,
+                start_pick=start_pick,
+            )
+            self._send_json({"items": parsed_items, "totalParsed": len(parsed_items)})
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
