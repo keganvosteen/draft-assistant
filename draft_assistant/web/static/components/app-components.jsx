@@ -307,6 +307,104 @@ function Select({ value, onChange, options, style={} }) {
   );
 }
 
+// Draft-order + "which team is mine" editor. teamNames is stored in DRAFT-SLOT
+// order (index i == slot i+1 == snake seat), and draftPosition points at the
+// owner's slot. Imports (ESPN/Yahoo) arrive in the platform's own order, which
+// is NOT draft order — so the owner reorders here and marks their team by name
+// instead of guessing a raw slot number.
+function DraftOrderEditor({ numTeams, teamNames, draftPosition, onChange }) {
+  const names = Array.from({ length: numTeams }, (_, i) => (teamNames || [])[i] || '');
+  const [pasteOpen, setPasteOpen] = React.useState(false);
+
+  const setName = (i, v) => {
+    const next = names.slice(); next[i] = v;
+    onChange({ teamNames: next });
+  };
+  const swap = (i, j) => {
+    if (j < 0 || j >= numTeams) return;
+    const next = names.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    // Keep "Me" pinned to the same team as it moves between slots.
+    let dp = draftPosition;
+    if (draftPosition === i + 1) dp = j + 1;
+    else if (draftPosition === j + 1) dp = i + 1;
+    onChange({ teamNames: next, draftPosition: dp });
+  };
+  const bulkPaste = text =>
+    onChange({ teamNames: text.split('\n').map(s => s.trim()).slice(0, numTeams) });
+
+  const arrow = disabled => ({
+    width:24, height:24, lineHeight:'20px', textAlign:'center', padding:0,
+    border:`1.5px solid ${T.border}`, borderRadius:T.rxs, background:T.surface,
+    color: disabled ? T.borderLight : T.muted, cursor: disabled ? 'default' : 'pointer',
+    fontFamily:'inherit', fontSize:12,
+  });
+
+  return (
+    <div>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:8}}>
+        <div style={{fontSize:12, fontWeight:700, color:T.muted, letterSpacing:.5}}>
+          DRAFT ORDER · MY TEAM
+        </div>
+        <button type="button" onClick={() => setPasteOpen(o => !o)} style={{
+          border:'none', background:'none', color:T.primary, cursor:'pointer',
+          fontFamily:'inherit', fontSize:12, fontWeight:600, padding:0,
+        }}>{pasteOpen ? 'Close paste' : 'Paste list'}</button>
+      </div>
+
+      <div style={{display:'flex', flexDirection:'column', gap:6}}>
+        {names.map((nm, i) => {
+          const isMe = draftPosition === i + 1;
+          return (
+            <div key={i} style={{
+              display:'flex', alignItems:'center', gap:8, padding:'6px 8px', borderRadius:T.rsm,
+              border:`1.5px solid ${isMe ? T.primary : T.border}`,
+              background: isMe ? T.primaryLight : T.surface,
+            }}>
+              <span style={{width:20, textAlign:'center', fontSize:12, fontWeight:700, color:T.muted}}>{i + 1}</span>
+              <input value={nm} onChange={e => setName(i, e.target.value)} placeholder={`Team ${i + 1}`}
+                style={{
+                  flex:1, minWidth:0, padding:'6px 10px', border:`1.5px solid ${T.border}`,
+                  borderRadius:T.rxs, fontSize:13, color:T.text, background:T.surface,
+                  fontFamily:'inherit', outline:'none',
+                }} />
+              <button type="button" title="Move up" onClick={() => swap(i, i - 1)} disabled={i === 0} style={arrow(i === 0)}>↑</button>
+              <button type="button" title="Move down" onClick={() => swap(i, i + 1)} disabled={i === numTeams - 1} style={arrow(i === numTeams - 1)}>↓</button>
+              <button type="button" onClick={() => onChange({ draftPosition: i + 1 })} style={{
+                padding:'5px 11px', borderRadius:T.rxs, cursor:'pointer', fontFamily:'inherit',
+                fontSize:12, fontWeight:700, whiteSpace:'nowrap',
+                border:`1.5px solid ${isMe ? T.primary : T.border}`,
+                background: isMe ? T.primary : T.surface,
+                color: isMe ? '#fff' : T.muted,
+              }}>{isMe ? '● ME' : 'Me'}</button>
+            </div>
+          );
+        })}
+      </div>
+
+      {pasteOpen && (
+        <textarea
+          defaultValue={(teamNames || []).join('\n')}
+          onChange={e => bulkPaste(e.target.value)}
+          placeholder={'One team name per line — fills the slots above top-to-bottom.'}
+          rows={Math.min(numTeams, 6)}
+          style={{
+            width:'100%', boxSizing:'border-box', marginTop:8, padding:'8px 12px',
+            border:`1.5px solid ${T.border}`, borderRadius:T.rsm, fontSize:13, color:T.text,
+            background:T.surface, fontFamily:'inherit', outline:'none', resize:'vertical',
+          }}
+        />
+      )}
+
+      <div style={{fontSize:11, color:T.muted, marginTop:6, lineHeight:1.45}}>
+        Order = draft slot 1…N (snake seats). Reorder to match your draft, then mark your own
+        team with <b style={{color:T.text}}>Me</b>. Imports auto-fill names in platform order — drag
+        them into draft order here.
+      </div>
+    </div>
+  );
+}
+
 // ─── LEAGUE SETUP MODAL ──────────────────────────────────────────────────────
 function LeagueSetupModal({ league, onSave, onClose }) {
   const [form, setForm] = React.useState(league
@@ -499,10 +597,19 @@ function LeagueSetupModal({ league, onSave, onClose }) {
           <Select value={form.numTeams} onChange={e=>set('numTeams',parseInt(e.target.value))}
             options={[8,10,12,14,16,18,20].map(n=>({value:n,label:`${n} teams`}))} />
         </Field>
-        <Field label="My Draft Position">
-          <Input type="number" value={form.draftPosition}
-            onChange={e=>set('draftPosition',parseInt(e.target.value)||1)}
-            min={1} max={form.numTeams} />
+        <Field label="My Team">
+          {(form.teamNames || []).some(Boolean) ? (
+            <Select value={form.draftPosition}
+              onChange={e=>set('draftPosition',parseInt(e.target.value)||1)}
+              options={Array.from({length: form.numTeams}, (_, i) => {
+                const nm = (form.teamNames || [])[i];
+                return { value: i+1, label: nm ? `${i+1} — ${nm}` : `${i+1} — (slot ${i+1})` };
+              })} />
+          ) : (
+            <Input type="number" value={form.draftPosition}
+              onChange={e=>set('draftPosition',parseInt(e.target.value)||1)}
+              min={1} max={form.numTeams} />
+          )}
         </Field>
       </div>
 
@@ -565,21 +672,12 @@ function LeagueSetupModal({ league, onSave, onClose }) {
       </div>
 
       <div style={{marginTop:20}}>
-        <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:8, letterSpacing:.5}}>
-          OPPONENT TEAM NAMES (optional)
-        </div>
-        <textarea
-          value={(form.teamNames || []).join('\n')}
-          onChange={e => set('teamNames', e.target.value.split('\n').map(s => s.trim()))}
-          placeholder={'One team name per line (order = draft slot 1…N). Labels the Opponents panel. Auto-filled when you import from ESPN/Yahoo.'}
-          rows={4}
-          style={{width:'100%', boxSizing:'border-box', padding:'8px 12px', border:`1.5px solid ${T.border}`,
-            borderRadius:T.rsm, fontSize:13, color:T.text, background:T.surface, fontFamily:'inherit',
-            outline:'none', resize:'vertical'}}
+        <DraftOrderEditor
+          numTeams={form.numTeams}
+          teamNames={form.teamNames}
+          draftPosition={form.draftPosition}
+          onChange={patch => setForm(f => ({ ...f, ...patch }))}
         />
-        <div style={{fontSize:11, color:T.muted, marginTop:4}}>
-          {(form.teamNames || []).filter(Boolean).length} names entered
-        </div>
       </div>
 
       <div style={{display:'flex', justifyContent:'flex-end', gap:10, marginTop:24, paddingTop:20, borderTop:`1px solid ${T.border}`}}>
