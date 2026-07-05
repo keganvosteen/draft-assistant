@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import traceback
 import webbrowser
 from functools import partial
@@ -199,6 +200,25 @@ def _load_players(profile: str):
     return players, config
 
 
+def _prune_tasks():
+    """Remove finished tasks older than 10 minutes or trim when task count exceeds 50."""
+    now = time.time()
+    cutoff = now - 600
+    expired = [
+        tid for tid, task in _tasks.items()
+        if task["status"] in ("done", "error") and task.get("created_at", now) < cutoff
+    ]
+    for tid in expired:
+        _tasks.pop(tid, None)
+    if len(_tasks) > 50:
+        finished = [
+            tid for tid, task in _tasks.items()
+            if task["status"] in ("done", "error")
+        ]
+        for tid in finished[: len(_tasks) - 50]:
+            _tasks.pop(tid, None)
+
+
 def _run_task(task_id: str, fn, *args, **kwargs):
     """Run *fn* in a background thread, storing result in _tasks."""
     def _worker():
@@ -213,7 +233,13 @@ def _run_task(task_id: str, fn, *args, **kwargs):
                 _tasks[task_id]["error"] = f"{exc}\n{traceback.format_exc()}"
 
     with _task_lock:
-        _tasks[task_id] = {"status": "running", "result": None, "error": None}
+        _prune_tasks()
+        _tasks[task_id] = {
+            "status": "running",
+            "result": None,
+            "error": None,
+            "created_at": time.time(),
+        }
     threading.Thread(target=_worker, daemon=True).start()
 
 
@@ -715,29 +741,36 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
+    def _get_draft_state(self) -> dict:
+        paths = ensure_profile(self.profile)
+        state = load_state(paths.state_path)
+        return {
+            "picks": state.picks,
+            "my_picks": state.my_picks,
+            "my_team_name": state.my_team_name,
+            "league_teams": state.league_teams,
+        }
+
+    def _save_draft_state(self) -> dict:
+        body = self._read_body()
+        paths = ensure_profile(self.profile)
+        state = load_state(paths.state_path)
+        if "picks" in body:
+            state.picks = self._picks_list(body["picks"])
+        if "my_picks" in body:
+            state.my_picks = self._picks_list(body["my_picks"])
+        save_state(state, paths.state_path)
+        return {"ok": True, "path": str(paths.state_path)}
+
     def _handle_get_state(self):
         try:
-            paths = ensure_profile(self.profile)
-            state = load_state(paths.state_path)
-            self._send_json({
-                "picks": state.picks,
-                "my_picks": state.my_picks,
-                "my_team_name": state.my_team_name,
-                "league_teams": state.league_teams,
-            })
+            self._send_json(self._get_draft_state())
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
     def _handle_save_state(self):
         try:
-            body = self._read_body()
-            paths = ensure_profile(self.profile)
-            state = load_state(paths.state_path)
-            if "picks" in body:
-                state.picks = self._picks_list(body["picks"])
-            if "my_picks" in body:
-                state.my_picks = self._picks_list(body["my_picks"])
-            save_state(state, paths.state_path)
+            self._save_draft_state()
             self._send_json({"ok": True})
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
@@ -870,32 +903,15 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
 
     def _handle_save_draft(self):
         try:
-            body = self._read_body()
-            paths = ensure_profile(self.profile)
-            state = load_state(paths.state_path)
-            if "picks" in body:
-                state.picks = self._picks_list(body["picks"])
-            if "my_picks" in body:
-                state.my_picks = self._picks_list(body["my_picks"])
-            save_state(state, paths.state_path)
-            self._send_json({"ok": True, "path": str(paths.state_path)})
+            res = self._save_draft_state()
+            self._send_json(res)
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
     def _handle_load_draft(self):
-        try:
-            paths = ensure_profile(self.profile)
-            state = load_state(paths.state_path)
-            self._send_json({
-                "picks": state.picks,
-                "my_picks": state.my_picks,
-                "my_team_name": state.my_team_name,
-                "league_teams": state.league_teams,
-            })
-        except Exception as exc:
-            self._send_json({"error": str(exc)}, 500)
+        self._handle_get_state()
 
     # ── export draft log ──────────────────────────────────────────────────
 
