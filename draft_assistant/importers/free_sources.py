@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import re
+import statistics
 from dataclasses import dataclass
 from datetime import date
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -117,6 +118,7 @@ def pull_free_data(
 
     reports: List[SourceReport] = []
     merged: Dict[str, Player] = {}
+    proj_samples: Dict[str, List[Dict[str, float]]] = {}
     sleeper_players: Dict[str, dict] = {}
     nflverse_players: Dict[str, dict] = {}
 
@@ -133,7 +135,7 @@ def pull_free_data(
             sleeper_players,
             adp_format,
         )
-        _merge_many(merged, sleeper_projection_players, "sleeper_projections")
+        _merge_many(merged, sleeper_projection_players, "sleeper_projections", proj_samples)
         reports.append(SourceReport("Sleeper projections", len(sleeper_projection_players), detail=str(season)))
     except Exception as exc:
         reports.append(SourceReport("Sleeper projections", ok=False, detail=str(exc)))
@@ -166,7 +168,7 @@ def pull_free_data(
     if include_fftoday:
         try:
             fftoday_players = fetch_all_fftoday(season)
-            _merge_many(merged, fftoday_players, "fftoday")
+            _merge_many(merged, fftoday_players, "fftoday", proj_samples)
             reports.append(SourceReport("FFToday projections", len(fftoday_players), detail=str(season)))
         except Exception as exc:
             reports.append(SourceReport("FFToday projections", ok=False, detail=str(exc)))
@@ -174,12 +176,22 @@ def pull_free_data(
     if espn_league_id:
         try:
             espn_players = _fetch_espn_players(season, espn_league_id, adp_format)
-            _merge_many(merged, espn_players, "espn")
+            _merge_many(merged, espn_players, "espn", proj_samples)
             reports.append(SourceReport("ESPN Fantasy API", len(espn_players), detail=str(espn_league_id)))
         except Exception as exc:
             reports.append(SourceReport("ESPN Fantasy API", ok=False, detail=str(exc)))
     else:
         reports.append(SourceReport("ESPN Fantasy API", 0, ok=False, detail="skipped; pass --espn-league-id for a public league"))
+
+    # Combine projection sources by per-stat median (scoring-agnostic). For a
+    # player only one source projected, that source stands; where two or more
+    # overlap (e.g. Sleeper + FFToday), each stat becomes their consensus.
+    for key, player in merged.items():
+        samples = proj_samples.get(key)
+        if samples and len(samples) > 1:
+            player.projections = _consensus_projection(samples)
+            player.metadata["projection_source"] = "consensus"
+            player.metadata["projection_sources_n"] = len(samples)
 
     _fill_missing_byes(merged.values())
 
@@ -236,11 +248,14 @@ def _fill_missing_byes(players: Iterable[Player]) -> None:
                 player.bye_week = bye
 
 
-def _fetch_json(url: str, timeout: int = 30) -> object:
-    req = Request(url, headers={
+def _fetch_json(url: str, timeout: int = 30, extra_headers: Optional[dict] = None) -> object:
+    headers = {
         "User-Agent": "draft-assistant/1.0 (+https://github.com/)",
         "Accept": "application/json,text/plain,*/*",
-    })
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    req = Request(url, headers=headers)
     with urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -451,23 +466,50 @@ def _enrich_from_nflverse_players(players: Dict[str, Player], nflverse_players: 
         _add_source(player, "nflverse_players")
 
 
+# ESPN encodes projections as numeric stat IDs (decoded against a live league).
+ESPN_STAT_IDS = {
+    "3": "pass_yd", "4": "pass_td", "20": "pass_int", "19": "pass_2pt",
+    "24": "rush_yd", "25": "rush_td", "26": "rush_2pt",
+    "42": "rec_yd", "43": "rec_td", "53": "rec", "44": "rec_2pt",
+}
+
+
 def _fetch_espn_players(season: int, league_id: str, adp_format: str) -> List[Player]:
-    query = urlencode({"view": ["kona_player_info", "mDraftDetail"]}, doseq=True)
-    url = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}/segments/0/leagues/{league_id}?{query}"
-    data = _fetch_json(url, timeout=45)
+    """Pull a public ESPN league's player projections for ``season``.
+
+    ``kona_player_info`` returns an arbitrary handful of (mostly empty) players
+    unless an ``x-fantasy-filter`` header asks for a sorted slice — so we request
+    the ~500 most-owned (the draftable universe). Projections arrive as numeric
+    stat IDs (see ESPN_STAT_IDS); K/DST use a different set and are left to
+    Sleeper. Works for public leagues with just the id; private leagues would
+    additionally need espn_s2 / SWID cookies (not handled here).
+    """
+    url = (
+        "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
+        f"{season}/segments/0/leagues/{league_id}?view=kona_player_info"
+    )
+    flt = json.dumps({"players": {"limit": 500,
+                                  "sortPercOwned": {"sortPriority": 1, "sortAsc": False}}})
+    data = _fetch_json(url, timeout=45, extra_headers={"x-fantasy-filter": flt})
+    rows = data.get("players", []) if isinstance(data, dict) else []
     players: List[Player] = []
-    for row in _walk_espn_players(data):
-        player = row.get("player", {}) if isinstance(row, dict) else {}
-        position = _espn_position(player.get("defaultPositionId") or player.get("eligibleSlots"))
-        if position not in {"QB", "RB", "WR", "TE", "K", "DST"}:
+    for row in rows:
+        if not isinstance(row, dict):
             continue
-        stats = _espn_projection_stats(player)
-        # Only overall draft rank is comparable to ADP; positionalRanking
-        # (e.g. WR12) would poison the ADP merge, which keeps the minimum.
-        adp = _valid_adp(_nested_get(row, ["draftRanksByRankType", "STANDARD", "rank"]))
+        player = row.get("player", {})
+        position = _espn_position(player.get("defaultPositionId"))
+        if position not in {"QB", "RB", "WR", "TE"}:
+            continue
+        stats = _espn_projection_stats(player, season)
+        if not _has_projection_value(stats):
+            continue
+        adp = _valid_adp(
+            _nested_get(player, ["draftRanksByRankType", "PPR", "rank"])
+            or _nested_get(player, ["draftRanksByRankType", "STANDARD", "rank"])
+        )
         players.append(Player(
             id=f"espn:{player.get('id') or player.get('fullName')}",
-            name=player.get("fullName") or player.get("name") or "",
+            name=player.get("fullName") or "",
             position=position,
             team=_espn_team(player.get("proTeamId")),
             adp=adp,
@@ -475,38 +517,89 @@ def _fetch_espn_players(season: int, league_id: str, adp_format: str) -> List[Pl
             metadata=_clean_metadata({
                 "espn_id": player.get("id"),
                 "injury_status": player.get("injuryStatus"),
+                "projection_source": "ESPN",
                 "sources": ["espn"],
             }),
         ))
-    return [p for p in players if p.name and (_has_projection_value(p.projections) or p.adp is not None)]
+    return [p for p in players if p.name]
 
 
-def _walk_espn_players(data: object) -> Iterable[dict]:
-    if isinstance(data, dict):
-        if isinstance(data.get("players"), list):
-            for row in data["players"]:
-                if isinstance(row, dict):
-                    yield row
-        for value in data.values():
-            yield from _walk_espn_players(value)
-    elif isinstance(data, list):
-        for item in data:
-            yield from _walk_espn_players(item)
+# ESPN lineup slot IDs -> our roster keys. Flex variants map to TYPED flex keys
+# (models.FLEX_TYPES) so eligibility is preserved — a WR/TE slot (5) must not be
+# fillable by an RB, a superflex (7) can take a QB, etc.
+_ESPN_SLOT_TO_ROSTER = {
+    0: "QB", 2: "RB", 4: "WR", 6: "TE", 16: "DST", 17: "K",
+    20: "BN", 21: "IR",
+    23: "FLEX", 3: "RBWR", 5: "WRTE", 7: "SUPERFLEX",
+}
 
 
-def _espn_projection_stats(player: dict) -> Dict[str, float]:
-    out: Dict[str, float] = {}
+def fetch_espn_league(season: int, league_id: str) -> Dict[str, object]:
+    """Read a public ESPN league's settings: teams, roster, scoring, team names.
+
+    Returns a dict the web LeagueSetup can consume to auto-fill a league. Public
+    leagues need only the id; private leagues would need espn_s2 / SWID cookies.
+    """
+    url = (
+        "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
+        f"{season}/segments/0/leagues/{league_id}?view=mSettings&view=mTeam"
+    )
+    data = _fetch_json(url, timeout=45)
+    settings = data.get("settings", {}) if isinstance(data, dict) else {}
+
+    roster: Dict[str, int] = {}
+    slot_counts = (settings.get("rosterSettings") or {}).get("lineupSlotCounts") or {}
+    for slot, count in slot_counts.items():
+        key = _ESPN_SLOT_TO_ROSTER.get(_to_int(slot))
+        if key and count:
+            roster[key] = roster.get(key, 0) + int(count)
+    # Make standard editor slots explicit (0 if absent) so the imported roster
+    # overrides the form defaults rather than inheriting them — e.g. a league
+    # with no dedicated TE slot must show TE 0, not the default 1.
+    for key in ("QB", "RB", "WR", "TE", "FLEX", "K", "DST", "BN"):
+        roster.setdefault(key, 0)
+
+    scoring: Dict[str, float] = {}
+    for item in (settings.get("scoringSettings") or {}).get("scoringItems") or []:
+        key = ESPN_STAT_IDS.get(str(item.get("statId")))
+        if not key:
+            continue
+        pts = item.get("points")
+        if pts is None:
+            overrides = item.get("pointsOverrides") or {}
+            pts = next(iter(overrides.values()), None)
+        if pts is not None:
+            scoring[key] = float(pts)
+
+    team_names: List[str] = []
+    for team in data.get("teams") or []:
+        name = team.get("name") or f"{team.get('location', '')} {team.get('nickname', '')}".strip()
+        team_names.append(name or f"Team {team.get('id')}")
+
+    return {
+        "name": settings.get("name") or f"ESPN {league_id}",
+        "numTeams": int(settings.get("size") or len(team_names) or 10),
+        "rosterSlots": roster,
+        "scoring": scoring,
+        "teamNames": team_names,
+    }
+
+
+def _espn_projection_stats(player: dict, season: int) -> Dict[str, float]:
+    """Map ESPN's full-season projection (statSourceId=1, split=0) to app keys."""
     for stat_row in player.get("stats") or []:
         if not isinstance(stat_row, dict):
             continue
-        if stat_row.get("statSourceId") != 1:
+        if stat_row.get("statSourceId") != 1 or stat_row.get("statSplitTypeId") != 0:
             continue
-        applied = stat_row.get("appliedStats") or {}
-        if isinstance(applied, dict):
-            for key, value in applied.items():
-                if key in APP_STAT_KEYS:
-                    out[key] = _to_float(value)
-    return out
+        if stat_row.get("seasonId") != season:
+            continue
+        raw = stat_row.get("stats") or {}
+        out = {ESPN_STAT_IDS[str(k)]: _to_float(v)
+               for k, v in raw.items() if str(k) in ESPN_STAT_IDS}
+        if out:
+            return out
+    return {}
 
 
 def _github_release_asset_url(tag: str, asset_name: str) -> str:
@@ -584,11 +677,35 @@ def _app_stats_from_nflverse(row: dict, position: str) -> Dict[str, float]:
     return {k: v for k, v in stats.items() if v}
 
 
-def _merge_many(merged: Dict[str, Player], players: Iterable[Player], source: str) -> None:
+def _consensus_projection(samples: List[Dict[str, float]]) -> Dict[str, float]:
+    """Per-stat median across projection sources (Sleeper / FFToday / ESPN).
+
+    Operates on STAT lines, not points, so it's scoring-agnostic — the owner runs
+    two leagues with different rules, so the right product is a consensus stat
+    line that each league's scoring is then applied to. With two sources the
+    median equals their average; with three or more it's robust to one outlier.
+    """
+    by_stat: Dict[str, List[float]] = {}
+    for proj in samples:
+        for stat, val in proj.items():
+            by_stat.setdefault(stat, []).append(val)
+    return {stat: round(statistics.median(vals), 2) for stat, vals in by_stat.items() if vals}
+
+
+def _merge_many(
+    merged: Dict[str, Player],
+    players: Iterable[Player],
+    source: str,
+    proj_samples: Optional[Dict[str, List[Dict[str, float]]]] = None,
+) -> None:
     for player in players:
         if not player.name or player.position not in {"QB", "RB", "WR", "TE", "K", "DST"}:
             continue
         key = _merge_key(player)
+        # Collect each source's raw projection so projections can be combined by
+        # per-stat median at the end, instead of first-source-wins gap-fill.
+        if proj_samples is not None and _has_projection_value(player.projections):
+            proj_samples.setdefault(key, []).append(dict(player.projections))
         existing = merged.get(key)
         if existing is None:
             _add_source(player, source)

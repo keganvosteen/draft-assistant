@@ -147,5 +147,32 @@ class TestDraftAwareValues(unittest.TestCase):
             self.assertIsInstance(v.player, Player)
 
 
+class TestTypedFlex(unittest.TestCase):
+    """A WR/TE flex must not be fillable by an RB; superflex can take a QB."""
+
+    def test_wrte_flex_excludes_rb(self):
+        rb1, rb2 = _make_player("RB1", "RB"), _make_player("RB2", "RB")
+        wr1, te1 = _make_player("WR1", "WR"), _make_player("TE1", "TE")
+        pts = {rb1.key(): 300, rb2.key(): 250, wr1.key(): 200, te1.key(): 150}
+        players = [rb1, rb2, wr1, te1]
+        wrte = roster_value(players, pts, {"RB": 1, "WRTE": 1, "BN": 0})
+        flex = roster_value(players, pts, {"RB": 1, "FLEX": 1, "BN": 0})
+        # The WR/TE slot takes WR1 (200), NOT the better RB2 (250).
+        self.assertIn(wr1, wrte.starters)
+        self.assertNotIn(rb2, wrte.starters)
+        self.assertEqual(wrte.starter_value, 500.0)
+        # A plain FLEX would have grabbed RB2 instead.
+        self.assertIn(rb2, flex.starters)
+        self.assertEqual(flex.starter_value, 550.0)
+
+    def test_superflex_takes_second_qb(self):
+        qb1, qb2 = _make_player("QB1", "QB"), _make_player("QB2", "QB")
+        rb1 = _make_player("RB1", "RB")
+        pts = {qb1.key(): 400, qb2.key(): 380, rb1.key(): 250}
+        r = roster_value([qb1, qb2, rb1], pts, {"QB": 1, "SUPERFLEX": 1, "BN": 0})
+        self.assertIn(qb2, r.starters)          # superflex prefers the 2nd QB
+        self.assertEqual(r.starter_value, 780.0)
+
+
 if __name__ == "__main__":
     unittest.main()

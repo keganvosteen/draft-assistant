@@ -32,6 +32,61 @@ STANDARD_SCORING = {
     "fumbles": -2,
 }
 
+# Points-per-reception for the web LeagueSetup presets.
+_PRESET_REC = {"standard": 0.0, "ppr": 1.0, "half-ppr": 0.5}
+
+
+def scoring_for_league(league: dict, base_scoring: dict) -> dict:
+    """Overlay the web LeagueSetup scoring choice onto the league's base scoring.
+
+    Mirrors the frontend's ``calcProjection`` so the rollout engine scores
+    players exactly the way the board shows them:
+
+    * presets (standard / ppr / half-ppr) only change points-per-reception;
+    * ``custom`` maps the UI's per-category fields onto Python scoring keys
+      (yardage fields are entered as *yards-per-point*, so they're inverted);
+    * K/DST and any other base weights are preserved, so kicker/defense scoring
+      stays correct (the UI never carries those).
+
+    Returns ``base_scoring`` unchanged when no ``scoringType`` is supplied.
+    """
+    stype = league.get("scoringType")
+    if not stype:
+        return base_scoring
+    scoring = dict(base_scoring)
+    if stype in _PRESET_REC:
+        scoring["rec"] = _PRESET_REC[stype]
+        return scoring
+    if stype == "custom":
+        cs = league.get("customScoring") or {}
+
+        def per_yd(denom):
+            denom = float(denom or 0)
+            return (1.0 / denom) if denom else 0.0
+
+        two_pt = float(cs.get("twoPt", 0) or 0)
+        scoring.update({
+            "pass_yd": per_yd(cs.get("passYds")),
+            "pass_td": float(cs.get("passTD", 0) or 0),
+            "pass_int": float(cs.get("passInt", 0) or 0),
+            "rush_yd": per_yd(cs.get("rushYds")),
+            "rush_td": float(cs.get("rushTD", 0) or 0),
+            "rec_yd": per_yd(cs.get("recYds")),
+            "rec_td": float(cs.get("recTD", 0) or 0),
+            "rec": float(cs.get("reception", 0) or 0),
+            "pass_2pt": two_pt, "rush_2pt": two_pt, "rec_2pt": two_pt,
+            "fum_ret_td": float(cs.get("fumRetTD", 0) or 0),
+            "fumbles_total": float(cs.get("fumble", 0) or 0),
+            # Back-compat: leagues saved before fumbleLost existed keep the base
+            # (typically -2) penalty rather than zeroing it.
+            "fumbles": (float(cs["fumbleLost"]) if cs.get("fumbleLost") is not None
+                        else scoring.get("fumbles", -2.0)),
+        })
+        if cs.get("sackTaken"):
+            scoring["sack_taken"] = float(cs["sackTaken"])
+        return scoring
+    return base_scoring
+
 # Last-resort fallback only (a past season's byes — goes stale). Byes are
 # preferred from player data, then from per-team byes derived from that data.
 BYE_WEEKS = {
@@ -176,6 +231,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_config()
         elif self.path == "/api/state":
             self._handle_get_state()
+        elif self.path == "/api/yahoo/status":
+            self._handle_yahoo_status()
         elif self.path.startswith("/api/task/"):
             self._handle_task_status()
         else:
@@ -194,6 +251,14 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_auction()
         elif self.path == "/api/suggest":
             self._handle_suggest()
+        elif self.path == "/api/import-espn":
+            self._handle_import_espn()
+        elif self.path == "/api/yahoo/connect":
+            self._handle_yahoo_connect()
+        elif self.path == "/api/yahoo/exchange":
+            self._handle_yahoo_exchange()
+        elif self.path == "/api/yahoo/import":
+            self._handle_yahoo_import()
         elif self.path == "/api/save-draft":
             self._handle_save_draft()
         elif self.path == "/api/load-draft":
@@ -267,14 +332,16 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         slots = league.get("rosterSlots")
         if isinstance(slots, dict):
             roster.update({k: int(v) for k, v in slots.items() if v is not None})
-        scoring = config.scoring
-        if isinstance(league.get("scoring"), dict) and league["scoring"]:
-            scoring = league["scoring"]
+        scoring = scoring_for_league(league, config.scoring)
         draft = dict(config.draft or {})
         if league.get("draftPosition"):
             draft["slot"] = max(1, min(int(league["draftPosition"]), teams))
         if league.get("sims"):
             draft["rollout_sims"] = max(1, int(league["sims"]))
+        # Opponent ADP noise: the UI derives this from how many opponents are
+        # autodrafting (more autodrafters -> they follow ADP -> less noise).
+        if league.get("adpNoise") is not None:
+            draft["adp_noise"] = max(0.0, float(league["adpNoise"]))
         # Common-random-numbers keeps impact stable at modest sim counts, so the
         # web default favors responsiveness; bump via league.sims for precision.
         draft.setdefault("rollout_sims", 24)
@@ -337,6 +404,133 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             })
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_import_espn(self):
+        """Read a public ESPN league's settings to auto-fill a league in the UI.
+
+        Body: {leagueId, season?}. Returns name / numTeams / rosterSlots /
+        scoringType / teamNames / espnLeagueId for the LeagueSetup form.
+        """
+        try:
+            body = self._read_body()
+            league_id = str(body.get("leagueId") or "").strip()
+            if not league_id:
+                self._send_json({"error": "leagueId required"}, 400)
+                return
+            from ..importers.free_sources import default_projection_season, fetch_espn_league
+            season = int(body.get("season") or 0) or default_projection_season()
+            info = fetch_espn_league(season, league_id)
+            rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
+            info["scoringType"] = "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"
+            info["espnLeagueId"] = league_id
+            info["season"] = season
+            self._send_json(info)
+        except Exception as exc:
+            self._send_json({"error": f"Could not import league {league_id!r}: {exc}"}, 500)
+
+    # ── Yahoo OAuth import ────────────────────────────────────────────────
+    # Credentials + tokens are stored in the profile dir (local machine only).
+
+    def _yahoo_store_path(self) -> str:
+        paths = ensure_profile(self.profile)
+        return os.path.join(os.path.dirname(str(paths.state_path)), "yahoo.json")
+
+    def _yahoo_load(self) -> dict:
+        path = self._yahoo_store_path()
+        if os.path.exists(path):
+            try:
+                with open(path) as fh:
+                    return json.load(fh)
+            except (OSError, json.JSONDecodeError):
+                return {}
+        return {}
+
+    def _yahoo_save(self, data: dict) -> None:
+        from ..storage import atomic_write_json
+        atomic_write_json(self._yahoo_store_path(), data)
+
+    def _handle_yahoo_status(self):
+        """Report whether Yahoo credentials/token are already saved locally."""
+        try:
+            data = self._yahoo_load()
+            self._send_json({
+                "hasCredentials": bool(data.get("client_id") and data.get("client_secret")),
+                "hasToken": bool((data.get("token") or {}).get("access_token")),
+                "redirectUri": data.get("redirect_uri") or "https://localhost/",
+            })
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_yahoo_connect(self):
+        """Store/confirm Yahoo app credentials locally and return the authorize URL.
+
+        Falls back to already-saved credentials when the body omits them, so a
+        re-authorize doesn't require re-typing the Client ID/Secret.
+        """
+        try:
+            from ..importers import yahoo
+            body = self._read_body()
+            data = self._yahoo_load()
+            client_id = str(body.get("clientId") or data.get("client_id") or "").strip()
+            client_secret = str(body.get("clientSecret") or data.get("client_secret") or "").strip()
+            redirect = str(body.get("redirectUri") or data.get("redirect_uri") or yahoo.DEFAULT_REDIRECT).strip()
+            if not client_id or not client_secret:
+                self._send_json({"error": "clientId and clientSecret are required"}, 400)
+                return
+            data.update({"client_id": client_id, "client_secret": client_secret,
+                         "redirect_uri": redirect})
+            self._yahoo_save(data)
+            self._send_json({"authUrl": yahoo.auth_url(client_id, redirect)})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_yahoo_exchange(self):
+        """Exchange the pasted authorization code for tokens; list NFL leagues."""
+        try:
+            from ..importers import yahoo
+            body = self._read_body()
+            code = str(body.get("code") or "").strip()
+            data = self._yahoo_load()
+            if not data.get("client_id"):
+                self._send_json({"error": "Enter your Yahoo credentials first"}, 400)
+                return
+            if not code:
+                self._send_json({"error": "Paste the authorization code"}, 400)
+                return
+            token = yahoo.exchange_code(data["client_id"], data["client_secret"], code,
+                                        data.get("redirect_uri", yahoo.DEFAULT_REDIRECT))
+            data["token"] = token
+            self._yahoo_save(data)
+            self._send_json({"ok": True, "leagues": yahoo.list_leagues(token["access_token"])})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_yahoo_import(self):
+        """Import a chosen Yahoo league as a form-ready payload (like ESPN)."""
+        try:
+            from ..importers import yahoo
+            body = self._read_body()
+            league_key = str(body.get("leagueKey") or "").strip()
+            if not league_key:
+                self._send_json({"error": "leagueKey required"}, 400)
+                return
+            data = self._yahoo_load()
+            token = data.get("token") or {}
+            if not token.get("access_token"):
+                self._send_json({"error": "Authorize with Yahoo first"}, 400)
+                return
+            if yahoo.token_is_expired(token):
+                token = yahoo.refresh_access_token(
+                    data["client_id"], data["client_secret"], token["refresh_token"],
+                    data.get("redirect_uri", yahoo.DEFAULT_REDIRECT))
+                data["token"] = token
+                self._yahoo_save(data)
+            info = yahoo.fetch_league(token["access_token"], league_key)
+            rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
+            info["scoringType"] = "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"
+            self._send_json(info)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 

@@ -3,7 +3,9 @@ import unittest
 
 from draft_assistant.models import Player
 from draft_assistant.importers.free_sources import (
+    _consensus_projection,
     _fill_missing_byes,
+    _merge_many,
     _merge_player,
     _players_from_nflverse_stats,
     _players_from_sleeper_projection_rows,
@@ -80,6 +82,63 @@ class TestMergePlayer(unittest.TestCase):
         self.assertEqual(base.age, 25)
         self.assertEqual(base.historical_stats[2025]["rush_yd"], 1000.0)
         self.assertEqual(base.historical_stats[2024]["rush_yd"], 900.0)
+
+
+class TestConsensusProjection(unittest.TestCase):
+    def test_per_stat_median_across_sources(self):
+        out = _consensus_projection([
+            {"rush_yd": 1000.0, "rush_td": 8.0},
+            {"rush_yd": 1200.0, "rush_td": 10.0},
+            {"rush_yd": 1400.0, "rush_td": 9.0},
+        ])
+        self.assertEqual(out["rush_yd"], 1200.0)  # median of 1000/1200/1400
+        self.assertEqual(out["rush_td"], 9.0)
+
+    def test_two_sources_average(self):
+        # median of two values is their mean — a fair Sleeper+FFToday blend.
+        self.assertEqual(_consensus_projection([{"rec": 80.0}, {"rec": 90.0}])["rec"], 85.0)
+
+    def test_stat_only_one_source_has_stands(self):
+        out = _consensus_projection([{"rush_yd": 1000.0, "fumbles": -2.0}, {"rush_yd": 1100.0}])
+        self.assertEqual(out["rush_yd"], 1050.0)
+        self.assertEqual(out["fumbles"], -2.0)
+
+
+class TestMergeCollectsProjectionSamples(unittest.TestCase):
+    def test_merge_many_accumulates_then_consensus(self):
+        merged, samples = {}, {}
+        a = Player(id="a", name="Star RB", position="RB", projections={"rush_yd": 1000.0})
+        b = Player(id="b", name="Star RB", position="RB", projections={"rush_yd": 1400.0})
+        _merge_many(merged, [a], "sleeper", samples)
+        _merge_many(merged, [b], "fftoday", samples)
+        key = next(iter(samples))
+        self.assertEqual(len(samples[key]), 2)
+        self.assertEqual(_consensus_projection(samples[key])["rush_yd"], 1200.0)
+
+    def test_no_samples_dict_means_no_collection(self):
+        merged = {}
+        _merge_many(merged, [Player(id="a", name="X", position="WR", projections={"rec": 50.0})], "sleeper")
+        self.assertEqual(len(merged), 1)  # still merges fine without sample tracking
+
+
+class TestEspnProjectionStats(unittest.TestCase):
+    def test_maps_numeric_stat_ids_for_target_season_only(self):
+        from draft_assistant.importers.free_sources import _espn_projection_stats
+        player = {"stats": [
+            {"statSourceId": 0, "statSplitTypeId": 0, "seasonId": 2026, "stats": {"3": 9999}},  # actual
+            {"statSourceId": 1, "statSplitTypeId": 2, "seasonId": 2026, "stats": {"3": 1}},      # per-game split
+            {"statSourceId": 1, "statSplitTypeId": 0, "seasonId": 2025, "stats": {"3": 1}},      # wrong season
+            {"statSourceId": 1, "statSplitTypeId": 0, "seasonId": 2026,
+             "stats": {"3": 4200, "4": 30, "24": 500, "25": 6, "42": 900, "53": 80, "999": 7}},
+        ]}
+        out = _espn_projection_stats(player, 2026)
+        self.assertEqual(out["pass_yd"], 4200.0)
+        self.assertEqual(out["pass_td"], 30.0)
+        self.assertEqual(out["rush_yd"], 500.0)
+        self.assertEqual(out["rec_yd"], 900.0)
+        self.assertEqual(out["rec"], 80.0)
+        self.assertNotIn("999", out)            # unknown stat id dropped
+        self.assertNotIn("pass_yd", {k: v for k, v in out.items() if v == 9999.0})  # ignored actual
 
 
 if __name__ == "__main__":

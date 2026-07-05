@@ -45,3 +45,16 @@ class DraftState:
     def picked_set(self) -> Set[str]:
         return set(self.picks)
 
+
+# Flex roster slots → the positions eligible to fill each. Keys beyond "FLEX"
+# let a league encode constrained flex spots — e.g. a WR/TE slot that must NOT be
+# fillable by an RB — which changes positional value and draft strategy. The
+# engine fills the most-restrictive flex slots first so eligibility is respected.
+FLEX_TYPES: Dict[str, tuple] = {
+    "FLEX": ("RB", "WR", "TE"),
+    "WRTE": ("WR", "TE"),
+    "RBWR": ("RB", "WR"),
+    "SUPERFLEX": ("QB", "RB", "WR", "TE"),
+    "OP": ("QB", "RB", "WR", "TE"),
+}
+

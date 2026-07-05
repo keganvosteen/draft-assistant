@@ -2,3 +2,10 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+
+# Backtest data cache (regenerable)
+.backtest_cache/
+
+# Yahoo OAuth credentials + tokens — secrets, never commit
+yahoo.json
+**/yahoo.json

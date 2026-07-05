@@ -67,16 +67,47 @@ function withProjections(players, league) {
   return players.map(p => ({ ...p, projPts: calcProjection(p, league.scoringType, league.customScoring) }));
 }
 
+// Flex slot types (mirror of models.FLEX_TYPES): roster key -> eligible
+// positions + a short label for the roster display.
+const FLEX_TYPES_JS = {
+  FLEX:      { label: 'FLX', elig: ['RB','WR','TE'] },
+  WRTE:      { label: 'W/T', elig: ['WR','TE'] },
+  RBWR:      { label: 'R/W', elig: ['RB','WR'] },
+  SUPERFLEX: { label: 'SF',  elig: ['QB','RB','WR','TE'] },
+  OP:        { label: 'OP',  elig: ['QB','RB','WR','TE'] },
+};
+
+// Roster slot count, respecting an explicit 0 (so TE:0 != TE missing).
+function slotCount(rosterSlots, key, dflt) {
+  return rosterSlots[key] == null ? dflt : rosterSlots[key];
+}
+
+// Spread typed-flex slot counts across eligible positions for the client-side
+// VORP / needs heuristics. The server engine does the exact lineup math; this
+// just keeps the badges/needs roughly right (RB/WR likelier flex fills than TE/QB).
+function flexExpectation(rosterSlots) {
+  const add = { QB: 0, RB: 0, WR: 0, TE: 0 };
+  Object.keys(FLEX_TYPES_JS).forEach(fk => {
+    const n = rosterSlots[fk] || 0;
+    if (!n) return;
+    const elig = FLEX_TYPES_JS[fk].elig;
+    const w = {}; let tot = 0;
+    elig.forEach(pos => { w[pos] = (pos === 'RB' || pos === 'WR') ? 1.0 : 0.4; tot += w[pos]; });
+    elig.forEach(pos => { add[pos] += n * w[pos] / tot; });
+  });
+  return add;
+}
+
 function withVORP(players, league) {
   const { numTeams, rosterSlots } = league;
-  const flex = rosterSlots.FLEX || 0;
+  const fx = flexExpectation(rosterSlots);
   const repRank = {
-    QB:  Math.floor(numTeams * (rosterSlots.QB  || 1) + 1),
-    RB:  Math.floor(numTeams * ((rosterSlots.RB  || 2) + flex * 0.5) + 1),
-    WR:  Math.floor(numTeams * ((rosterSlots.WR  || 2) + flex * 0.5) + 1),
-    TE:  Math.floor(numTeams * (rosterSlots.TE  || 1) + 1),
-    K:   Math.floor(numTeams * (rosterSlots.K   || 1) + 1),
-    DST: Math.floor(numTeams * (rosterSlots.DST || 1) + 1),
+    QB:  Math.floor(numTeams * (slotCount(rosterSlots,'QB',1) + fx.QB) + 1),
+    RB:  Math.floor(numTeams * (slotCount(rosterSlots,'RB',2) + fx.RB) + 1),
+    WR:  Math.floor(numTeams * (slotCount(rosterSlots,'WR',2) + fx.WR) + 1),
+    TE:  Math.floor(numTeams * (slotCount(rosterSlots,'TE',1) + fx.TE) + 1),
+    K:   Math.floor(numTeams * slotCount(rosterSlots,'K',1) + 1),
+    DST: Math.floor(numTeams * slotCount(rosterSlots,'DST',1) + 1),
   };
   const byPos = {};
   players.forEach(p => { (byPos[p.pos] = byPos[p.pos] || []).push(p); });
@@ -104,14 +135,14 @@ function getCurrentRoundPick(totalPicks, numTeams) {
 function getRosterNeeds(myPlayers, rosterSlots) {
   const counts = {};
   myPlayers.forEach(p => { counts[p.pos] = (counts[p.pos] || 0) + 1; });
-  const flex = rosterSlots.FLEX || 0;
+  const fx = flexExpectation(rosterSlots);
   const maxByPos = {
-    QB:  rosterSlots.QB  || 1,
-    RB:  (rosterSlots.RB  || 2) + Math.ceil(flex * 0.6),
-    WR:  (rosterSlots.WR  || 2) + Math.ceil(flex * 0.6),
-    TE:  (rosterSlots.TE  || 1) + Math.floor(flex * 0.2),
-    K:   rosterSlots.K   || 1,
-    DST: rosterSlots.DST || 1,
+    QB:  slotCount(rosterSlots,'QB',1) + Math.round(fx.QB),
+    RB:  slotCount(rosterSlots,'RB',2) + Math.ceil(fx.RB),
+    WR:  slotCount(rosterSlots,'WR',2) + Math.ceil(fx.WR),
+    TE:  slotCount(rosterSlots,'TE',1) + Math.floor(fx.TE),
+    K:   slotCount(rosterSlots,'K',1),
+    DST: slotCount(rosterSlots,'DST',1),
   };
   // Open dedicated starting slots first, depth-only needs after.
   return Object.entries(maxByPos)
@@ -285,14 +316,177 @@ function LeagueSetupModal({ league, onSave, onClose }) {
   const setSlot = (k, v) => setForm(f => ({...f, rosterSlots:{...f.rosterSlots, [k]: parseInt(v)||0}}));
   const setCustom = (k, v) => setForm(f => ({...f, customScoring:{...f.customScoring, [k]: parseFloat(v)||0}}));
 
+  // Auto-fill the form from a public ESPN league (teams, roster, scoring, names).
+  const [espnId, setEspnId] = React.useState(form.espnLeagueId || '');
+  const [importing, setImporting] = React.useState(false);
+  const [importMsg, setImportMsg] = React.useState(null);
+  const importEspn = () => {
+    const id = espnId.trim();
+    if (!id) return;
+    setImporting(true); setImportMsg(null);
+    fetch('/api/import-espn', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leagueId: id }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) { setImportMsg({ ok: false, text: d.error }); return; }
+        setForm(f => ({
+          ...f,
+          name: d.name || f.name,
+          platform: 'ESPN',
+          numTeams: d.numTeams || f.numTeams,
+          scoringType: d.scoringType || f.scoringType,
+          rosterSlots: { ...DEFAULT_SLOTS, ...(d.rosterSlots || {}) },
+          teamNames: d.teamNames || [],
+          espnLeagueId: d.espnLeagueId || id,
+        }));
+        setImportMsg({ ok: true,
+          text: `Imported "${d.name}" — ${d.numTeams} teams, ${(d.teamNames || []).length} names, ${d.scoringType}` });
+      })
+      .catch(() => setImportMsg({ ok: false, text: 'Import failed — is the league public?' }))
+      .finally(() => setImporting(false));
+  };
+
+  // ── Yahoo OAuth import (multi-step: credentials -> authorize -> pick league) ──
+  const [yh, setYh] = React.useState({
+    clientId: '', clientSecret: '', redirectUri: 'https://localhost/',
+    authUrl: '', code: '', leagues: null, leagueKey: '', busy: false, msg: null,
+    credsSaved: false, showCredForm: false,
+  });
+  const yhSet = patch => setYh(s => ({ ...s, ...patch }));
+  // Pick up credentials already saved on this machine (so re-auth is one click).
+  React.useEffect(() => {
+    fetch('/api/yahoo/status').then(r => r.json()).then(d => {
+      if (d && d.hasCredentials) yhSet({ credsSaved: true, redirectUri: d.redirectUri || 'https://localhost/' });
+    }).catch(() => {});
+  }, []);
+  const yhPost = (url, body, onOk) => {
+    yhSet({ busy: true, msg: null });
+    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(r => r.json())
+      .then(d => { if (d.error) yhSet({ msg: { ok: false, text: d.error } }); else onOk(d); })
+      .catch(() => yhSet({ msg: { ok: false, text: 'Request failed' } }))
+      .finally(() => setYh(s => ({ ...s, busy: false })));
+  };
+  const yahooConnect = () => {
+    const useStored = yh.credsSaved && !yh.showCredForm;
+    if (!useStored && (!yh.clientId.trim() || !yh.clientSecret.trim())) { yhSet({ msg: { ok: false, text: 'Enter Client ID and Secret' } }); return; }
+    const body = useStored
+      ? { redirectUri: yh.redirectUri.trim() }
+      : { clientId: yh.clientId.trim(), clientSecret: yh.clientSecret.trim(), redirectUri: yh.redirectUri.trim() };
+    yhPost('/api/yahoo/connect', body,
+      d => { yhSet({ authUrl: d.authUrl, msg: { ok: true, text: 'Authorize in the opened tab, then paste the code below.' } }); window.open(d.authUrl, '_blank'); });
+  };
+  const yahooExchange = () => {
+    if (!yh.code.trim()) { yhSet({ msg: { ok: false, text: 'Paste the authorization code' } }); return; }
+    yhPost('/api/yahoo/exchange', { code: yh.code.trim() }, d => {
+      const lgs = d.leagues || [];
+      yhSet({ leagues: lgs, leagueKey: (lgs[0] && lgs[0].league_key) || '', msg: { ok: true, text: `Connected — ${lgs.length} league(s) found.` } });
+    });
+  };
+  const yahooImport = () => {
+    if (!yh.leagueKey) return;
+    yhPost('/api/yahoo/import', { leagueKey: yh.leagueKey }, d => {
+      setForm(f => ({
+        ...f, name: d.name || f.name, platform: 'Yahoo', numTeams: d.numTeams || f.numTeams,
+        scoringType: d.scoringType || f.scoringType, rosterSlots: { ...DEFAULT_SLOTS, ...(d.rosterSlots || {}) },
+        teamNames: d.teamNames || [], yahooLeagueKey: d.yahooLeagueKey,
+      }));
+      yhSet({ msg: { ok: true, text: `Imported "${d.name}" — ${d.numTeams} teams, ${(d.teamNames || []).length} names, ${d.scoringType}` } });
+    });
+  };
+
+  const FLEX_SLOT_LABELS = { WRTE:'W/T flex', RBWR:'R/W flex', SUPERFLEX:'Superflex', OP:'Superflex' };
   const slotFields = [
     {k:'QB',label:'QB'},{k:'RB',label:'RB'},{k:'WR',label:'WR'},
-    {k:'TE',label:'TE'},{k:'FLEX',label:'FLEX (RB/WR/TE)'},{k:'K',label:'K'},
-    {k:'DST',label:'DST'},{k:'BN',label:'Bench'},
+    {k:'TE',label:'TE'},{k:'FLEX',label:'FLEX (RB/WR/TE)'},
+    // Typed flex slots present on this league (e.g. an imported WR/TE slot).
+    ...Object.keys(FLEX_SLOT_LABELS)
+      .filter(fk => (form.rosterSlots[fk] || 0) > 0)
+      .map(fk => ({ k: fk, label: FLEX_SLOT_LABELS[fk] })),
+    {k:'K',label:'K'},{k:'DST',label:'DST'},{k:'BN',label:'Bench'},
   ];
 
   return (
     <Modal title={league ? 'Edit League' : 'Add New League'} onClose={onClose} width={600}>
+      <div style={{marginBottom:16, padding:12, background:T.surfaceAlt, borderRadius:T.r, border:`1px solid ${T.border}`}}>
+        <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:8, letterSpacing:.5}}>
+          IMPORT FROM ESPN (public league)
+        </div>
+        <div style={{display:'flex', gap:8, alignItems:'center'}}>
+          <Input value={espnId} onChange={e=>setEspnId(e.target.value)}
+            placeholder="ESPN League ID (e.g. 75034031)" style={{flex:1}} />
+          <Btn variant="ghost" onClick={importEspn} disabled={importing || !espnId.trim()}>
+            {importing ? 'Importing…' : 'Import'}
+          </Btn>
+        </div>
+        {importMsg && (
+          <div style={{marginTop:8, fontSize:12, color: importMsg.ok ? T.primary : '#c0392b'}}>
+            {(importMsg.ok ? '✓ ' : '⚠ ') + importMsg.text}
+          </div>
+        )}
+        <div style={{marginTop:6, fontSize:11, color:T.muted}}>
+          Auto-fills teams, roster, scoring, and your league-mates' names. Find the ID in your
+          ESPN league URL (…/leagues/<b>THIS</b>).
+        </div>
+      </div>
+
+      <div style={{marginBottom:16, padding:12, background:T.surfaceAlt, borderRadius:T.r, border:`1px solid ${T.border}`}}>
+        <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:8, letterSpacing:.5}}>
+          IMPORT FROM YAHOO (OAuth)
+        </div>
+        {!yh.leagues ? (
+          <>
+            {yh.credsSaved && !yh.showCredForm ? (
+              <div style={{fontSize:12, color:T.text, marginBottom:4}}>
+                ✓ Yahoo credentials saved on this machine.{' '}
+                <a onClick={()=>yhSet({showCredForm:true})} style={{color:T.muted, cursor:'pointer', textDecoration:'underline'}}>use different</a>
+              </div>
+            ) : (
+              <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
+                <Input value={yh.clientId} onChange={e=>yhSet({clientId:e.target.value})} placeholder="Client ID (Consumer Key)" />
+                <Input value={yh.clientSecret} onChange={e=>yhSet({clientSecret:e.target.value})} placeholder="Client Secret" type="password" />
+              </div>
+            )}
+            <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
+              <Input value={yh.redirectUri} onChange={e=>yhSet({redirectUri:e.target.value})} placeholder="Redirect URI" style={{flex:1}} />
+              <Btn variant="ghost" onClick={yahooConnect} disabled={yh.busy}>{yh.busy?'…':(yh.credsSaved && !yh.showCredForm ?'Get authorize link':'Get link')}</Btn>
+            </div>
+            {yh.authUrl && (
+              <div style={{marginTop:8}}>
+                <a href={yh.authUrl} target="_blank" rel="noreferrer" style={{fontSize:12, color:T.primary, fontWeight:600}}>
+                  Open Yahoo authorize page ↗
+                </a>
+                <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
+                  <Input value={yh.code} onChange={e=>yhSet({code:e.target.value})} placeholder="Paste authorization code" style={{flex:1}} />
+                  <Btn variant="ghost" onClick={yahooExchange} disabled={yh.busy}>Connect</Btn>
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+            <div style={{flex:1}}>
+              <Select value={yh.leagueKey} onChange={e=>yhSet({leagueKey:e.target.value})}
+                options={yh.leagues.map(l=>({value:l.league_key, label:`${l.name}${l.season?` (${l.season})`:''}`}))} />
+            </div>
+            <Btn variant="ghost" onClick={yahooImport} disabled={yh.busy || !yh.leagueKey}>Import</Btn>
+          </div>
+        )}
+        {yh.msg && (
+          <div style={{marginTop:8, fontSize:12, color: yh.msg.ok ? T.primary : '#c0392b'}}>
+            {(yh.msg.ok ? '✓ ' : '⚠ ') + yh.msg.text}
+          </div>
+        )}
+        <div style={{marginTop:6, fontSize:11, color:T.muted, lineHeight:1.45}}>
+          Register a free app at developer.yahoo.com (Installed App · Fantasy → Read · redirect
+          <b> https://localhost/</b>). After authorizing, copy the <b>code</b> from the address bar.
+          Imports settings + names (Yahoo has no projections — those stay from the consensus). Your
+          secret is stored only on this machine.
+        </div>
+      </div>
+
       <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
         <Field label="League Name">
           <Input value={form.name} onChange={e=>set('name',e.target.value)} />
@@ -370,6 +564,24 @@ function LeagueSetupModal({ league, onSave, onClose }) {
         </div>
       </div>
 
+      <div style={{marginTop:20}}>
+        <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:8, letterSpacing:.5}}>
+          OPPONENT TEAM NAMES (optional)
+        </div>
+        <textarea
+          value={(form.teamNames || []).join('\n')}
+          onChange={e => set('teamNames', e.target.value.split('\n').map(s => s.trim()))}
+          placeholder={'One team name per line (order = draft slot 1…N). Labels the Opponents panel. Auto-filled when you import from ESPN/Yahoo.'}
+          rows={4}
+          style={{width:'100%', boxSizing:'border-box', padding:'8px 12px', border:`1.5px solid ${T.border}`,
+            borderRadius:T.rsm, fontSize:13, color:T.text, background:T.surface, fontFamily:'inherit',
+            outline:'none', resize:'vertical'}}
+        />
+        <div style={{fontSize:11, color:T.muted, marginTop:4}}>
+          {(form.teamNames || []).filter(Boolean).length} names entered
+        </div>
+      </div>
+
       <div style={{display:'flex', justifyContent:'flex-end', gap:10, marginTop:24, paddingTop:20, borderTop:`1px solid ${T.border}`}}>
         <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
         <Btn onClick={() => onSave(form)}>Save League</Btn>
@@ -431,7 +643,7 @@ function adpFormatForLeague(league) {
 }
 
 // ─── PULL DATA MODAL ─────────────────────────────────────────────────────────
-function PullDataModal({ league, onClose, onComplete }) {
+function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
   const currentYear = new Date().getFullYear();
   const [mode, setMode]         = React.useState('free');
   const [season, setSeason]     = React.useState(currentYear);
@@ -446,8 +658,9 @@ function PullDataModal({ league, onClose, onComplete }) {
 
   const handlePull = () => {
     const endpoint = mode === 'free' ? '/api/pull-free-data' : '/api/collect-all';
+    // Fold an imported ESPN league's projections into the consensus automatically.
     const body = mode === 'free'
-      ? { season, statsSeason, history, teams, adpFormat, skipFftoday: skipFf }
+      ? { season, statsSeason, history, teams, adpFormat, skipFftoday: skipFf, espnLeagueId }
       : { season, teams, scoring: adpFormat, history };
     fetch(endpoint, {
       method: 'POST',
@@ -773,7 +986,9 @@ function HomeScreen({ leagues, onSelectLeague, onAddLeague, onEditLeague, onDele
         </div>
       </div>
 
-      {showPull && <PullDataModal league={leagues[0]} onClose={() => setShowPull(false)} onComplete={onRefreshPlayers} />}
+      {showPull && <PullDataModal league={leagues[0]}
+        espnLeagueId={(leagues.find(l => l.espnLeagueId) || {}).espnLeagueId}
+        onClose={() => setShowPull(false)} onComplete={onRefreshPlayers} />}
       {showAuction && <AuctionModal onClose={() => setShowAuction(false)} />}
     </div>
   );

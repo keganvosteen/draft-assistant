@@ -60,9 +60,8 @@
   <script src="vendor/react-dom.production.min.js"></script>
   <script src="vendor/babel.min.js"></script>
 
-  <!-- Recommendation scoring now comes from the Python rest-of-draft rollout
-       engine via POST /api/suggest (see draft-screen.jsx). The old client-side
-       scoring-engine.js is retired so there is a single source of truth.
+  <!-- Recommendation scoring comes from the Python rest-of-draft rollout engine
+       via POST /api/suggest (see draft-screen.jsx) — the single source of truth.
        opponent-model.js is kept: it powers the Opponents panel only. -->
   <script src="components/opponent-model.js"></script>
 
