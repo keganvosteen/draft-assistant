@@ -30,6 +30,18 @@ The desktop UI opens a Tkinter window with a draft board, roster panel, and a le
 
 ---
 
+## Share a Tester Package
+
+On Windows, build a portable zip that includes an executable launcher, the web UI assets, league config, draft state, and player data:
+
+```powershell
+.\scripts\build_test_package.ps1
+```
+
+Send `dist\DraftAssistant-test-package.zip` to your tester. They unzip it and double-click `Start Draft Assistant.bat`; no Python install is required. The package starts a local server on `127.0.0.1` and opens the app in their browser. Keep the console window open while testing.
+
+---
+
 ## How Suggestions Are Scored
 
 Recommendations combine two scoring approaches:
