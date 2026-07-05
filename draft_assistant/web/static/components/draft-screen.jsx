@@ -717,50 +717,70 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
       return cmpScore(a, b);
     });
 
-  const GRID = '30px 1fr 52px 44px 44px 54px 54px 66px 78px';
+  const width = useWindowWidth();
+  const isNarrow = width < 650;
+  const isMedium = width >= 650 && width < 960;
+  const isWide   = width >= 960;
+
+  const GRID = isWide
+    ? '30px 1fr 52px 48px 44px 54px 54px 64px 74px'
+    : isMedium
+      ? '26px 1fr 48px 54px 54px 62px 70px'
+      : '24px 1fr 44px 52px 58px 66px';
 
   return (
     <div style={{flex:1, display:'flex', flexDirection:'column', minHeight:0, overflow:'hidden'}}>
       <div style={{
-        padding:'10px 16px', background:T.surface, borderBottom:`1px solid ${T.border}`,
-        display:'flex', gap:10, alignItems:'center', flexWrap:'wrap',
+        padding:'8px 14px', background:T.surface, borderBottom:`1px solid ${T.border}`,
+        display:'flex', flexDirection:'column', gap:8, flexShrink:0,
       }}>
-        <QuickPickInput
-          players={players}
-          search={search}
-          setSearch={setSearch}
-          onSelectPlayer={(p) => setSearch(p.name)}
-        />
-        <div style={{display:'flex', gap:5}}>
+        <div style={{display:'flex', gap:8, alignItems:'center'}}>
+          <QuickPickInput
+            players={players}
+            search={search}
+            setSearch={setSearch}
+            onSelectPlayer={(p) => setSearch(p.name)}
+          />
+          <div style={{display:'flex', alignItems:'center', gap:4, flexShrink:0}}>
+            <span style={{fontSize:11, fontWeight:700, color:T.muted, letterSpacing:.3}}>Sort:</span>
+            <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{
+              padding:'6px 8px', border:`1.5px solid ${T.primary}`, borderRadius:T.rsm,
+              fontSize:12, fontWeight:700, color:T.primary, fontFamily:'inherit', background:T.primaryLight, cursor:'pointer',
+            }}>
+              {sortOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div style={{
+          display:'flex', gap:4, alignItems:'center', overflowX:'auto',
+          whiteSpace:'nowrap', paddingBottom:2, msOverflowStyle:'none', scrollbarWidth:'none',
+        }}>
           {['ALL',...window.POSITIONS].map(pos => (
             <button key={pos} onClick={() => setPosFilter(pos)} style={{
-              padding:'5px 9px', borderRadius:T.rxs,
+              padding:'4px 8px', borderRadius:T.rxs, flexShrink:0,
               border:`1.5px solid ${posFilter===pos ? T.primary : T.border}`,
               background: posFilter===pos ? T.primaryLight : T.surface,
               color: posFilter===pos ? T.primary : T.muted,
-              fontSize:12, fontWeight:600, cursor:'pointer', fontFamily:'inherit',
+              fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit',
             }}>{pos}</button>
           ))}
+          <div style={{width:1, height:16, background:T.border, margin:'0 4px', flexShrink:0}} />
+          <button onClick={onToggleDrafted} style={{
+            padding:'4px 8px', borderRadius:T.rxs, flexShrink:0,
+            border:`1.5px solid ${T.border}`,
+            background: showDrafted ? T.borderLight : T.surface,
+            color:T.muted, fontSize:11, cursor:'pointer', fontFamily:'inherit', fontWeight:600,
+          }}>
+            {showDrafted ? 'Hide Drafted' : 'Show Drafted'}
+          </button>
         </div>
-        <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{
-          padding:'6px 10px', border:`1.5px solid ${T.border}`, borderRadius:T.rsm,
-          fontSize:13, color:T.text, fontFamily:'inherit', background:T.surface, cursor:'pointer',
-        }}>
-          {sortOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-        <button onClick={onToggleDrafted} style={{
-          padding:'6px 10px', border:`1.5px solid ${T.border}`, borderRadius:T.rsm,
-          background: showDrafted ? T.borderLight : T.surface,
-          color:T.muted, fontSize:12, cursor:'pointer', fontFamily:'inherit', fontWeight:600,
-        }}>
-          {showDrafted ? 'Hide Drafted' : 'Show Drafted'}
-        </button>
       </div>
 
       <div style={{
         display:'grid', gridTemplateColumns:GRID,
-        padding:'7px 16px', background:T.surfaceAlt, borderBottom:`1px solid ${T.border}`,
-        fontSize:10, fontWeight:700, color:T.muted, letterSpacing:.5, gap:8, alignItems:'center',
+        padding:'7px 14px', background:T.surfaceAlt, borderBottom:`1px solid ${T.border}`,
+        fontSize:10, fontWeight:700, color:T.muted, letterSpacing:.5, gap:6, alignItems:'center',
       }}>
         <span>#</span>
         <span>PLAYER</span>
