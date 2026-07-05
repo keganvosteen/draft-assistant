@@ -18,6 +18,7 @@ from typing import Optional
 from ..models import DraftState, LeagueConfig
 from ..profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from ..providers.base import build_provider
+from ..free_agents import free_agent_recommendations
 from ..rollout import rollout_values
 from ..sample_data import sample_players
 from ..scoring import fantasy_points
@@ -215,6 +216,65 @@ def _run_task(task_id: str, fn, *args, **kwargs):
     threading.Thread(target=_worker, daemon=True).start()
 
 
+def _pick_player_ids(picks) -> list[str]:
+    ids: list[str] = []
+    if not isinstance(picks, list):
+        return ids
+    for pick in picks:
+        if isinstance(pick, str):
+            ids.append(pick)
+        elif isinstance(pick, dict):
+            player_id = pick.get("playerId") or pick.get("player_id") or pick.get("id")
+            if isinstance(player_id, str):
+                ids.append(player_id)
+    return ids
+
+
+def _my_pick_ids(picks, draft_position: int) -> list[str]:
+    ids: list[str] = []
+    if not isinstance(picks, list):
+        return ids
+    for pick in picks:
+        if not isinstance(pick, dict):
+            continue
+        player_id = pick.get("playerId") or pick.get("player_id") or pick.get("id")
+        if not isinstance(player_id, str):
+            continue
+        try:
+            team_num = int(pick.get("teamNum"))
+        except (TypeError, ValueError):
+            continue
+        if team_num == draft_position:
+            ids.append(player_id)
+    return ids
+
+
+def _free_agent_row(rec) -> dict:
+    drop = rec.drop_player
+    return {
+        "id": rec.player.key(),
+        "name": rec.player.name,
+        "pos": rec.player.position,
+        "nflTeam": rec.player.team or "FA",
+        "adp": round(rec.player.adp, 1) if rec.player.adp else None,
+        "byeWeek": rec.player.bye_week,
+        "points": rec.points,
+        "vor": rec.vor,
+        "score": rec.score,
+        "rosterGain": rec.roster_gain,
+        "starterGain": rec.starter_gain,
+        "benchGain": rec.bench_gain,
+        "reason": rec.reason,
+        "drop": ({
+            "id": drop.key(),
+            "name": drop.name,
+            "pos": drop.position,
+            "nflTeam": drop.team or "FA",
+            "points": rec.drop_points,
+        } if drop else None),
+    }
+
+
 class DraftAPIHandler(SimpleHTTPRequestHandler):
     """Serves static files from STATIC_DIR and handles /api/ routes."""
 
@@ -251,6 +311,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_auction()
         elif self.path == "/api/suggest":
             self._handle_suggest()
+        elif self.path == "/api/free-agents":
+            self._handle_free_agents()
         elif self.path == "/api/import-espn":
             self._handle_import_espn()
         elif self.path == "/api/yahoo/connect":
@@ -401,6 +463,64 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 "sims": results[0].sims if results else 0,
                 "teams": eff.teams,
                 "slot": int((eff.draft or {}).get("slot", 1)),
+            })
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_free_agents(self):
+        """Scan all configured leagues and rank available waiver/free-agent adds.
+
+        Body: {leagues: [{...}], picks: {leagueId: [{playerId, teamNum}...]}, top: int}.
+        The browser owns the saved league list, while Python owns player data,
+        scoring, and roster optimization.
+        """
+        try:
+            body = self._read_body()
+            leagues = body.get("leagues") or []
+            if not isinstance(leagues, list):
+                self._send_json({"error": "leagues must be a list"}, 400)
+                return
+            picks_by_league = body.get("picks") or {}
+            if not isinstance(picks_by_league, dict):
+                picks_by_league = {}
+            top_n = max(1, min(int(body.get("top", 8)), 30))
+
+            players, config = _load_players(self.profile)
+            by_key = {p.key(): p for p in players}
+            response_rows = []
+
+            for index, league in enumerate(leagues):
+                if not isinstance(league, dict):
+                    continue
+                league_id = str(league.get("id") or f"league-{index + 1}")
+                league_picks = picks_by_league.get(league_id, [])
+                draft_position = int(league.get("draftPosition") or 1)
+                picked_keys = _pick_player_ids(league_picks)
+                my_keys = _my_pick_ids(league_picks, draft_position)
+
+                eff = self._suggest_config({"league": league}, config)
+                available = [p for key, p in by_key.items() if key not in picked_keys]
+                my_roster: dict = {}
+                for key in my_keys:
+                    player = by_key.get(key)
+                    if player:
+                        my_roster.setdefault(player.position, []).append(player)
+
+                recs = free_agent_recommendations(eff, available, my_roster, top_n=top_n)
+                response_rows.append({
+                    "id": league_id,
+                    "name": league.get("name") or f"League {index + 1}",
+                    "platform": league.get("platform") or "",
+                    "rostered": len(my_keys),
+                    "available": len(available),
+                    "recommendations": [_free_agent_row(rec) for rec in recs],
+                })
+
+            self._send_json({
+                "scannedLeagues": len(response_rows),
+                "leagues": response_rows,
             })
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)

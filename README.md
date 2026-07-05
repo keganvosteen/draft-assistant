@@ -1,6 +1,6 @@
 # Fantasy Football Draft Assistant
 
-A Python draft assistant with three user interfaces (terminal, desktop GUI, browser web UI), multi-league profiles, draft-aware Monte Carlo scoring, historical trend analysis, and free public-data ingestion.
+A Python draft assistant with three user interfaces (terminal, desktop GUI, browser web UI), multi-league profiles, draft-aware Monte Carlo scoring, league-wide free-agent scanning, historical trend analysis, and free public-data ingestion.
 
 ---
 
@@ -24,7 +24,7 @@ python -m draft_assistant --profile home draft
 
 The terminal UI walks you through league setup on first run (teams, scoring format, roster, draft position), seeds sample player data, and drops you into a live draft board with commands like `pick <name>`, `my <name>`, `undo`, `log`, `auction`.
 
-The web UI starts a local HTTP server (default `http://127.0.0.1:8080`) and opens your browser. It loads real player data from your active profile and provides a live Draft Score / VORP draft board with recommendations, scarcity alerts, and a tweakable scoring panel — all client-side for instant feedback. Add `--port N` or `--no-open` to customize.
+The web UI starts a local HTTP server (default `http://127.0.0.1:8080`) and opens your browser. It loads real player data from your active profile and provides a live Draft Score / VORP draft board with server-backed rollout recommendations, scarcity alerts, auction values, a tweakable scoring panel, and a Free Agent Finder that scans all saved leagues for waiver upgrades. Add `--port N` or `--no-open` to customize.
 
 The desktop UI opens a Tkinter window with a draft board, roster panel, and a league switcher.
 
@@ -177,6 +177,7 @@ draft_assistant/
 ├── scoring.py             # Fantasy points from stat projections
 ├── historical.py          # Age curves, trend blending, confidence scoring
 ├── auction.py             # Auction dollar values + budget tracker
+├── free_agents.py         # All-league waiver/free-agent recommendations
 ├── consensus.py           # Multi-source projection merging
 ├── fuzzy.py               # Levenshtein name matching
 ├── storage.py             # JSON persistence
@@ -195,7 +196,7 @@ draft_assistant/
     ├── base.py
     └── sleeper.py
 
-tests/                     # 131 tests
+tests/                     # 164 tests
 ├── test_scoring.py
 ├── test_projections.py
 ├── test_suggest.py
@@ -205,6 +206,7 @@ tests/                     # 131 tests
 ├── test_profiles.py       # Profile system
 ├── test_fuzzy.py
 ├── test_auction.py
+├── test_free_agents.py    # Free-agent add/drop recommendations
 ├── test_config.py         # Config robustness + round trip
 ├── test_storage.py        # Atomic persistence
 ├── test_free_sources.py   # Free-data collector field mapping
@@ -220,7 +222,7 @@ tests/                     # 131 tests
 python -m unittest discover tests -v
 ```
 
-131 tests cover scoring, VOR/replacement levels, gradient needs, FLEX, bye-week penalty, Monte Carlo snake-pick math, historical adjustments + age curves, fuzzy matching, draft tracking (pick/undo/log), auction values, data collectors, config/persistence robustness, and profile management.
+164 tests cover scoring, VOR/replacement levels, gradient needs, FLEX, bye-week penalty, Monte Carlo snake-pick math, free-agent add/drop recommendations, historical adjustments + age curves, fuzzy matching, draft tracking (pick/undo/log), auction values, data collectors, config/persistence robustness, and profile management.
 
 ---
 

@@ -772,13 +772,14 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
 }
 
 // ─── DRAFT SCREEN ─────────────────────────────────────────────────────────────
-function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick, onResetPicks, onReplacePicks, onUpdateLeague, onRefreshPlayers }) {
+function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, onAddPick, onUndoPick, onResetPicks, onReplacePicks, onUpdateLeague, onRefreshPlayers }) {
   const [showDraftBoard, setShowDraftBoard] = React.useState(false);
   const [showDrafted,    setShowDrafted]    = React.useState(false);
   const [showOpponents,  setShowOpponents]  = React.useState(true);
   const [hint,           setHint]           = React.useState('');
   const [showPullModal,  setShowPullModal]  = React.useState(false);
   const [showAuction,    setShowAuction]    = React.useState(false);
+  const [showFreeAgents, setShowFreeAgents] = React.useState(false);
   const [saveMsg,        setSaveMsg]        = React.useState(null);
 
   const tweakDefaults = typeof TWEAK_DEFAULTS !== 'undefined' ? TWEAK_DEFAULTS : {
@@ -1054,6 +1055,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
             </div>
           </div>
           <Btn variant="green" size="sm" onClick={() => setShowPullModal(true)}>Pull Data</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => setShowFreeAgents(true)}>Free Agents</Btn>
           <Btn variant="ghost" size="sm" onClick={() => setShowAuction(true)}>Auction $</Btn>
           <Btn variant="ghost" size="sm" onClick={handleSave}>
             {saveMsg || 'Save'}
@@ -1142,6 +1144,13 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       )}
       {showAuction && (
         <AuctionModal onClose={() => setShowAuction(false)} />
+      )}
+      {showFreeAgents && (
+        <FreeAgentFinderModal
+          leagues={allLeagues || [league]}
+          picks={allPicks || { [league.id]: picks }}
+          onClose={() => setShowFreeAgents(false)}
+        />
       )}
     </div>
   );
