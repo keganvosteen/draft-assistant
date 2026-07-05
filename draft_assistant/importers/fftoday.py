@@ -1,6 +1,7 @@
 from __future__ import annotations
 import re
 import json
+import time
 from html.parser import HTMLParser
 from typing import Dict, List, Optional, Tuple
 from urllib.request import urlopen, Request
@@ -68,7 +69,23 @@ class _TableParser(HTMLParser):
         return re.sub(r"\s+", " ", s).strip()
 
 
-def _fetch(url: str) -> str:
+def _fetch(url: str, attempts: int = 3) -> str:
+    # FFToday is the one source pulled by scraping web pages, and its server
+    # drops connections transiently; a single hiccup used to silently cost the
+    # whole source (and with it consensus projections), so retry with a short
+    # backoff before giving up.
+    last_exc: Optional[Exception] = None
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(2 * attempt)
+        try:
+            return _fetch_once(url)
+        except Exception as exc:
+            last_exc = exc
+    raise last_exc
+
+
+def _fetch_once(url: str) -> str:
     req = Request(url, headers={
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -193,11 +210,15 @@ def fetch_fftoday(season: int, pos: str) -> List[Player]:
 
 def fetch_all_fftoday(season: int) -> List[Player]:
     all_players: List[Player] = []
+    errors: List[str] = []
     # Offensive skill positions only — K/DST come from Sleeper (see _STAT_OFFSETS).
     for pos in ["QB", "RB", "WR", "TE"]:
         try:
-            ps = fetch_fftoday(season, pos)
-        except Exception:
-            ps = []
-        all_players.extend(ps)
+            all_players.extend(fetch_fftoday(season, pos))
+        except Exception as exc:
+            errors.append(f"{pos}: {exc}")
+    # A total wipeout must surface as a failed source report, not an empty
+    # success — otherwise the pull looks fine while consensus quietly vanishes.
+    if errors and not all_players:
+        raise RuntimeError("; ".join(errors))
     return all_players

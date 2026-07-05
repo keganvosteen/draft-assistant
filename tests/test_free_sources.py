@@ -1,7 +1,8 @@
 """Tests for the no-dependency free data collector's field mapping and merge."""
 import unittest
+from unittest.mock import patch
 
-from draft_assistant.models import Player
+from draft_assistant.models import LeagueConfig, Player
 from draft_assistant.importers.free_sources import (
     _consensus_projection,
     _fill_missing_byes,
@@ -186,6 +187,92 @@ class TestEspnProjectionStats(unittest.TestCase):
         self.assertEqual(teams[0].players[0].position, "QB")
         self.assertEqual(teams[0].players[0].team, "BUF")
         self.assertEqual(teams[0].players[0].provider_id, "espn:3918298")
+
+
+class TestFftodayRetryAndFailure(unittest.TestCase):
+    def test_fetch_retries_transient_failures(self):
+        from draft_assistant.importers import fftoday
+        calls = {"n": 0}
+
+        def flaky(url):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise OSError("connection dropped")
+            return "<html></html>"
+
+        with patch.object(fftoday, "_fetch_once", side_effect=flaky), \
+             patch.object(fftoday.time, "sleep"):
+            self.assertEqual(fftoday._fetch("http://example"), "<html></html>")
+        self.assertEqual(calls["n"], 3)
+
+    def test_fetch_raises_after_exhausting_attempts(self):
+        from draft_assistant.importers import fftoday
+        with patch.object(fftoday, "_fetch_once", side_effect=OSError("down")), \
+             patch.object(fftoday.time, "sleep"):
+            with self.assertRaises(OSError):
+                fftoday._fetch("http://example")
+
+    def test_all_positions_failing_raises(self):
+        from draft_assistant.importers import fftoday
+        with patch.object(fftoday, "fetch_fftoday", side_effect=OSError("down")):
+            with self.assertRaises(RuntimeError):
+                fftoday.fetch_all_fftoday(2026)
+
+    def test_partial_failure_still_returns_players(self):
+        from draft_assistant.importers import fftoday
+
+        def some(season, pos):
+            if pos == "QB":
+                raise OSError("down")
+            return [Player(id=pos, name=f"Test {pos}", position=pos)]
+
+        with patch.object(fftoday, "fetch_fftoday", side_effect=some):
+            players = fftoday.fetch_all_fftoday(2026)
+        self.assertEqual(len(players), 3)  # RB/WR/TE survive a QB-page failure
+
+
+class TestSingleSourceWarning(unittest.TestCase):
+    """A pull that ends up Sleeper-only must say so, not just report success."""
+
+    def _pull(self, fftoday_result, include_fftoday=True):
+        from draft_assistant.importers import free_sources as fs
+        config = LeagueConfig(teams=12, roster={}, scoring={"rec": 1.0}, provider={})
+        sleeper_meta = {"1": {"position": "RB", "full_name": "Star RB", "team": "DET"}}
+        sleeper_rows = {"1": {"rush_yd": 1000.0, "adp_ppr": 5.0}}
+
+        def fftoday(season):
+            if isinstance(fftoday_result, Exception):
+                raise fftoday_result
+            return fftoday_result
+
+        with patch.object(fs, "_fetch_sleeper_players", return_value=sleeper_meta), \
+             patch.object(fs, "_fetch_sleeper_projection_rows", return_value=sleeper_rows), \
+             patch.object(fs, "_fetch_ffc_adp_players", side_effect=RuntimeError("offline")), \
+             patch.object(fs, "_fetch_nflverse_players", side_effect=RuntimeError("offline")), \
+             patch.object(fs, "_fetch_nflverse_stats_rows", side_effect=RuntimeError("offline")), \
+             patch.object(fs, "fetch_all_fftoday", side_effect=fftoday):
+            return fs.pull_free_data(config, season=2026, include_fftoday=include_fftoday)
+
+    def test_fftoday_failure_yields_warning_with_cause(self):
+        result = self._pull(RuntimeError("QB: connection dropped"))
+        self.assertEqual(result.consensus_players, 0)
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("single-source", result.warnings[0])
+        self.assertIn("FFToday failed: QB: connection dropped", result.warnings[0])
+        self.assertIn("no ESPN league linked", result.warnings[0])
+
+    def test_fftoday_skipped_yields_warning(self):
+        result = self._pull([], include_fftoday=False)
+        self.assertEqual(result.consensus_players, 0)
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("FFToday was skipped", result.warnings[0])
+
+    def test_consensus_present_means_no_warning(self):
+        ff = [Player(id="ff", name="Star RB", position="RB",
+                     projections={"rush_yd": 1200.0})]
+        result = self._pull(ff)
+        self.assertEqual(result.consensus_players, 1)
+        self.assertEqual(result.warnings, [])
 
 
 if __name__ == "__main__":
