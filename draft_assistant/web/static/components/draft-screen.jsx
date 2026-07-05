@@ -379,7 +379,11 @@ function RecommendationBar({ scored, myPlayers, league, oppData }) {
     );
   }
 
-  const sortedByScore = [...scored].sort((a,b) => b.draftScore - a.draftScore);
+  // Only rank players the engine actually simulated this pick (draftScore set);
+  // others have no impact/availPct and would otherwise sort as 0 and show
+  // "undefined%" in the cards.
+  const rolled = scored.filter(p => p.draftScore != null);
+  const sortedByScore = (rolled.length ? rolled : scored).sort((a,b) => b.draftScore - a.draftScore);
   const bestOverall   = sortedByScore[0];
 
   const needs     = getRosterNeeds(myPlayers, league.rosterSlots);
