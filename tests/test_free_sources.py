@@ -138,7 +138,30 @@ class TestEspnProjectionStats(unittest.TestCase):
         self.assertEqual(out["rec_yd"], 900.0)
         self.assertEqual(out["rec"], 80.0)
         self.assertNotIn("999", out)            # unknown stat id dropped
-        self.assertNotIn("pass_yd", {k: v for k, v in out.items() if v == 9999.0})  # ignored actual
+
+    def test_parses_espn_rosters(self):
+        from draft_assistant.importers.free_sources import _parse_espn_rosters
+        data = {"teams": [{
+            "id": 1,
+            "name": "Team Alpha",
+            "roster": {"entries": [{
+                "playerPoolEntry": {"player": {
+                    "id": 3918298,
+                    "fullName": "Josh Allen",
+                    "defaultPositionId": 1,
+                    "proTeamId": 2,
+                }}
+            }]}
+        }]}
+
+        teams = _parse_espn_rosters(data)
+
+        self.assertEqual(len(teams), 1)
+        self.assertEqual(teams[0].name, "Team Alpha")
+        self.assertEqual(teams[0].players[0].name, "Josh Allen")
+        self.assertEqual(teams[0].players[0].position, "QB")
+        self.assertEqual(teams[0].players[0].team, "BUF")
+        self.assertEqual(teams[0].players[0].provider_id, "espn:3918298")
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from ..models import LeagueConfig, Player
+from ..platform_sync import SyncedRosterPlayer, SyncedRosterTeam
 from ..scoring import fantasy_points
 from .fftoday import fetch_all_fftoday
 
@@ -583,6 +584,59 @@ def fetch_espn_league(season: int, league_id: str) -> Dict[str, object]:
         "scoring": scoring,
         "teamNames": team_names,
     }
+
+
+def fetch_espn_rosters(
+    season: int,
+    league_id: str,
+    espn_s2: Optional[str] = None,
+    swid: Optional[str] = None,
+) -> List[SyncedRosterTeam]:
+    """Fetch current ESPN rosters for public leagues, or private with cookies."""
+    url = (
+        "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
+        f"{season}/segments/0/leagues/{league_id}?view=mRoster&view=mTeam"
+    )
+    headers = _espn_cookie_headers(espn_s2, swid)
+    data = _fetch_json(url, timeout=45, extra_headers=headers or None)
+    return _parse_espn_rosters(data)
+
+
+def _parse_espn_rosters(data: dict) -> List[SyncedRosterTeam]:
+    teams = data.get("teams", []) if isinstance(data, dict) else []
+    out: List[SyncedRosterTeam] = []
+    for team in teams:
+        if not isinstance(team, dict):
+            continue
+        name = team.get("name") or f"{team.get('location', '')} {team.get('nickname', '')}".strip()
+        roster = ((team.get("roster") or {}).get("entries") or [])
+        players: List[SyncedRosterPlayer] = []
+        for entry in roster:
+            player = ((entry or {}).get("playerPoolEntry") or {}).get("player") or {}
+            position = _espn_position(player.get("defaultPositionId"))
+            if not player.get("fullName") or not position:
+                continue
+            players.append(SyncedRosterPlayer(
+                name=player.get("fullName") or "",
+                position=position,
+                team=_espn_team(player.get("proTeamId")),
+                provider_id=f"espn:{player.get('id')}" if player.get("id") is not None else None,
+            ))
+        out.append(SyncedRosterTeam(
+            name=name or f"Team {team.get('id')}",
+            provider_id=str(team.get("id")) if team.get("id") is not None else None,
+            players=players,
+        ))
+    return out
+
+
+def _espn_cookie_headers(espn_s2: Optional[str], swid: Optional[str]) -> Dict[str, str]:
+    cookies = []
+    if espn_s2:
+        cookies.append(f"espn_s2={espn_s2}")
+    if swid:
+        cookies.append(f"SWID={swid}")
+    return {"Cookie": "; ".join(cookies)} if cookies else {}
 
 
 def _espn_projection_stats(player: dict, season: int) -> Dict[str, float]:

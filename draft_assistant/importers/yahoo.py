@@ -20,6 +20,8 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from ..platform_sync import SyncedRosterPlayer, SyncedRosterTeam
+
 AUTH_URL = "https://api.login.yahoo.com/oauth2/request_auth"
 TOKEN_URL = "https://api.login.yahoo.com/oauth2/get_token"
 API_BASE = "https://fantasysports.yahooapis.com/fantasy/v2"
@@ -168,6 +170,25 @@ def fetch_league(access_token: str, league_key: str) -> Dict[str, object]:
     return _parse_league(settings, teams, league_key)
 
 
+def fetch_league_rosters(access_token: str, league_key: str) -> List[SyncedRosterTeam]:
+    """Fetch every team roster in a Yahoo league.
+
+    Yahoo roster data is team-scoped, so we list league teams first and then ask
+    for each team's roster. Returned players are provider-neutral rows for the
+    local matcher.
+    """
+    teams_data = _api_get(access_token, f"league/{league_key}/teams")
+    teams: List[SyncedRosterTeam] = []
+    for team_key, team_name in _team_key_names(teams_data):
+        roster = _api_get(access_token, f"team/{team_key}/roster")
+        teams.append(SyncedRosterTeam(
+            name=team_name,
+            provider_id=team_key,
+            players=_parse_roster_players(roster, league_key),
+        ))
+    return teams
+
+
 def _parse_league(settings: Dict, teams: Dict, league_key: str) -> Dict[str, object]:
     """Pure parse of Yahoo's nested settings/teams JSON (testable offline)."""
     name = _first(settings, "name") or league_key
@@ -214,6 +235,69 @@ def _parse_league(settings: Dict, teams: Dict, league_key: str) -> Dict[str, obj
         "teamNames": team_names,
         "yahooLeagueKey": league_key,
     }
+
+
+def _team_key_names(teams: Dict) -> List[tuple[str, str]]:
+    found: List[tuple[str, str]] = []
+    seen = set()
+    for block in _find_all(teams, "team"):
+        team_key = _first(block, "team_key")
+        name = _first(block, "name")
+        if not team_key or team_key in seen:
+            continue
+        seen.add(team_key)
+        found.append((str(team_key), str(name or team_key)))
+    return found
+
+
+def _parse_roster_players(roster: Dict, league_key: str) -> List[SyncedRosterPlayer]:
+    out: List[SyncedRosterPlayer] = []
+    game_key = league_key.split(".l.", 1)[0]
+    for raw in _find_all(roster, "player"):
+        flat = _flatten_yahoo_player(raw)
+        name = flat.get("name")
+        position = flat.get("position")
+        player_id = flat.get("player_id")
+        if not name or not position:
+            continue
+        provider_id = f"yahoo:{player_id}" if player_id else None
+        # Yahoo player keys are game-scoped ("461.p.1234"). Keep the numeric id
+        # for display/debug and leave matching primarily name+position based.
+        if not provider_id and flat.get("player_key"):
+            provider_id = f"yahoo:{str(flat['player_key']).replace(game_key + '.p.', '')}"
+        out.append(SyncedRosterPlayer(
+            name=name,
+            position=position,
+            team=flat.get("team"),
+            provider_id=provider_id,
+        ))
+    return out
+
+
+def _flatten_yahoo_player(raw) -> Dict[str, str]:
+    flat: Dict[str, str] = {}
+
+    def walk(obj):
+        if isinstance(obj, dict):
+            if "player_id" in obj:
+                flat["player_id"] = str(obj["player_id"])
+            if "player_key" in obj:
+                flat["player_key"] = str(obj["player_key"])
+            if "display_position" in obj:
+                flat["position"] = str(obj["display_position"])
+            if "editorial_team_abbr" in obj:
+                flat["team"] = str(obj["editorial_team_abbr"])
+            name = obj.get("name")
+            if isinstance(name, dict) and name.get("full"):
+                flat["name"] = str(name["full"])
+            for value in obj.values():
+                walk(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                walk(item)
+
+    walk(raw)
+    return flat
 
 
 def _to_int(value) -> Optional[int]:

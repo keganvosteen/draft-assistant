@@ -1124,11 +1124,29 @@ function FreeAgentFinderModal({ leagues, picks, onClose }) {
 }
 
 // ─── HOME SCREEN ─────────────────────────────────────────────────────────────
-function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague, onDeleteLeague, playerCount, onRefreshPlayers }) {
+function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague, onDeleteLeague, onSyncLeague, playerCount, onRefreshPlayers }) {
   const platformColors = { ESPN:'#cc0000', Yahoo:'#6001d2', Sleeper:'#1e1e1e', 'NFL.com':'#013369', Other: T.muted };
   const [showPull, setShowPull]       = React.useState(false);
   const [showAuction, setShowAuction] = React.useState(false);
   const [showFreeAgents, setShowFreeAgents] = React.useState(false);
+  const [syncingId, setSyncingId] = React.useState(null);
+  const [syncMsg, setSyncMsg] = React.useState(null);
+
+  const syncLeague = (e, lg) => {
+    e.stopPropagation();
+    setSyncingId(lg.id);
+    setSyncMsg(null);
+    onSyncLeague(lg)
+      .then(msg => {
+        setSyncMsg({ ok: true, text: msg });
+        setTimeout(() => setSyncMsg(null), 3500);
+      })
+      .catch(err => {
+        setSyncMsg({ ok: false, text: String(err && err.message ? err.message : err) });
+        setTimeout(() => setSyncMsg(null), 6000);
+      })
+      .finally(() => setSyncingId(null));
+  };
 
   return (
     <div style={{minHeight:'100vh', background:T.bg, display:'flex', flexDirection:'column'}}>
@@ -1164,6 +1182,15 @@ function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague,
         <p style={{fontSize:14, color:T.muted, margin:'0 0 28px'}}>
           Select a league to enter draft mode, or add a new one.
         </p>
+        {syncMsg && (
+          <div style={{
+            margin:'0 0 16px', padding:'9px 12px', borderRadius:T.rsm,
+            background: syncMsg.ok ? T.greenLight : T.redLight,
+            color: syncMsg.ok ? T.green : T.red, fontSize:12, fontWeight:600,
+          }}>
+            {syncMsg.text}
+          </div>
+        )}
 
         {leagues.length === 0 && (
           <div style={{
@@ -1181,6 +1208,7 @@ function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague,
           {leagues.map(lg => {
             const pc = platformColors[lg.platform] || T.muted;
             const totalSlots = Object.values(lg.rosterSlots).reduce((s,v) => s+v, 0);
+            const canSync = Boolean(lg.espnLeagueId || lg.yahooLeagueKey);
             return (
               <div key={lg.id} style={{
                 background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.r,
@@ -1199,6 +1227,13 @@ function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague,
                     <div style={{fontSize:12, color:T.muted, marginTop:2}}>{lg.platform}</div>
                   </div>
                   <div style={{display:'flex', gap:6}}>
+                    {canSync && (
+                      <button onClick={e=>syncLeague(e, lg)} disabled={syncingId === lg.id} style={{
+                        background:'none', border:`1px solid ${T.border}`, borderRadius:T.rxs,
+                        padding:'4px 8px', cursor: syncingId === lg.id ? 'default' : 'pointer',
+                        fontSize:12, color: syncingId === lg.id ? T.mutedLight : T.primary,
+                      }}>{syncingId === lg.id ? 'Syncing…' : 'Sync'}</button>
+                    )}
                     <button onClick={e=>{e.stopPropagation();onEditLeague(lg.id);}} style={{
                       background:'none', border:`1px solid ${T.border}`, borderRadius:T.rxs,
                       padding:'4px 8px', cursor:'pointer', fontSize:12, color:T.muted,
@@ -1319,6 +1354,20 @@ function App() {
     setPicks(prev => ({ ...prev, [leagueId]: newPicks }));
   };
 
+  const syncLeague = React.useCallback(lg => {
+    return fetch('/api/sync-league', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ league: lg }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) throw new Error(d.error);
+        setPicks(prev => ({ ...prev, [lg.id]: d.picks || [] }));
+        return `Synced ${d.matched || 0}/${d.rostered || 0} rostered players from ${d.source || lg.platform}.`;
+      });
+  }, []);
+
   const undoPick = leagueId => {
     setPicks(prev => ({ ...prev, [leagueId]: (prev[leagueId] || []).slice(0,-1) }));
   };
@@ -1376,6 +1425,7 @@ function App() {
         onAddLeague={() => { setEditingId(null); setShowSetup(true); }}
         onEditLeague={id => { setEditingId(id); setShowSetup(true); }}
         onDeleteLeague={deleteLeague}
+        onSyncLeague={syncLeague}
         playerCount={players ? players.length : null}
         onRefreshPlayers={refreshPlayers}
       />
