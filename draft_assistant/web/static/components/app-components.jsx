@@ -796,9 +796,25 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
           <div style={{fontSize:14, color:T.muted, marginBottom:6}}>
             {task.result?.players} players loaded
           </div>
+          {task.result?.consensusPlayers > 0 && (
+            <div style={{fontSize:12, color:T.muted, marginBottom:6}}>
+              Consensus projections: {task.result.consensusPlayers} players
+            </div>
+          )}
           {task.result?.historySeasons?.length > 0 && (
             <div style={{fontSize:12, color:T.muted, marginBottom:6}}>
               History seasons kept: {task.result.historySeasons.join(', ')}
+            </div>
+          )}
+          {task.result?.warnings?.length > 0 && (
+            <div style={{textAlign:'left', margin:'14px auto 0', maxWidth:400, background:T.amberLight,
+              border:`1.5px solid ${T.amber}`, borderRadius:T.rsm, padding:'10px 14px'}}>
+              <div style={{fontSize:13, fontWeight:700, color:T.amber, marginBottom:4}}>
+                &#9888; Single-source projections
+              </div>
+              {task.result.warnings.map((w, i) => (
+                <div key={i} style={{fontSize:12, color:T.text, lineHeight:1.5}}>{w}</div>
+              ))}
             </div>
           )}
           {task.result?.reports && (

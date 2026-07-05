@@ -796,7 +796,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     for r in result.reports
                 ]
                 return {"players": len(players), "reports": reports,
-                        "historySeasons": seasons}
+                        "historySeasons": seasons,
+                        "consensusPlayers": result.consensus_players,
+                        "warnings": list(result.warnings)}
 
             _run_task(task_id, _do_pull)
             self._send_json({"taskId": task_id})

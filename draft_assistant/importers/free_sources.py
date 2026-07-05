@@ -5,7 +5,7 @@ import io
 import json
 import re
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlencode
@@ -80,6 +80,8 @@ class SourceReport:
 class FreeDataResult:
     players: List[Player]
     reports: List[SourceReport]
+    consensus_players: int = 0
+    warnings: List[str] = field(default_factory=list)
 
 
 def default_projection_season(today: Optional[date] = None) -> int:
@@ -194,6 +196,39 @@ def pull_free_data(
             player.metadata["projection_source"] = "consensus"
             player.metadata["projection_sources_n"] = len(samples)
 
+    # Zero consensus players means every secondary projection source dropped
+    # out, yet the pull still "succeeds" on Sleeper alone — a silent downgrade
+    # that's easy to miss until mid-draft. Surface it as an explicit warning so
+    # the UI can show a banner instead of just a green checkmark.
+    consensus_players = sum(
+        1 for p in merged.values()
+        if p.metadata.get("projection_source") == "consensus"
+    )
+    warnings: List[str] = []
+    if merged and not consensus_players:
+        causes: List[str] = []
+        for r in reports:
+            if r.source == "Sleeper projections" and not r.ok:
+                causes.append(f"Sleeper projections failed: {r.detail}")
+            elif r.source == "FFToday projections":
+                if not r.ok:
+                    causes.append(f"FFToday failed: {r.detail}")
+                elif not r.records:
+                    causes.append("FFToday returned no players")
+            elif r.source == "ESPN Fantasy API" and espn_league_id and not r.ok:
+                causes.append(f"ESPN failed: {r.detail}")
+        if not include_fftoday:
+            causes.append("FFToday was skipped")
+        if not espn_league_id:
+            causes.append("no ESPN league linked")
+        detail = f" ({'; '.join(causes)})" if causes else ""
+        warnings.append(
+            "Projections are single-source: no player carries a consensus of "
+            f"two or more projection sources{detail}. "
+            "The saved board still works, but every stat line is one site's "
+            "opinion — consider re-running Pull Data."
+        )
+
     _fill_missing_byes(merged.values())
 
     players = sorted(
@@ -205,7 +240,8 @@ def pull_free_data(
             p.name,
         ),
     )
-    return FreeDataResult(players=players, reports=reports)
+    return FreeDataResult(players=players, reports=reports,
+                          consensus_players=consensus_players, warnings=warnings)
 
 
 def merge_historical_into(new_players: List[Player], existing_players: Iterable[Player]) -> List[Player]:
