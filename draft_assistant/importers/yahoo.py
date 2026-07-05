@@ -264,7 +264,8 @@ def _parse_roster_players(roster: Dict, league_key: str) -> List[SyncedRosterPla
         # Yahoo player keys are game-scoped ("461.p.1234"). Keep the numeric id
         # for display/debug and leave matching primarily name+position based.
         if not provider_id and flat.get("player_key"):
-            provider_id = f"yahoo:{str(flat['player_key']).replace(game_key + '.p.', '')}"
+            player_key = str(flat["player_key"])
+            provider_id = f"yahoo:{player_key.replace(game_key + '.p.', '')}"
         out.append(SyncedRosterPlayer(
             name=name,
             position=position,
