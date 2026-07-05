@@ -195,6 +195,23 @@ def main() -> None:
     p_suggest.add_argument("--sims", type=int, default=None, help="Override Monte Carlo simulation count for this run")
     p_suggest.set_defaults(func=cmd_suggest)
 
+    def cmd_simulate_strategy(args: argparse.Namespace) -> None:
+        from .strategy_sim import load_league_sweeps, _print_report
+        sweeps = load_league_sweeps(
+            profile=args.profile,
+            leagues_json=args.leagues_json,
+            rollout_sims=args.sims,
+        )
+        _print_report(sweeps)
+
+    p_sim = sub.add_parser(
+        "simulate-strategy",
+        help="Compare rollout draft-score picks against ADP autodraft by draft slot",
+    )
+    p_sim.add_argument("--leagues-json", type=str, default=None, help="Optional exported web fda_leagues JSON")
+    p_sim.add_argument("--sims", type=int, default=None, help="Override rollout_sims for each pick")
+    p_sim.set_defaults(func=cmd_simulate_strategy)
+
     p_pick = sub.add_parser("pick", help="Record a league pick")
     p_pick.add_argument("player", type=str)
     p_pick.add_argument("-p", "--position", type=str, default=None)
