@@ -647,11 +647,28 @@ function QuickPickInput({ players, search, setSearch, onSelectPlayer }) {
         onFocus={() => setIsOpen(true)}
         onKeyDown={handleKeyDown}
         style={{
-          width:'100%', padding:'7px 12px', border:`1.5px solid ${T.primary}`,
+          width:'100%', padding:'7px 28px 7px 12px', border:`1.5px solid ${T.primary}`,
           borderRadius:T.rsm, fontSize:13, fontFamily:'inherit', color:T.text,
           background: T.surface, outline:'none', boxShadow:'0 1px 4px rgba(0,0,0,.06)',
         }}
       />
+      {search && (
+        <button
+          type="button"
+          onClick={() => { setSearch(''); setIsOpen(false); }}
+          title="Clear search"
+          style={{
+            position:'absolute', right:8, top:'50%', transform:'translateY(-50%)',
+            background:'none', border:'none', cursor:'pointer', color:T.muted,
+            fontSize:14, fontWeight:700, padding:'2px 4px', lineHeight:1,
+            display:'flex', alignItems:'center', justifyContent:'center',
+          }}
+          onMouseEnter={e => e.currentTarget.style.color = T.text}
+          onMouseLeave={e => e.currentTarget.style.color = T.muted}
+        >
+          ✕
+        </button>
+      )}
       {isOpen && candidates.length > 0 && (
         <div style={{
           position:'absolute', top:'100%', left:0, right:0, zIndex:999,
