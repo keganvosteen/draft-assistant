@@ -40,11 +40,6 @@ from .draft_value import (
 )
 from .models import DraftState, LeagueConfig, Player
 from .projections import compute_points, replacement_levels
-from .scoring_utils import (
-    _apply_need_multiplier,
-    _position_need_multiplier,
-    needs_by_position,
-)
 
 # Positions we only draft once forced to (the owner fills K/DST last unless a
 # rollout shows a standout is actually worth more season points). This is a
@@ -102,11 +97,6 @@ def rollout_values(
     repl = replacement_levels(
         available, config.scoring, config.teams, roster, points_map=points_map
     )
-
-    surplus_map = {
-        p.key(): max(0.0, points_map.get(p.key(), 0.0) - repl.get(p.position, 0.0))
-        for p in all_players
-    }
 
     base_value = roster_value(roster_players, points_map, roster).total_value
 
@@ -260,7 +250,6 @@ def rollout_values(
         candidates.append(by_key[g0])
 
     results: List[RolloutResult] = []
-    needs = needs_by_position(config, my_roster)
 
     for p in candidates:
         key = p.key()
@@ -282,7 +271,7 @@ def rollout_values(
 
     results.sort(
         key=lambda r: (
-            _apply_need_multiplier(r.impact, _position_need_multiplier(r.player.position, needs, config, my_roster, used, total_rounds)),
+            r.impact,
             r.expected_roster_points,
             r.vor,
         ),

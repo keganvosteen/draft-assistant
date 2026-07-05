@@ -51,15 +51,21 @@ def free_agent_recommendations(
     rows: List[FreeAgentRecommendation] = []
     for player in available:
         after = roster_value(roster_players + [player], points_map, config.roster)
+        kept_players = after.starters + after.bench
+        kept_keys = {kept.key() for kept in kept_players}
+        if roster_full and player.key() not in kept_keys:
+            continue
         roster_gain = round(after.total_value - current_value, 2)
         starter_gain = round(after.starter_value - current_starter, 2)
         bench_gain = round(roster_gain - starter_gain, 2)
         points = round(points_map.get(player.key(), 0.0), 2)
         vor = round(points - repl.get(player.position, 0.0), 2)
         drop_player = (
-            _suggested_drop(roster_players, after.starters + after.bench, points_map)
+            _suggested_drop(roster_players, kept_players, points_map)
             if roster_full else None
         )
+        if roster_full and drop_player is None:
+            continue
         drop_points = round(points_map.get(drop_player.key(), 0.0), 2) if drop_player else None
         score = _score(player, roster_gain, starter_gain, bench_gain, vor, drop_player)
 

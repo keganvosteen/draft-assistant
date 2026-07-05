@@ -24,10 +24,13 @@ from .scoring_utils import (
     FLEX_ELIGIBLE,
     NEED_CEILING,
     PARTIAL_FLOOR,
-    _apply_need_multiplier,
-    _position_need_multiplier,
+    apply_need_multiplier,
     needs_by_position,
+    position_need_multiplier,
 )
+
+_apply_need_multiplier = apply_need_multiplier
+_position_need_multiplier = position_need_multiplier
 
 
 def _bye_week_penalty(

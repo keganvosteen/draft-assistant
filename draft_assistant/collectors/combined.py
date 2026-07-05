@@ -12,19 +12,16 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 from ..models import Player
-from ..fuzzy import best_match
+from ..fuzzy import best_match, normalize_player_key, normalize_player_name
 
 
 def _normalize_name(name: str) -> str:
     """Lowercase, strip suffixes like Jr./Sr./III, collapse whitespace."""
-    import re
-    name = name.strip()
-    name = re.sub(r"\s+(Jr\.?|Sr\.?|II|III|IV|V)$", "", name, flags=re.IGNORECASE)
-    return " ".join(name.lower().split())
+    return normalize_player_name(name)
 
 
 def _match_key(name: str, position: str) -> str:
-    return f"{_normalize_name(name)}|{position}"
+    return normalize_player_key(name, position)
 
 
 def _pair_fuzzy_keys(

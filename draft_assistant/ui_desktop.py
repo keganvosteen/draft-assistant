@@ -4,7 +4,7 @@ import json
 from typing import Dict, List, Tuple
 
 from .draft import DraftTracker
-from .models import DraftState, LeagueConfig, Player
+from .models import DraftState, FLEX_TYPES, LeagueConfig, Player
 from .profiles import (
     DEFAULT_PROFILE,
     ProfilePaths,
@@ -32,7 +32,7 @@ else:
 
 
 POSITION_CHOICES = ["", "QB", "RB", "WR", "TE", "K", "DST"]
-ROSTER_FIELDS = ["QB", "RB", "WR", "TE", "FLEX", "K", "DST", "BN", "IR"]
+ROSTER_FIELDS = ["QB", "RB", "WR", "TE", *FLEX_TYPES.keys(), "K", "DST", "BN", "IR"]
 VOR_TOOLTIP_TEXT = (
     "VOR (Value Over Replacement)\n"
     "Projected points above the league replacement line at that position.\n"
@@ -392,7 +392,7 @@ class DraftAssistantApp:
             lines.append(f"{pos}: {names if names else '-'}")
         lines.append("")
         lines.append("Needs")
-        for pos in ["QB", "RB", "WR", "TE", "FLEX", "K", "DST"]:
+        for pos in ["QB", "RB", "WR", "TE", *FLEX_TYPES.keys(), "K", "DST"]:
             lines.append(f"{pos}: {needs.get(pos, 0)}")
         self._set_text(self.roster_text, "\n".join(lines))
 

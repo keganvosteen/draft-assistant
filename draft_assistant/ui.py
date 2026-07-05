@@ -13,7 +13,7 @@ except ImportError:  # pragma: no cover - Windows has no stdlib readline.
 from .config import DEFAULT_CONFIG
 from .draft import DraftTracker
 from .historical import confidence_score
-from .models import DraftState, LeagueConfig, Player
+from .models import DraftState, FLEX_TYPES, LeagueConfig, Player
 from .profiles import (
     DEFAULT_PROFILE,
     ProfilePaths,
@@ -24,9 +24,10 @@ from .profiles import (
 )
 from .providers.base import build_provider
 from .storage import load_state, save_state, save_players
+from .scoring_utils import flex_need_for_position
 from .suggest import needs_by_position, suggest_players
 
-POSITIONS = ["QB", "RB", "WR", "TE", "FLEX", "K", "DST", "BN"]
+POSITIONS = ["QB", "RB", "WR", "TE", *FLEX_TYPES.keys(), "K", "DST", "BN"]
 SCORING_PRESETS = {
     "ppr": {"rec": 1.0},
     "half": {"rec": 0.5},
@@ -223,7 +224,7 @@ def _show_board(tracker: DraftTracker, config: LeagueConfig, state: DraftState):
 
         need_flag = ""
         need = needs.get(p.position, 0)
-        flex = needs.get("FLEX", 0) if p.position in {"RB", "WR", "TE"} else 0
+        flex = flex_need_for_position(p.position, needs)
         if need > 0:
             need_flag = f" {GREEN}NEED{RESET}"
         elif flex > 0:
@@ -243,12 +244,15 @@ def _show_board(tracker: DraftTracker, config: LeagueConfig, state: DraftState):
         status = f"{GREEN}{filled}/{slot_count}{RESET}" if filled >= slot_count else f"{YELLOW}{filled}/{slot_count}{RESET}"
         print(f"    {pos:4} [{status}]  {names}")
 
-    # FLEX
-    flex_target = config.roster.get("FLEX", 0)
-    flex_open = needs.get("FLEX", 0)
-    flex_filled = flex_target - flex_open
-    flex_status = f"{GREEN}{flex_filled}/{flex_target}{RESET}" if flex_open == 0 else f"{YELLOW}{flex_filled}/{flex_target}{RESET}"
-    print(f"    {'FLEX':4} [{flex_status}]  {DIM}(RB/WR/TE overflow){RESET}")
+    # Flex variants
+    for fkey, elig in FLEX_TYPES.items():
+        flex_target = config.roster.get(fkey, 0)
+        flex_open = needs.get(fkey, 0)
+        if not flex_target and not flex_open:
+            continue
+        flex_filled = flex_target - flex_open
+        flex_status = f"{GREEN}{flex_filled}/{flex_target}{RESET}" if flex_open == 0 else f"{YELLOW}{flex_filled}/{flex_target}{RESET}"
+        print(f"    {fkey:4} [{flex_status}]  {DIM}({'/'.join(elig)} overflow){RESET}")
 
     # Needs summary line
     need_strs = [f"{pos}:{n}" for pos, n in needs.items() if n > 0 and pos != "FLEX"]

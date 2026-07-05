@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
 
-from .fuzzy import best_match
+from .fuzzy import best_match, normalize_player_name
 from .models import Player
 
 
@@ -173,6 +172,4 @@ def _provider_value(provider_id: Optional[str]) -> Optional[str]:
 
 
 def _norm(value: str) -> str:
-    value = value.lower()
-    value = re.sub(r"\b(jr|sr|ii|iii|iv|v)\b\.?", "", value)
-    return re.sub(r"[^a-z0-9]+", "", value)
+    return normalize_player_name(value, compact=True)

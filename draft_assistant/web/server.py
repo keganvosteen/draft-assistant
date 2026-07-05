@@ -25,70 +25,9 @@ from ..rollout import rollout_values
 from ..sample_data import sample_players
 from ..scoring import fantasy_points
 from ..storage import load_players, load_state, save_players, save_state
+from .scoring import STANDARD_SCORING, scoring_for_league
 
 STATIC_DIR = Path(__file__).parent / "static"
-
-STANDARD_SCORING = {
-    "pass_yd": 0.04, "pass_td": 4, "pass_int": -2,
-    "rush_yd": 0.1, "rush_td": 6,
-    "rec_yd": 0.1, "rec_td": 6,
-    "fumbles": -2,
-}
-
-# Points-per-reception for the web LeagueSetup presets.
-_PRESET_REC = {"standard": 0.0, "ppr": 1.0, "half-ppr": 0.5}
-
-
-def scoring_for_league(league: dict, base_scoring: dict) -> dict:
-    """Overlay the web LeagueSetup scoring choice onto the league's base scoring.
-
-    Mirrors the frontend's ``calcProjection`` so the rollout engine scores
-    players exactly the way the board shows them:
-
-    * presets (standard / ppr / half-ppr) only change points-per-reception;
-    * ``custom`` maps the UI's per-category fields onto Python scoring keys
-      (yardage fields are entered as *yards-per-point*, so they're inverted);
-    * K/DST and any other base weights are preserved, so kicker/defense scoring
-      stays correct (the UI never carries those).
-
-    Returns ``base_scoring`` unchanged when no ``scoringType`` is supplied.
-    """
-    stype = league.get("scoringType")
-    if not stype:
-        return base_scoring
-    scoring = dict(base_scoring)
-    if stype in _PRESET_REC:
-        scoring["rec"] = _PRESET_REC[stype]
-        return scoring
-    if stype == "custom":
-        cs = league.get("customScoring") or {}
-
-        def per_yd(denom):
-            denom = float(denom or 0)
-            return (1.0 / denom) if denom else 0.0
-
-        two_pt = float(cs.get("twoPt", 0) or 0)
-        scoring.update({
-            "pass_yd": per_yd(cs.get("passYds")),
-            "pass_td": float(cs.get("passTD", 0) or 0),
-            "pass_int": float(cs.get("passInt", 0) or 0),
-            "rush_yd": per_yd(cs.get("rushYds")),
-            "rush_td": float(cs.get("rushTD", 0) or 0),
-            "rec_yd": per_yd(cs.get("recYds")),
-            "rec_td": float(cs.get("recTD", 0) or 0),
-            "rec": float(cs.get("reception", 0) or 0),
-            "pass_2pt": two_pt, "rush_2pt": two_pt, "rec_2pt": two_pt,
-            "fum_ret_td": float(cs.get("fumRetTD", 0) or 0),
-            "fumbles_total": float(cs.get("fumble", 0) or 0),
-            # Back-compat: leagues saved before fumbleLost existed keep the base
-            # (typically -2) penalty rather than zeroing it.
-            "fumbles": (float(cs["fumbleLost"]) if cs.get("fumbleLost") is not None
-                        else scoring.get("fumbles", -2.0)),
-        })
-        if cs.get("sackTaken"):
-            scoring["sack_taken"] = float(cs["sackTaken"])
-        return scoring
-    return base_scoring
 
 # Last-resort fallback only (a past season's byes — goes stale). Byes are
 # preferred from player data, then from per-team byes derived from that data.

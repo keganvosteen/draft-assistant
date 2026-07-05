@@ -59,6 +59,15 @@ class TestFreeAgentRecommendations(unittest.TestCase):
         self.assertIsNone(rows[0].drop_player)
         self.assertGreater(rows[0].starter_gain, 0)
 
+    def test_full_roster_candidate_not_kept_is_suppressed(self):
+        rostered = _p("Roster RB", "RB", 100)
+        no_upgrade = _p("Free RB", "RB", 90, adp=1)
+        cfg = _config({"RB": 1, "BN": 0})
+
+        rows = free_agent_recommendations(cfg, [no_upgrade], {"RB": [rostered]}, top_n=5)
+
+        self.assertEqual(rows, [])
+
     def test_scoring_changes_rankings(self):
         volume = Player(
             id="Volume|WR", name="Volume", position="WR",
