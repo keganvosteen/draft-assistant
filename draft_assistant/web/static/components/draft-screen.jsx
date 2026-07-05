@@ -749,10 +749,6 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
       return cmpScore(a, b);
     });
 
-  const width = useWindowWidth();
-  const isNarrow = width < 650;
-  const isMedium = width >= 650 && width < 960;
-  const isWide   = width >= 960;
   const GRID = isWide
     ? '30px 1fr 52px 48px 44px 54px 54px 64px 74px'
     : isMedium
