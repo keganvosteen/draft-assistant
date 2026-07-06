@@ -7,6 +7,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 POSITIONS = {"QB", "RB", "WR", "TE", "K", "DST", "DEF"}
+_SUFFIX_RE = re.compile(r"\s+(jr\.?|sr\.?|ii|iii|iv|v)$", re.IGNORECASE)
 
 
 def _levenshtein(s1: str, s2: str) -> int:
@@ -60,6 +61,19 @@ def best_match(
 def _normalize_str(s: str) -> str:
     """Strip special characters for clean matching."""
     return re.sub(r"[^\w\s]", "", s.lower()).strip()
+
+
+def normalize_player_name(name: str, compact: bool = False) -> str:
+    """Normalize player names consistently across importers and sync matching."""
+    normalized = _SUFFIX_RE.sub("", str(name or "").strip())
+    normalized = " ".join(normalized.lower().split())
+    if compact:
+        return re.sub(r"[^a-z0-9]+", "", normalized)
+    return normalized
+
+
+def normalize_player_key(name: str, position: str, compact: bool = False) -> str:
+    return f"{normalize_player_name(name, compact=compact)}|{position}"
 
 
 def score_player_query(query: str, player: Dict[str, Any]) -> float:

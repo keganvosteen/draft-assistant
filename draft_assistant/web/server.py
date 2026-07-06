@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import traceback
 import webbrowser
 from functools import partial
@@ -24,70 +25,9 @@ from ..rollout import rollout_values
 from ..sample_data import sample_players
 from ..scoring import fantasy_points
 from ..storage import load_players, load_state, save_players, save_state
+from .scoring import STANDARD_SCORING, scoring_for_league
 
 STATIC_DIR = Path(__file__).parent / "static"
-
-STANDARD_SCORING = {
-    "pass_yd": 0.04, "pass_td": 4, "pass_int": -2,
-    "rush_yd": 0.1, "rush_td": 6,
-    "rec_yd": 0.1, "rec_td": 6,
-    "fumbles": -2,
-}
-
-# Points-per-reception for the web LeagueSetup presets.
-_PRESET_REC = {"standard": 0.0, "ppr": 1.0, "half-ppr": 0.5}
-
-
-def scoring_for_league(league: dict, base_scoring: dict) -> dict:
-    """Overlay the web LeagueSetup scoring choice onto the league's base scoring.
-
-    Mirrors the frontend's ``calcProjection`` so the rollout engine scores
-    players exactly the way the board shows them:
-
-    * presets (standard / ppr / half-ppr) only change points-per-reception;
-    * ``custom`` maps the UI's per-category fields onto Python scoring keys
-      (yardage fields are entered as *yards-per-point*, so they're inverted);
-    * K/DST and any other base weights are preserved, so kicker/defense scoring
-      stays correct (the UI never carries those).
-
-    Returns ``base_scoring`` unchanged when no ``scoringType`` is supplied.
-    """
-    stype = league.get("scoringType")
-    if not stype:
-        return base_scoring
-    scoring = dict(base_scoring)
-    if stype in _PRESET_REC:
-        scoring["rec"] = _PRESET_REC[stype]
-        return scoring
-    if stype == "custom":
-        cs = league.get("customScoring") or {}
-
-        def per_yd(denom):
-            denom = float(denom or 0)
-            return (1.0 / denom) if denom else 0.0
-
-        two_pt = float(cs.get("twoPt", 0) or 0)
-        scoring.update({
-            "pass_yd": per_yd(cs.get("passYds")),
-            "pass_td": float(cs.get("passTD", 0) or 0),
-            "pass_int": float(cs.get("passInt", 0) or 0),
-            "rush_yd": per_yd(cs.get("rushYds")),
-            "rush_td": float(cs.get("rushTD", 0) or 0),
-            "rec_yd": per_yd(cs.get("recYds")),
-            "rec_td": float(cs.get("recTD", 0) or 0),
-            "rec": float(cs.get("reception", 0) or 0),
-            "pass_2pt": two_pt, "rush_2pt": two_pt, "rec_2pt": two_pt,
-            "fum_ret_td": float(cs.get("fumRetTD", 0) or 0),
-            "fumbles_total": float(cs.get("fumble", 0) or 0),
-            # Back-compat: leagues saved before fumbleLost existed keep the base
-            # (typically -2) penalty rather than zeroing it.
-            "fumbles": (float(cs["fumbleLost"]) if cs.get("fumbleLost") is not None
-                        else scoring.get("fumbles", -2.0)),
-        })
-        if cs.get("sackTaken"):
-            scoring["sack_taken"] = float(cs["sackTaken"])
-        return scoring
-    return base_scoring
 
 # Last-resort fallback only (a past season's byes — goes stale). Byes are
 # preferred from player data, then from per-team byes derived from that data.
@@ -199,6 +139,25 @@ def _load_players(profile: str):
     return players, config
 
 
+def _prune_tasks():
+    """Remove finished tasks older than 10 minutes or trim when task count exceeds 50."""
+    now = time.time()
+    cutoff = now - 600
+    expired = [
+        tid for tid, task in _tasks.items()
+        if task["status"] in ("done", "error") and task.get("created_at", now) < cutoff
+    ]
+    for tid in expired:
+        _tasks.pop(tid, None)
+    if len(_tasks) > 50:
+        finished = [
+            tid for tid, task in _tasks.items()
+            if task["status"] in ("done", "error")
+        ]
+        for tid in finished[: len(_tasks) - 50]:
+            _tasks.pop(tid, None)
+
+
 def _run_task(task_id: str, fn, *args, **kwargs):
     """Run *fn* in a background thread, storing result in _tasks."""
     def _worker():
@@ -213,7 +172,13 @@ def _run_task(task_id: str, fn, *args, **kwargs):
                 _tasks[task_id]["error"] = f"{exc}\n{traceback.format_exc()}"
 
     with _task_lock:
-        _tasks[task_id] = {"status": "running", "result": None, "error": None}
+        _prune_tasks()
+        _tasks[task_id] = {
+            "status": "running",
+            "result": None,
+            "error": None,
+            "created_at": time.time(),
+        }
     threading.Thread(target=_worker, daemon=True).start()
 
 
@@ -719,29 +684,36 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
+    def _get_draft_state(self) -> dict:
+        paths = ensure_profile(self.profile)
+        state = load_state(paths.state_path)
+        return {
+            "picks": state.picks,
+            "my_picks": state.my_picks,
+            "my_team_name": state.my_team_name,
+            "league_teams": state.league_teams,
+        }
+
+    def _save_draft_state(self) -> dict:
+        body = self._read_body()
+        paths = ensure_profile(self.profile)
+        state = load_state(paths.state_path)
+        if "picks" in body:
+            state.picks = self._picks_list(body["picks"])
+        if "my_picks" in body:
+            state.my_picks = self._picks_list(body["my_picks"])
+        save_state(state, paths.state_path)
+        return {"ok": True, "path": str(paths.state_path)}
+
     def _handle_get_state(self):
         try:
-            paths = ensure_profile(self.profile)
-            state = load_state(paths.state_path)
-            self._send_json({
-                "picks": state.picks,
-                "my_picks": state.my_picks,
-                "my_team_name": state.my_team_name,
-                "league_teams": state.league_teams,
-            })
+            self._send_json(self._get_draft_state())
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
     def _handle_save_state(self):
         try:
-            body = self._read_body()
-            paths = ensure_profile(self.profile)
-            state = load_state(paths.state_path)
-            if "picks" in body:
-                state.picks = self._picks_list(body["picks"])
-            if "my_picks" in body:
-                state.my_picks = self._picks_list(body["my_picks"])
-            save_state(state, paths.state_path)
+            self._save_draft_state()
             self._send_json({"ok": True})
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
@@ -876,32 +848,15 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
 
     def _handle_save_draft(self):
         try:
-            body = self._read_body()
-            paths = ensure_profile(self.profile)
-            state = load_state(paths.state_path)
-            if "picks" in body:
-                state.picks = self._picks_list(body["picks"])
-            if "my_picks" in body:
-                state.my_picks = self._picks_list(body["my_picks"])
-            save_state(state, paths.state_path)
-            self._send_json({"ok": True, "path": str(paths.state_path)})
+            res = self._save_draft_state()
+            self._send_json(res)
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
     def _handle_load_draft(self):
-        try:
-            paths = ensure_profile(self.profile)
-            state = load_state(paths.state_path)
-            self._send_json({
-                "picks": state.picks,
-                "my_picks": state.my_picks,
-                "my_team_name": state.my_team_name,
-                "league_teams": state.league_teams,
-            })
-        except Exception as exc:
-            self._send_json({"error": str(exc)}, 500)
+        self._handle_get_state()
 
     # ── export draft log ──────────────────────────────────────────────────
 

@@ -127,6 +127,13 @@ class TestPolicyDetails(unittest.TestCase):
         self.assertEqual([(r.player.name, r.impact) for r in a],
                          [(r.player.name, r.impact) for r in b])
 
+    def test_displayed_impact_matches_sort_order(self):
+        available = [_p(f"RB{i}", "RB", 300 - i * 7, adp=float(i + 1)) for i in range(8)]
+        cfg = _config({"RB": 2, "WR": 1, "BN": 1})
+        res = rollout_values(cfg, available, {}, top_n=5)
+        impacts = [r.impact for r in res]
+        self.assertEqual(impacts, sorted(impacts, reverse=True))
+
 
 class TestDegenerate(unittest.TestCase):
     def test_zero_sims_falls_back(self):

@@ -8,6 +8,7 @@ from .export import export_players_csv
 from .importers.fantasypros import load_dst_csv, load_k_csv, load_offense_csv, merge_players
 from .importers.fftoday import fetch_all_fftoday
 from .importers.free_sources import pull_free_data
+from .models import FLEX_TYPES
 from .profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from .providers.base import build_provider
 from .sample_data import sample_players
@@ -134,7 +135,7 @@ def cmd_roster(args: argparse.Namespace) -> None:
 
     needs = needs_by_position(config, roster)
     print("Needs:")
-    for pos in ["QB", "RB", "WR", "TE", "FLEX", "K", "DST"]:
+    for pos in ["QB", "RB", "WR", "TE", *FLEX_TYPES.keys(), "K", "DST"]:
         print(f"- {pos}: {needs.get(pos, 0)}")
 
 

@@ -48,6 +48,39 @@ class TestNeedsByPosition(unittest.TestCase):
         self.assertEqual(needs["RB"], 0)
         self.assertEqual(needs["FLEX"], 1)  # no overflow to fill FLEX
 
+    def test_wrte_flex_ignores_rb_overflow(self):
+        cfg = LeagueConfig(
+            teams=10,
+            roster={"RB": 0, "WR": 1, "TE": 0, "WRTE": 1, "BN": 0},
+            scoring=SCORING,
+            provider={},
+        )
+        roster = {"RB": [_make_player("RB1", "RB", {})]}
+        needs = needs_by_position(cfg, roster)
+        self.assertEqual(needs["WRTE"], 1)
+
+    def test_wrte_flex_filled_by_wr_overflow(self):
+        cfg = LeagueConfig(
+            teams=10,
+            roster={"WR": 1, "TE": 0, "WRTE": 1, "BN": 0},
+            scoring=SCORING,
+            provider={},
+        )
+        roster = {"WR": [_make_player("WR1", "WR", {}), _make_player("WR2", "WR", {})]}
+        needs = needs_by_position(cfg, roster)
+        self.assertEqual(needs["WRTE"], 0)
+
+    def test_superflex_filled_by_qb_overflow(self):
+        cfg = LeagueConfig(
+            teams=10,
+            roster={"QB": 1, "SUPERFLEX": 1, "BN": 0},
+            scoring=SCORING,
+            provider={},
+        )
+        roster = {"QB": [_make_player("QB1", "QB", {}), _make_player("QB2", "QB", {})]}
+        needs = needs_by_position(cfg, roster)
+        self.assertEqual(needs["SUPERFLEX"], 0)
+
 
 class TestGradientNeedMultiplier(unittest.TestCase):
     def test_filled_position_gets_low_multiplier(self):

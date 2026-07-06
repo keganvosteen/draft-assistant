@@ -14,7 +14,9 @@
 (function () {
 
   var POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST'];
-  var FLEX_POS  = { RB: true, WR: true, TE: true };
+  var FLEX_TYPES = typeof FLEX_TYPES_JS !== 'undefined'
+    ? FLEX_TYPES_JS
+    : { FLEX: { label: 'FLX', elig: ['RB', 'WR', 'TE'] } };
   var CANDIDATES_PER_PICK = 14;
 
   function snakeTeam(pickNum, numTeams) {
@@ -37,19 +39,60 @@
     return t;
   }
 
+  function flexFilled(c, slots) {
+    var overflow = {};
+    Object.keys(FLEX_TYPES).forEach(function (fk) {
+      FLEX_TYPES[fk].elig.forEach(function (pos) {
+        overflow[pos] = Math.max(0, (c[pos] || 0) - (slots[pos] || 0));
+      });
+    });
+    var filled = {};
+    var flexSlots = [];
+    Object.keys(FLEX_TYPES).forEach(function (fk) {
+      filled[fk] = 0;
+      for (var i = 0; i < (slots[fk] || 0); i += 1) {
+        flexSlots.push({ key: fk, elig: FLEX_TYPES[fk].elig });
+      }
+    });
+    flexSlots.sort(function (a, b) { return a.elig.length - b.elig.length; });
+    flexSlots.forEach(function (slot) {
+      var best = slot.elig[0];
+      slot.elig.forEach(function (pos) {
+        if ((overflow[pos] || 0) > (overflow[best] || 0)) best = pos;
+      });
+      if ((overflow[best] || 0) > 0) {
+        overflow[best] -= 1;
+        filled[slot.key] += 1;
+      }
+    });
+    return filled;
+  }
+
+  function flexOpenFor(pos, c, slots) {
+    var filled = flexFilled(c, slots);
+    var open = 0;
+    Object.keys(FLEX_TYPES).forEach(function (fk) {
+      if (FLEX_TYPES[fk].elig.indexOf(pos) >= 0) {
+        open += Math.max(0, (slots[fk] || 0) - (filled[fk] || 0));
+      }
+    });
+    return open;
+  }
+
+  function totalFlexOpen(c, slots) {
+    var filled = flexFilled(c, slots);
+    return Object.keys(FLEX_TYPES).reduce(function (sum, fk) {
+      return sum + Math.max(0, (slots[fk] || 0) - (filled[fk] || 0));
+    }, 0);
+  }
+
   // How much does a team with roster counts `c` want position `pos`?
   // Live drafters chase open starting slots; autodrafters take best ADP
   // available and only deviate at hard caps (2nd K, 3rd QB, full position).
   function needFactor(pos, c, slots, mode, picksLeft) {
     var have      = c[pos] || 0;
     var starters  = slots[pos] || 0;
-    var flexSlots = slots.FLEX || 0;
-
-    var flexUsed = 0;
-    ['RB', 'WR', 'TE'].forEach(function (fp) {
-      flexUsed += Math.max(0, (c[fp] || 0) - (slots[fp] || 0));
-    });
-    var flexOpen = Math.max(0, flexSlots - flexUsed);
+    var flexOpen = flexOpenFor(pos, c, slots);
 
     if ((pos === 'K' || pos === 'DST') && have >= starters) return 0.01;
     if (pos === 'QB' && have >= Math.max(starters, 1) + 1)  return 0.02;
@@ -60,12 +103,13 @@
     POSITIONS.forEach(function (p2) {
       mustFill += Math.max(0, (slots[p2] || 0) - (c[p2] || 0));
     });
+    mustFill += totalFlexOpen(c, slots);
     var slack = picksLeft - mustFill;
     if (have < starters && slack <= 1) return 5.0;
     if ((pos === 'K' || pos === 'DST') && slack > 2) return mode === 'auto' ? 0.04 : 0.02;
 
     if (have < starters)                 return mode === 'live' ? 1.5 : 1.1;
-    if (FLEX_POS[pos] && flexOpen > 0)   return mode === 'live' ? 1.0 : 0.95;
+    if (flexOpen > 0)                    return mode === 'live' ? 1.0 : 0.95;
     if (pos === 'QB')                    return 0.15;
     return mode === 'live' ? 0.45 : 0.7;   // bench depth
   }

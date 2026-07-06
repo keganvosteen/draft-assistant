@@ -100,13 +100,14 @@ def rollout_values(
 
     base_value = roster_value(roster_players, points_map, roster).total_value
 
-    # ---- cheap prelim ranking (immediate optimal-lineup gain + a bit of VOR) --
-    prelim: List[Tuple[Player, float, float]] = []  # (player, immediate_gain, vor)
+    # ---- cheap prelim ranking (immediate optimal-lineup gain + VOR) ------------
+    prelim: List[Tuple[Player, float, float]] = []  # (player, combined_score, vor)
     for p in available:
         gain = roster_value(roster_players + [p], points_map, roster).total_value - base_value
         vor = points_map.get(p.key(), 0.0) - repl.get(p.position, 0.0)
-        prelim.append((p, round(gain, 2), round(vor, 2)))
-    prelim.sort(key=lambda t: (t[1] + 0.25 * t[2], t[2]), reverse=True)
+        combined = gain + (0.5 if gain > 0 else 0.05) * max(0.0, vor)
+        prelim.append((p, round(combined, 2), round(vor, 2)))
+    prelim.sort(key=lambda t: (t[1], t[2]), reverse=True)
     prelim_gain = {p.key(): gain for p, gain, _ in prelim}
 
     # ---- snake-draft pick structure, derived entirely from config -----------
@@ -152,12 +153,12 @@ def rollout_values(
         keys.sort(key=lambda k: points_map.get(k, 0.0), reverse=True)
 
     def greedy_pick(my_players: List[Player], avail: set, picks_left: int) -> Optional[str]:
-        """Pick the available player that most raises optimal-lineup value.
+        """Pick the available player that most raises lineup value + VOR surplus.
 
         For a fixed position the highest-projected available player always gives
-        the largest lineup gain (monotonicity of the optimal lineup), so we only
-        evaluate the best survivor per position. K/DST are ignored until the
-        remaining picks can no longer all be skill players.
+        the largest lineup gain, so we only evaluate the best survivor per
+        position. K/DST are ignored until the remaining picks can no longer all be
+        skill players.
         """
         base = roster_value(my_players, points_map, roster).total_value
         have: Dict[str, int] = {}
@@ -168,7 +169,7 @@ def rollout_values(
         must_fill_kdst = picks_left <= (k_need + d_need)
 
         best_key: Optional[str] = None
-        best_gain = float("-inf")
+        best_score = float("-inf")
         for pos, keys in by_pos_sorted.items():
             if pos in DEFER_LAST:
                 need = k_need if pos == "K" else d_need
@@ -178,8 +179,10 @@ def rollout_values(
             if cand is None:
                 continue
             gain = roster_value(my_players + [by_key[cand]], points_map, roster).total_value - base
-            if gain > best_gain:
-                best_gain, best_key = gain, cand
+            vor = points_map.get(cand, 0.0) - repl.get(pos, 0.0)
+            score = gain + (0.5 if gain > 0 else 0.05) * max(0.0, vor)
+            if score > best_score:
+                best_score, best_key = score, cand
         return best_key
 
     def one_rollout(order: List[str], forced_key: Optional[str]) -> float:
@@ -230,15 +233,24 @@ def rollout_values(
         hit = sum(1 for order in orders if key in order[:gap])
         return round(hit / len(orders), 2)
 
-    # Make sure the default greedy pick is itself in the candidate set so its
-    # impact (~0, the anchor) is shown and everything is measured against it.
+    # Make sure candidates pool includes top prelim + top 3 VOR per position
     candidates = [t[0] for t in prelim[:n_candidates]]
     cand_keys = {p.key() for p in candidates}
+
+    for pos in ["QB", "RB", "WR", "TE"]:
+        pos_avail = [p for p in available if p.position == pos]
+        pos_avail.sort(key=lambda p: points_map.get(p.key(), 0.0) - repl.get(p.position, 0.0), reverse=True)
+        for p in pos_avail[:3]:
+            if p.key() not in cand_keys:
+                candidates.append(p)
+                cand_keys.add(p.key())
+
     g0 = greedy_pick(roster_players, set(avail_keys), picks_left_from(decision_pick))
     if g0 is not None and g0 not in cand_keys and g0 in by_key:
         candidates.append(by_key[g0])
 
     results: List[RolloutResult] = []
+
     for p in candidates:
         key = p.key()
         finals = [one_rollout(order, key) for order in orders]
@@ -257,5 +269,12 @@ def rollout_values(
             sims=sims,
         ))
 
-    results.sort(key=lambda r: (r.impact, r.expected_roster_points, r.vor), reverse=True)
+    results.sort(
+        key=lambda r: (
+            r.impact,
+            r.expected_roster_points,
+            r.vor,
+        ),
+        reverse=True,
+    )
     return results[:top_n]
