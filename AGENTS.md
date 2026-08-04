@@ -2,9 +2,7 @@
 
 ## Local Development
 
-- **Owner's local path (Windows):** `C:\Users\kegan\Documents\draft-assistant`
-- **Cloud dev environment:** `/home/user/draft-assistant`
-- **Primary branch:** `Codex/fantasy-draft-recommender-NxX9l`
+- **Primary branch:** `master`
 
 ## Running
 
@@ -17,7 +15,7 @@
 ## Key Details
 
 - Python 3.10+, no external dependencies for core app
-- 139 tests in `tests/`
+- 240+ tests in `tests/`
 - Web UI uses vendored React + in-browser Babel (no build step, works offline), Python stdlib HTTP server
 - Player data lives in `data/projections.json`
 - League config in `league.config.yaml`

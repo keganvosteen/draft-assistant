@@ -124,7 +124,8 @@ def _historical_trend(
 
 # Per-position blend weight: w = the share given to the raw PROJECTION, with
 # (1-w) given to the recency-weighted historical trend. Calibrated on 2019-2025
-# preseason-vs-actual backtests (see draft_assistant/backtest.py): projections
+# preseason-vs-actual backtests and checked with leave-one-season-out validation
+# (see draft_assistant/backtest.py): projections
 # dominate at every position — most strongly at QB, where history adds nothing —
 # while WR/TE benefit most from leaning on recent production. This replaces the
 # old uniform 0.6, which the backtest showed was too much history for QB/RB/TE.

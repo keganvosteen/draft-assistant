@@ -23,6 +23,12 @@ class Player:
     metadata: Dict[str, object] = field(default_factory=dict)
 
     def key(self) -> str:
+        """Stable persisted identity, falling back for hand-authored players."""
+        stable_id = str(self.id or "").strip()
+        return stable_id or self.legacy_key()
+
+    def legacy_key(self) -> str:
+        """Pre-v2 display-derived key retained for state-file migration."""
         return f"{self.name}|{self.position}"
 
 

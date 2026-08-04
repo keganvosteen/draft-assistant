@@ -50,13 +50,25 @@ class TestLoadConfig(unittest.TestCase):
             roster={"QB": 1, "RB": 2, "WR": 3, "TE": 1, "FLEX": 1, "K": 1, "DST": 1, "BN": 6},
             scoring={"rec": 0.5, "rush_yd": 0.1},
             provider={"type": "local_json", "options": {"path": "data/projections.json"}},
-            draft={"slot": 4, "monte_carlo_sims": 100},
+            draft={"slot": 4, "rollout_sims": 100},
         )
         save_config(cfg, path)
         loaded = load_config(path)
         self.assertEqual(loaded.teams, 9)
         self.assertEqual(loaded.roster["WR"], 3)
         self.assertEqual(loaded.draft["slot"], 4)
+
+    def test_legacy_draft_options_are_migrated(self):
+        path = self._write(json.dumps({
+            "draft": {"slot": 3, "monte_carlo_sims": 80,
+                      "candidate_pool": 24, "snake": True}
+        }))
+        cfg = load_config(path)
+        self.assertEqual(cfg.draft["rollout_sims"], 80)
+        self.assertEqual(cfg.draft["rollout_candidates"], 24)
+        self.assertNotIn("monte_carlo_sims", cfg.draft)
+        self.assertNotIn("candidate_pool", cfg.draft)
+        self.assertNotIn("snake", cfg.draft)
 
 
 if __name__ == "__main__":

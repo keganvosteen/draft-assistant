@@ -122,6 +122,14 @@ class TestSyncedDraftToPicks(unittest.TestCase):
 
 
 class TestPlayerMatcher(unittest.TestCase):
+    def test_stable_provider_id_matches_without_metadata_or_name(self):
+        player = Player(id="sleeper:123", name="Current Name", position="WR")
+        roster = [SyncedRosterTeam("T1", [
+            SyncedRosterPlayer("Old Name", "WR", provider_id="sleeper:123")
+        ])]
+        result = synced_rosters_to_picks(roster, [player], {})
+        self.assertEqual(result["picks"][0]["playerId"], "sleeper:123")
+
     def test_suffix_variant_matches_base_name(self):
         players = [_p("Marvin Harrison Jr.", "WR")]
         rosters = [SyncedRosterTeam("T1", [SyncedRosterPlayer("Marvin Harrison", "WR")])]

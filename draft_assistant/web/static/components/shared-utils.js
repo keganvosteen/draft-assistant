@@ -36,8 +36,44 @@ function calcProjection(player, scoringType, customScoring) {
   return player.stdPts;
 }
 
+function effectiveImportedScoring(league) {
+  if (!league.importedScoring) return null;
+  const scoring = { ...league.importedScoring };
+  if (league.scoringType === 'standard') scoring.rec = 0;
+  if (league.scoringType === 'half-ppr') scoring.rec = 0.5;
+  if (league.scoringType === 'ppr') scoring.rec = 1;
+  if (league.scoringType === 'custom') {
+    const cs = league.customScoring || {};
+    const perYd = denom => (denom ? 1 / denom : 0);
+    const twoPt = +(cs.twoPt || 0);
+    Object.assign(scoring, {
+      pass_yd: perYd(cs.passYds), pass_td: +(cs.passTD || 0), pass_int: +(cs.passInt || 0),
+      rush_yd: perYd(cs.rushYds), rush_td: +(cs.rushTD || 0),
+      rec_yd: perYd(cs.recYds), rec_td: +(cs.recTD || 0), rec: +(cs.reception || 0),
+      pass_2pt: twoPt, rush_2pt: twoPt, rec_2pt: twoPt,
+      fum_ret_td: +(cs.fumRetTD || 0), fumbles_total: +(cs.fumble || 0),
+      fumbles: cs.fumbleLost == null ? (scoring.fumbles || -2) : +cs.fumbleLost,
+    });
+    if (cs.sackTaken) scoring.sack_taken = +cs.sackTaken;
+  }
+  return scoring;
+}
+
+function calcImportedProjection(player, league) {
+  const scoring = effectiveImportedScoring(league);
+  if (!scoring || !player.stats) return null;
+  const points = Object.entries(scoring).reduce(
+    (total, [stat, weight]) => total + (+(player.stats[stat] || 0) * (+weight || 0)), 0);
+  return Math.round(points * 10) / 10;
+}
+
 function withProjections(players, league) {
-  return players.map(p => ({ ...p, projPts: calcProjection(p, league.scoringType, league.customScoring) }));
+  return players.map(p => {
+    const imported = calcImportedProjection(p, league);
+    return { ...p, projPts: imported == null
+      ? calcProjection(p, league.scoringType, league.customScoring)
+      : imported };
+  });
 }
 
 var FLEX_TYPES_JS = {

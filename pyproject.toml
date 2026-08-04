@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fantasy-draft-assistant"
+version = "0.1.0"
+description = "Local-first fantasy football draft and roster assistant"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Draft Assistant contributors"}]
+dependencies = []
+
+[project.optional-dependencies]
+desktop = ["pywebview>=4,<7"]
+data = ["nfl_data_py>=0.3,<0.4", "pandas>=1.5,<2"]
+backtest = ["numpy>=1.23,<3", "pandas>=1.5,<3"]
+build = ["pyinstaller>=6.11,<7"]
+
+[project.scripts]
+draft-assistant = "draft_assistant.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["draft_assistant*"]
+
+[tool.setuptools.package-data]
+draft_assistant = [
+  "web/static/*.html",
+  "web/static/*.jsx",
+  "web/static/components/*.js",
+  "web/static/components/*.jsx",
+  "web/static/vendor/*.js",
+  "web/static/vendor/*.md",
+]

@@ -26,7 +26,7 @@ ROSTER = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 0, "DST": 0, "BN":
 def _config(teams=10, draft=None):
     return LeagueConfig(
         teams=teams, roster=ROSTER, scoring=SCORING, provider={},
-        draft=draft or {"slot": 1, "monte_carlo_sims": 0},
+        draft=draft or {"slot": 1, "rollout_sims": 0},
     )
 
 
