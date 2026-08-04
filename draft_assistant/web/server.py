@@ -10,6 +10,7 @@ import os
 import threading
 import time
 import traceback
+import uuid
 import webbrowser
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -20,7 +21,7 @@ from ..models import DraftState, LeagueConfig
 from ..profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from ..providers.base import build_provider
 from ..free_agents import free_agent_recommendations
-from ..platform_sync import synced_rosters_to_picks
+from ..platform_sync import synced_draft_to_picks, synced_rosters_to_picks
 from ..rollout import rollout_values
 from ..sample_data import sample_players
 from ..scoring import fantasy_points
@@ -28,6 +29,15 @@ from ..storage import load_players, load_state, save_players, save_state
 from .scoring import STANDARD_SCORING, scoring_for_league
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# Host names this server will answer API calls on (see
+# DraftAPIHandler._request_is_same_origin).
+ALLOWED_HOSTNAMES = {"127.0.0.1", "localhost", "[::1]", "::1"}
+
+# Ceiling on a request body. Generous next to the biggest real payload (a
+# pasted draft room log) and small enough that a bogus Content-Length can't
+# exhaust memory.
+MAX_BODY_BYTES = 8 * 1024 * 1024
 
 # Last-resort fallback only (a past season's byes — goes stale). Byes are
 # preferred from player data, then from per-team byes derived from that data.
@@ -167,9 +177,13 @@ def _run_task(task_id: str, fn, *args, **kwargs):
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = result
         except Exception as exc:
+            # The traceback goes to the console, not to the browser: it carries
+            # absolute filesystem paths, and the task result is readable by
+            # anything that can reach this server.
+            traceback.print_exc()
             with _task_lock:
                 _tasks[task_id]["status"] = "error"
-                _tasks[task_id]["error"] = f"{exc}\n{traceback.format_exc()}"
+                _tasks[task_id]["error"] = str(exc)
 
     with _task_lock:
         _prune_tasks()
@@ -251,6 +265,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     # ── routing ───────────────────────────────────────────────────────────
 
     def do_GET(self):
+        if self.path.startswith("/api/") and not self._request_is_same_origin():
+            self._send_json({"error": "cross-origin request refused"}, 403)
+            return
         if self.path == "/api/players":
             self._handle_players()
         elif self.path == "/api/config":
@@ -265,6 +282,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             super().do_GET()
 
     def do_POST(self):
+        if not self._request_is_same_origin():
+            self._send_json({"error": "cross-origin request refused"}, 403)
+            return
         if self.path == "/api/state":
             self._handle_save_state()
         elif self.path == "/api/pull-free-data":
@@ -283,6 +303,12 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_sync_league()
         elif self.path == "/api/import-espn":
             self._handle_import_espn()
+        elif self.path == "/api/sleeper/leagues":
+            self._handle_sleeper_leagues()
+        elif self.path == "/api/sleeper/import":
+            self._handle_sleeper_import()
+        elif self.path == "/api/sleeper/draft":
+            self._handle_sleeper_draft()
         elif self.path == "/api/yahoo/connect":
             self._handle_yahoo_connect()
         elif self.path == "/api/yahoo/exchange":
@@ -293,8 +319,6 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_save_draft()
         elif self.path == "/api/load-draft":
             self._handle_load_draft()
-        elif self.path == "/api/export-log":
-            self._handle_export_log()
         elif self.path == "/api/parse-draft-text":
             self._handle_parse_draft_text()
         else:
@@ -305,11 +329,46 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     # Access-Control-Allow-Origin would let any website the user has open
     # rewrite draft state or trigger data pulls on this local server.
 
+    def _request_is_same_origin(self) -> bool:
+        """Reject API calls that a *different* site caused the browser to make.
+
+        Binding to 127.0.0.1 keeps other machines out, but it does nothing about
+        a page the user already has open. A cross-origin ``fetch`` with a JSON
+        content type is preflighted and blocked, but a plain HTML form POST with
+        ``enctype="text/plain"`` is a "simple request" — no preflight — and its
+        body can be crafted to parse as valid JSON. That was enough to overwrite
+        draft state or the stored Yahoo credentials from any open tab.
+
+        Two checks close it:
+          * ``Sec-Fetch-Site`` — sent by every current browser, and anything but
+            same-origin/same-site (or a direct navigation, ``none``) is refused.
+          * ``Host`` — a DNS-rebinding attacker points their own name at
+            127.0.0.1, which makes their page look same-origin to the browser;
+            pinning the host name they cannot forge closes that path.
+
+        Non-browser clients (curl, the tests) send no Sec-Fetch-Site and are
+        allowed through — the Host check still applies to them.
+        """
+        host = self.headers.get("Host", "")
+        if host:
+            hostname = host.rsplit(":", 1)[0].strip().lower()
+            if hostname not in ALLOWED_HOSTNAMES:
+                return False
+        site = self.headers.get("Sec-Fetch-Site")
+        if site is not None and site not in ("same-origin", "same-site", "none"):
+            return False
+        return True
+
     def _read_body(self) -> dict:
-        length = int(self.headers.get("Content-Length", 0))
-        if length:
-            return json.loads(self.rfile.read(length))
-        return {}
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if length <= 0:
+            return {}
+        # Cap the read: Content-Length is attacker-controlled, and allocating
+        # whatever it claims is a free way to exhaust memory. The largest real
+        # payload is a pasted draft log, far under this.
+        if length > MAX_BODY_BYTES:
+            raise ValueError("request body too large")
+        return json.loads(self.rfile.read(length))
 
     @staticmethod
     def _picks_list(value) -> list:
@@ -424,9 +483,14 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 "vor": r.vor,
                 "immediateGain": r.immediate_gain,
                 "projRoster": r.expected_roster_points,
-                "impact": r.impact,
+                # Only the leading candidates get a full rollout. The rest are
+                # returned for board ordering but WITHOUT an impact: a prelim
+                # number isn't on the same scale (see rollout.py), and showing
+                # it would invite a comparison that doesn't hold.
+                "impact": r.impact if r.simulated else None,
                 "goneRisk": r.gone_risk,
                 "byePenalty": r.bye_penalty,
+                "simulated": r.simulated,
             } for r in results]
             self._send_json({
                 "suggestions": rows,
@@ -467,7 +531,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 league_id = str(league.get("id") or f"league-{index + 1}")
                 league_picks = picks_by_league.get(league_id, [])
                 draft_position = int(league.get("draftPosition") or 1)
-                picked_keys = _pick_player_ids(league_picks)
+                picked_keys = set(_pick_player_ids(league_picks))
                 my_keys = _my_pick_ids(league_picks, draft_position)
 
                 eff = self._suggest_config({"league": league}, config)
@@ -530,8 +594,17 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     swid=body.get("swid") or league.get("swid"),
                 )
                 source = "ESPN"
+            elif platform == "sleeper" or league.get("sleeperLeagueId"):
+                league_id = str(league.get("sleeperLeagueId") or body.get("leagueId") or "").strip()
+                if not league_id:
+                    self._send_json({"error": "Sleeper league is missing sleeperLeagueId"}, 400)
+                    return
+                from ..importers import sleeper
+                rosters = sleeper.fetch_league_rosters(league_id)
+                source = "Sleeper"
             else:
-                self._send_json({"error": "Sync supports imported ESPN or Yahoo leagues"}, 400)
+                self._send_json(
+                    {"error": "Sync supports imported ESPN, Yahoo, or Sleeper leagues"}, 400)
                 return
 
             result = synced_rosters_to_picks(rosters, players, league)
@@ -552,6 +625,11 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         Body: {leagueId, season?}. Returns name / numTeams / rosterSlots /
         scoringType / teamNames / espnLeagueId for the LeagueSetup form.
         """
+        # Bound before the try: the error path below interpolates it, so a
+        # malformed body (which makes _read_body raise) used to blow up inside
+        # the except handler with UnboundLocalError and drop the connection
+        # instead of returning an error.
+        league_id = ""
         try:
             body = self._read_body()
             league_id = str(body.get("leagueId") or "").strip()
@@ -568,6 +646,98 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._send_json(info)
         except Exception as exc:
             self._send_json({"error": f"Could not import league {league_id!r}: {exc}"}, 500)
+
+    # ── Sleeper import + live draft sync ──────────────────────────────────
+    # Sleeper's league API is public and read-only, so these need no auth at
+    # all — a username or a league id is enough.
+
+    def _handle_sleeper_leagues(self):
+        """List a Sleeper user's leagues for the season, for the picker.
+
+        Body: {username, season?}.
+        """
+        try:
+            body = self._read_body()
+            username = str(body.get("username") or "").strip()
+            if not username:
+                self._send_json({"error": "username required"}, 400)
+                return
+            from ..importers import sleeper
+            from ..importers.free_sources import default_projection_season
+            season = int(body.get("season") or 0) or default_projection_season()
+            leagues = sleeper.fetch_user_leagues(username, season)
+            # Sleeper rolls leagues over per season; before the new season's
+            # leagues exist, the previous one is what the user is drafting.
+            if not leagues and not body.get("season"):
+                leagues = sleeper.fetch_user_leagues(username, season - 1)
+                season -= 1
+            self._send_json({"leagues": leagues, "season": season})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_sleeper_import(self):
+        """Import a Sleeper league's settings as a form-ready payload.
+
+        Body: {leagueId, username?}. Team names come back already in draft-slot
+        order, and ``username`` additionally resolves that user's own slot.
+        """
+        league_id = ""
+        try:
+            body = self._read_body()
+            league_id = str(body.get("leagueId") or "").strip()
+            if not league_id:
+                self._send_json({"error": "leagueId required"}, 400)
+                return
+            from ..importers import sleeper
+            info = sleeper.fetch_league(league_id, username=body.get("username") or None)
+            rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
+            info["scoringType"] = "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"
+            self._send_json(info)
+        except Exception as exc:
+            self._send_json({"error": f"Could not import league {league_id!r}: {exc}"}, 500)
+
+    def _handle_sleeper_draft(self):
+        """Live draft sync: the real picks made so far, in real draft order.
+
+        Body: {league} (or {leagueId}/{draftId}). Safe to poll — it's a couple
+        of small reads against Sleeper's public API.
+        """
+        try:
+            body = self._read_body()
+            league = body.get("league") or {}
+            if not isinstance(league, dict):
+                self._send_json({"error": "league must be an object"}, 400)
+                return
+            from ..importers import sleeper
+            draft_id = str(
+                body.get("draftId") or league.get("sleeperDraftId") or "").strip()
+            if not draft_id:
+                league_id = str(
+                    body.get("leagueId") or league.get("sleeperLeagueId") or "").strip()
+                if not league_id:
+                    self._send_json({"error": "Sleeper league is missing sleeperLeagueId"}, 400)
+                    return
+                draft_id = sleeper.league_draft_id(league_id) or ""
+                if not draft_id:
+                    self._send_json({"error": "This Sleeper league has no draft yet"}, 400)
+                    return
+
+            draft = sleeper.fetch_draft(draft_id)
+            draft_picks = sleeper.fetch_draft_picks(draft_id, draft)
+            players, _config = _load_players(self.profile)
+            result = synced_draft_to_picks(draft_picks, players, league)
+            result.update({
+                "ok": True,
+                "source": "Sleeper",
+                "draftId": draft_id,
+                "status": draft.get("status") or "",
+                "draftType": draft.get("type") or "",
+                "lastPicked": draft.get("last_picked"),
+                "leagueId": league.get("id"),
+            })
+            self._send_json(result)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
 
     # ── Yahoo OAuth import ────────────────────────────────────────────────
     # Credentials + tokens are stored in the profile dir (local machine only).
@@ -737,7 +907,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         try:
             body = self._read_body()
             profile = self.profile
-            task_id = f"pull-free-data-{threading.get_ident()}-{id(body)}"
+            task_id = f"pull-free-data-{uuid.uuid4().hex}"
 
             def _do_pull():
                 from ..importers.free_sources import pull_free_data as _pull
@@ -777,7 +947,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         try:
             body = self._read_body()
             profile = self.profile
-            task_id = f"collect-all-{threading.get_ident()}-{id(body)}"
+            task_id = f"collect-all-{uuid.uuid4().hex}"
 
             def _do_collect():
                 from ..collectors.combined import collect_all
@@ -822,8 +992,11 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             config = load_profile_config(paths)
             provider = build_provider(config.provider)
             players = provider.fetch_players()
+            # Optional league override (same shape as /api/suggest) so values
+            # reflect the league being viewed, not the profile defaults.
+            eff = self._suggest_config(body, config)
             from ..auction import compute_dollar_values
-            values = compute_dollar_values(config, players, budget_per_team=budget)
+            values = compute_dollar_values(eff, players, budget_per_team=budget)
             sorted_vals = sorted(values.items(), key=lambda x: x[1], reverse=True)
             player_map = {p.key(): p for p in players}
             rows = []
@@ -834,7 +1007,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                         "name": p.name, "pos": p.position,
                         "team": p.team or "FA", "value": round(val, 1),
                     })
-            self._send_json({"budget": budget, "teams": config.teams, "values": rows})
+            self._send_json({"budget": budget, "teams": eff.teams, "values": rows})
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
@@ -852,37 +1025,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     def _handle_load_draft(self):
         self._handle_get_state()
 
-    # ── export draft log ──────────────────────────────────────────────────
-
-    def _handle_export_log(self):
-        try:
-            body = self._read_body()
-            pick_list = body.get("picks", [])
-            num_teams = body.get("numTeams", 12)
-            players_map = body.get("playersMap", {})
-            import csv
-            import io
-            buf = io.StringIO()
-            w = csv.writer(buf)
-            w.writerow(["pick", "round", "pick_in_round", "team", "player", "position"])
-            for i, pk in enumerate(pick_list):
-                pick_num = i + 1
-                rd = (pick_num - 1) // num_teams + 1
-                pick_in_rd = (pick_num - 1) % num_teams + 1
-                pid = pk.get("playerId", "")
-                p = players_map.get(pid, {})
-                w.writerow([pick_num, rd, pick_in_rd, pk.get("teamNum", ""),
-                            p.get("name", pid), p.get("pos", "")])
-            csv_str = buf.getvalue()
-            body_bytes = csv_str.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/csv")
-            self.send_header("Content-Disposition", 'attachment; filename="draft_log.csv"')
-            self.send_header("Content-Length", str(len(body_bytes)))
-            self.end_headers()
-            self.wfile.write(body_bytes)
-        except Exception as exc:
-            self._send_json({"error": str(exc)}, 500)
+    # Draft-log CSV export lives in the browser (draft-screen.jsx
+    # handleExportLog) — the server endpoint that used to duplicate it had no
+    # caller and is gone.
 
     # ── parse draft room text (paste modal) ────────────────────────────────
 

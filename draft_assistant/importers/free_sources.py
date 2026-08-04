@@ -8,9 +8,10 @@ import statistics
 from dataclasses import dataclass
 from datetime import date
 from typing import Dict, Iterable, List, Optional, Tuple
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from ..fuzzy import normalize_player_name
 from ..models import LeagueConfig, Player
 from ..platform_sync import SyncedRosterPlayer, SyncedRosterTeam
 from ..scoring import fantasy_points
@@ -80,6 +81,15 @@ class SourceReport:
 class FreeDataResult:
     players: List[Player]
     reports: List[SourceReport]
+
+
+def _seg(value: object) -> str:
+    """Escape a value being interpolated into a request path.
+
+    ESPN league ids come from the browser; unescaped, a ``?``, ``#`` or ``../``
+    in one reshapes the request the app makes.
+    """
+    return quote(str(value or ""), safe="")
 
 
 def default_projection_season(today: Optional[date] = None) -> int:
@@ -334,7 +344,7 @@ def _fetch_ffc_adp_players(adp_format: str, teams: int, season: int) -> Tuple[Li
     ffc_teams = min(14, int(teams or 12))
     for year in _adp_year_candidates(season):
         query = urlencode({"teams": ffc_teams, "year": year})
-        url = f"{FFC_ADP_BASE}/{adp_format}?{query}"
+        url = f"{FFC_ADP_BASE}/{_seg(adp_format)}?{query}"
         data = _fetch_json(url, timeout=30)
         if not isinstance(data, dict):
             errors.append(f"{year}: unexpected response")
@@ -487,7 +497,7 @@ def _fetch_espn_players(season: int, league_id: str, adp_format: str) -> List[Pl
     """
     url = (
         "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
-        f"{season}/segments/0/leagues/{league_id}?view=kona_player_info"
+        f"{_seg(season)}/segments/0/leagues/{_seg(league_id)}?view=kona_player_info"
     )
     flt = json.dumps({"players": {"limit": 500,
                                   "sortPercOwned": {"sortPriority": 1, "sortAsc": False}}})
@@ -543,7 +553,7 @@ def fetch_espn_league(season: int, league_id: str) -> Dict[str, object]:
     """
     url = (
         "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
-        f"{season}/segments/0/leagues/{league_id}?view=mSettings&view=mTeam"
+        f"{_seg(season)}/segments/0/leagues/{_seg(league_id)}?view=mSettings&view=mTeam"
     )
     data = _fetch_json(url, timeout=45)
     settings = data.get("settings", {}) if isinstance(data, dict) else {}
@@ -595,7 +605,7 @@ def fetch_espn_rosters(
     """Fetch current ESPN rosters for public leagues, or private with cookies."""
     url = (
         "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
-        f"{season}/segments/0/leagues/{league_id}?view=mRoster&view=mTeam"
+        f"{_seg(season)}/segments/0/leagues/{_seg(league_id)}?view=mRoster&view=mTeam"
     )
     headers = _espn_cookie_headers(espn_s2, swid)
     data = _fetch_json(url, timeout=45, extra_headers=headers or None)
@@ -883,9 +893,13 @@ def _to_int(value: object) -> Optional[int]:
 
 
 def _norm_name(name: str) -> str:
-    text = name.lower().replace(".", "")
-    text = re.sub(r"\b(jr|sr|ii|iii|iv|v)\b", "", text)
-    return re.sub(r"[^a-z0-9]+", "", text)
+    """Merge-key normalization — the same one the roster matcher uses.
+
+    This used to strip ``jr|sr|ii|iii|iv|v`` as words *anywhere* in the name and
+    disagreed with ``platform_sync``'s normalizer, so a player could be merged
+    under one key and looked up under another. One normalizer now serves both.
+    """
+    return normalize_player_name(name, compact=True)
 
 
 def _clean_metadata(metadata: Dict[str, object]) -> Dict[str, object]:

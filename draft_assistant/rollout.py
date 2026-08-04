@@ -49,6 +49,14 @@ DEFER_LAST = {"K", "DST"}
 DEFAULT_SIMS = 48
 DEFAULT_MIN_CANDIDATES = 16
 
+# How many candidates get the full rest-of-draft rollout. Deliberately NOT tied
+# to ``top_n``: the caller asks for 30 rows to paint the board, but the decision
+# is always among the top handful, and every extra candidate costs a full set of
+# simulations. Players beyond this are still returned — ranked by the cheap
+# prelim score and flagged ``simulated=False`` — so the board stays fully
+# populated without paying to simulate a player nobody is about to draft.
+DEFAULT_SIM_CANDIDATES = 16
+
 
 @dataclass(frozen=True)
 class RolloutResult:
@@ -61,6 +69,10 @@ class RolloutResult:
     gone_risk: float               # P(taken by an opponent before your next pick)
     bye_penalty: float
     sims: int
+    # True when this row came from the full rest-of-draft rollout. False means
+    # ``impact`` is the cheap immediate-lineup-gain estimate instead — fine for
+    # filling out the board, not comparable to a simulated row's impact.
+    simulated: bool = True
 
 
 def _flatten(my_roster: Dict[str, List[Player]]) -> List[Player]:
@@ -87,7 +99,7 @@ def rollout_values(
     settings = config.draft or {}
     sims = max(0, int(settings.get("rollout_sims", DEFAULT_SIMS)))
     noise = float(settings.get("adp_noise", 8.0))
-    n_candidates = max(int(settings.get("rollout_candidates", 0) or 0), top_n, DEFAULT_MIN_CANDIDATES)
+    n_simulated = max(1, int(settings.get("rollout_candidates", 0) or 0) or DEFAULT_SIM_CANDIDATES)
     roster = config.roster
 
     roster_players = _flatten(my_roster)
@@ -132,6 +144,7 @@ def rollout_values(
                 gone_risk=0.0,
                 bye_penalty=_bye_week_penalty(p, roster_players, points_map, roster),
                 sims=0,
+                simulated=False,
             )
             for (p, gain, vor) in prelim[:top_n]
         ]
@@ -152,13 +165,25 @@ def rollout_values(
     for keys in by_pos_sorted.values():
         keys.sort(key=lambda k: points_map.get(k, 0.0), reverse=True)
 
-    def greedy_pick(my_players: List[Player], avail: set, picks_left: int) -> Optional[str]:
+    def greedy_pick(
+        my_players: List[Player],
+        avail: set,
+        picks_left: int,
+        cursor: Dict[str, int],
+    ) -> Optional[str]:
         """Pick the available player that most raises lineup value + VOR surplus.
 
         For a fixed position the highest-projected available player always gives
         the largest lineup gain, so we only evaluate the best survivor per
         position. K/DST are ignored until the remaining picks can no longer all be
         skill players.
+
+        ``cursor`` holds a per-position index into ``by_pos_sorted`` and belongs
+        to one rollout. Within a rollout ``avail`` only ever shrinks, so a
+        position's best survivor never moves backwards and the scan can resume
+        where it left off. Restarting from the top of each position list every
+        pick was the engine's dominant cost — by the late rounds it re-walked
+        a couple of hundred taken players per position, per pick, per sim.
         """
         base = roster_value(my_players, points_map, roster).total_value
         have: Dict[str, int] = {}
@@ -175,9 +200,13 @@ def rollout_values(
                 need = k_need if pos == "K" else d_need
                 if not (must_fill_kdst and need > 0):
                     continue
-            cand = next((k for k in keys if k in avail), None)
-            if cand is None:
+            i = cursor.get(pos, 0)
+            while i < len(keys) and keys[i] not in avail:
+                i += 1
+            cursor[pos] = i
+            if i >= len(keys):
                 continue
+            cand = keys[i]
             gain = roster_value(my_players + [by_key[cand]], points_map, roster).total_value - base
             vor = points_map.get(cand, 0.0) - repl.get(pos, 0.0)
             score = gain + (0.5 if gain > 0 else 0.05) * max(0.0, vor)
@@ -190,13 +219,14 @@ def rollout_values(
         if forced_key is not None:
             avail.discard(forced_key)  # reserve it for my decision pick
         my_players = list(roster_players)
+        cursor: Dict[str, int] = {}
         opp = 0
         for pick_no in range(start_pick, last_pick + 1):
             if pick_no in my_set:
                 if pick_no == decision_pick and forced_key is not None:
                     choice: Optional[str] = forced_key
                 else:
-                    choice = greedy_pick(my_players, avail, picks_left_from(pick_no))
+                    choice = greedy_pick(my_players, avail, picks_left_from(pick_no), cursor)
                 if choice is not None:
                     my_players.append(by_key[choice])
                     avail.discard(choice)
@@ -234,7 +264,7 @@ def rollout_values(
         return round(hit / len(orders), 2)
 
     # Make sure candidates pool includes top prelim + top 3 VOR per position
-    candidates = [t[0] for t in prelim[:n_candidates]]
+    candidates = [t[0] for t in prelim[:n_simulated]]
     cand_keys = {p.key() for p in candidates}
 
     for pos in ["QB", "RB", "WR", "TE"]:
@@ -245,9 +275,10 @@ def rollout_values(
                 candidates.append(p)
                 cand_keys.add(p.key())
 
-    g0 = greedy_pick(roster_players, set(avail_keys), picks_left_from(decision_pick))
+    g0 = greedy_pick(roster_players, set(avail_keys), picks_left_from(decision_pick), {})
     if g0 is not None and g0 not in cand_keys and g0 in by_key:
         candidates.append(by_key[g0])
+        cand_keys.add(g0)
 
     results: List[RolloutResult] = []
 
@@ -277,4 +308,33 @@ def rollout_values(
         ),
         reverse=True,
     )
+
+    # Fill the rest of the requested rows from the prelim ranking, ordered by
+    # immediate lineup gain and flagged simulated=False.
+    #
+    # Their ``impact`` is NOT on the simulated scale and must not be shown as
+    # if it were. A simulated impact compares two *completed* rosters; all a
+    # prelim row knows is what the player adds to the roster as it stands, which
+    # is short by every pick still to come. There is no cheap correction for
+    # that — closing the gap is exactly what the simulation does — so callers
+    # should surface these as "no score yet" rather than as a weaker score.
+    if len(results) < top_n:
+        for (p, gain, vor) in prelim:
+            if len(results) >= top_n:
+                break
+            if p.key() in cand_keys:
+                continue
+            results.append(RolloutResult(
+                player=p,
+                points=round(points_map.get(p.key(), 0.0), 2),
+                vor=vor,
+                immediate_gain=gain,
+                expected_roster_points=round(base_value + gain, 2),
+                impact=gain,
+                gone_risk=gone_risk(p.key()),
+                bye_penalty=_bye_week_penalty(p, roster_players, points_map, roster),
+                sims=0,
+                simulated=False,
+            ))
+
     return results[:top_n]

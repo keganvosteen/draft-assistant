@@ -122,6 +122,22 @@ Keep multiple league setups in one install.
 
 ---
 
+## Connecting a Platform League (web UI)
+
+The league editor can import a real league instead of typing one in — teams, roster slots, scoring, and your league-mates' names.
+
+| Platform | What it needs | What you get |
+|---|---|---|
+| **Sleeper** | Your username (or a league id) — no login | Settings + names **in draft-slot order** with your own seat, plus **live draft sync** |
+| ESPN | The league id, league must be public | Settings + names in platform order |
+| Yahoo | A free developer app + OAuth authorization | Settings + names in platform order |
+
+**Sleeper live draft sync.** Sleeper publishes the draft itself, so the board can mirror it as it happens: import the league, then hit **Go Live** in the draft room. It polls every 5s and replaces the board's picks with the real ones — actual pick numbers and seats, so recommendations track the true state of the draft without anyone typing picks in. Picks for players missing from your board are kept as placeholders so the clock stays right, and it stops on its own when the draft completes.
+
+Outside of a draft, **Sync** on a league card pulls current rosters (all three platforms) — useful in-season for the free-agent scan.
+
+---
+
 ## Data Sources
 
 ### Option 1: `pull-free-data` (no extra dependencies)
@@ -202,19 +218,22 @@ draft_assistant/
 │   └── combined.py
 ├── importers/             # CSV + HTML importers, no-dep collectors
 │   ├── free_sources.py    # GitHub CSV + Sleeper + FFC + ESPN
+│   ├── sleeper.py         # Sleeper league import + live draft sync
+│   ├── yahoo.py           # Yahoo OAuth league import
 │   ├── fantasypros.py
 │   └── fftoday.py
 └── providers/             # Runtime player sources
     ├── base.py
     └── sleeper.py
 
-tests/                     # 164 tests
+tests/                     # 212 tests
 ├── test_scoring.py
 ├── test_projections.py
 ├── test_suggest.py
 ├── test_historical.py
 ├── test_draft.py
-├── test_draft_value.py    # Monte Carlo math, snake picks
+├── test_draft_value.py    # Lineup optimization, snake picks
+├── test_web_server.py     # Same-origin guard, request limits
 ├── test_profiles.py       # Profile system
 ├── test_fuzzy.py
 ├── test_auction.py
@@ -222,6 +241,8 @@ tests/                     # 164 tests
 ├── test_config.py         # Config robustness + round trip
 ├── test_storage.py        # Atomic persistence
 ├── test_free_sources.py   # Free-data collector field mapping
+├── test_platform_sync.py  # Roster → pick matching
+├── test_sleeper_league.py # Sleeper import, roster + live draft sync
 ├── test_nflverse_collector.py
 └── test_combined_collector.py
 ```
@@ -234,7 +255,7 @@ tests/                     # 164 tests
 python -m unittest discover tests -v
 ```
 
-164 tests cover scoring, VOR/replacement levels, gradient needs, FLEX, bye-week penalty, Monte Carlo snake-pick math, free-agent add/drop recommendations, historical adjustments + age curves, fuzzy matching, draft tracking (pick/undo/log), auction values, data collectors, config/persistence robustness, and profile management.
+212 tests cover scoring, VOR/replacement levels, roster needs, FLEX, bye-week penalty, snake-pick math, the rest-of-draft rollout, free-agent add/drop recommendations, historical adjustments + age curves, fuzzy matching, platform roster/draft sync, the web server's same-origin guard and request limits, draft tracking (pick/undo/log), auction values, data collectors, config/persistence robustness, and profile management.
 
 ---
 

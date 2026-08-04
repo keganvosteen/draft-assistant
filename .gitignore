@@ -15,3 +15,9 @@ dist/
 # Yahoo OAuth credentials + tokens — secrets, never commit
 yahoo.json
 **/yahoo.json
+
+# Live draft state and per-league profiles — rewritten on every pick, so
+# tracking them meant every draft dirtied the working tree. The player board
+# (data/projections.json) stays tracked so a clone is usable immediately.
+draft_state.json
+.draft_assistant_profiles/
