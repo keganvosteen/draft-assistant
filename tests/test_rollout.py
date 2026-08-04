@@ -131,8 +131,59 @@ class TestPolicyDetails(unittest.TestCase):
         available = [_p(f"RB{i}", "RB", 300 - i * 7, adp=float(i + 1)) for i in range(8)]
         cfg = _config({"RB": 2, "WR": 1, "BN": 1})
         res = rollout_values(cfg, available, {}, top_n=5)
-        impacts = [r.impact for r in res]
+        impacts = [r.impact for r in res if r.simulated]
         self.assertEqual(impacts, sorted(impacts, reverse=True))
+
+
+class TestSimulatedPool(unittest.TestCase):
+    """Only the leading candidates get a full rollout; the rest fill the board.
+
+    The simulated pool is deliberately decoupled from ``top_n`` — tying them
+    together made every extra board row cost a full set of simulations.
+    """
+
+    def _board(self, n):
+        return [_p(f"RB{i}", "RB", 400 - i * 3, adp=float(i + 1)) for i in range(n)]
+
+    def test_requesting_more_rows_does_not_simulate_more(self):
+        cfg = _config({"RB": 2, "WR": 1, "BN": 2}, teams=4)
+        board = self._board(60)
+        few = rollout_values(cfg, board, {}, top_n=10)
+        many = rollout_values(cfg, board, {}, top_n=40)
+        self.assertEqual(len(many), 40)
+        simulated_many = [r for r in many if r.simulated]
+        # More rows requested, but the simulated pool is unchanged.
+        self.assertLessEqual(len(simulated_many), 20)
+        self.assertTrue(all(r.simulated for r in few))
+
+    def test_estimated_rows_sort_below_every_simulated_row(self):
+        cfg = _config({"RB": 2, "WR": 1, "BN": 2}, teams=4)
+        res = rollout_values(cfg, self._board(60), {}, top_n=40)
+        flags = [r.simulated for r in res]
+        # All True then all False — never interleaved.
+        self.assertEqual(flags, sorted(flags, reverse=True))
+
+    def test_estimated_rows_are_marked_and_unsimulated(self):
+        cfg = _config({"RB": 2, "WR": 1, "BN": 2}, teams=4)
+        res = rollout_values(cfg, self._board(60), {}, top_n=40)
+        estimated = [r for r in res if not r.simulated]
+        self.assertTrue(estimated, "expected the board to be filled past the sim pool")
+        self.assertTrue(all(r.sims == 0 for r in estimated))
+        self.assertTrue(all(r.sims > 0 for r in res if r.simulated))
+
+    def test_rollout_candidates_setting_controls_the_pool(self):
+        cfg = _config({"RB": 2, "WR": 1, "BN": 2}, teams=4)
+        cfg.draft["rollout_candidates"] = 4
+        res = rollout_values(cfg, self._board(60), {}, top_n=30)
+        # The pool is the configured size plus the positional/greedy top-ups,
+        # which is still far short of the 30 rows requested.
+        self.assertLess(len([r for r in res if r.simulated]), 15)
+
+    def test_no_duplicate_players_across_the_split(self):
+        cfg = _config({"RB": 2, "WR": 1, "BN": 2}, teams=4)
+        res = rollout_values(cfg, self._board(60), {}, top_n=40)
+        keys = [r.player.key() for r in res]
+        self.assertEqual(len(keys), len(set(keys)))
 
 
 class TestDegenerate(unittest.TestCase):

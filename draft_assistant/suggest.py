@@ -9,43 +9,18 @@ cost end to end (the "take the WR now because the WR cliff is steeper than the
 RB cliff" problem), so the older gradient need-multiplier is no longer layered
 on top.
 
-The need / FLEX / bye helpers below are retained because other modules and the
-test-suite use them directly, and they remain a useful cheap read of roster
-needs for display.
+``needs_by_position`` is re-exported here because the CLI and both desktop UIs
+import it from this module; it remains a useful cheap read of roster needs for
+display, separate from the engine's own lineup optimization.
 """
 from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 
 from .models import DraftState, LeagueConfig, Player
 from .rollout import rollout_values
-from .scoring_utils import (
-    BYE_PENALTY,
-    FILLED_BASE,
-    FLEX_ELIGIBLE,
-    NEED_CEILING,
-    PARTIAL_FLOOR,
-    apply_need_multiplier,
-    needs_by_position,
-    position_need_multiplier,
-)
+from .scoring_utils import needs_by_position
 
-_apply_need_multiplier = apply_need_multiplier
-_position_need_multiplier = position_need_multiplier
-
-
-def _bye_week_penalty(
-    player: Player,
-    my_roster: Dict[str, List[Player]],
-) -> float:
-    """Extra penalty for stacking bye weeks with existing roster."""
-    if not player.bye_week:
-        return 0.0
-    bye_counts = 0
-    for pos_players in my_roster.values():
-        for p in pos_players:
-            if p.bye_week == player.bye_week:
-                bye_counts += 1
-    return BYE_PENALTY * bye_counts
+__all__ = ["needs_by_position", "suggest_players"]
 
 
 def suggest_players(

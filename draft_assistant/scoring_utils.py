@@ -1,8 +1,9 @@
 """Shared roster-need utilities.
 
 The draft/waiver engines use exact lineup optimization for final scoring. These
-helpers are the cheaper display/urgency model used by CLIs, panels, and legacy
-tests, so they must preserve the same typed-flex eligibility semantics.
+helpers are the cheaper read of roster needs used by the CLI, the desktop UI,
+and the strategy simulator, so they must preserve the same typed-flex
+eligibility semantics.
 """
 from __future__ import annotations
 from typing import Dict, List, Mapping
@@ -10,14 +11,7 @@ from typing import Dict, List, Mapping
 from .models import FLEX_TYPES, LeagueConfig, Player
 
 STARTER_POSITIONS = ("QB", "RB", "WR", "TE", "K", "DST")
-FLEX_ELIGIBLE = set(FLEX_TYPES["FLEX"])
 ALL_FLEX_ELIGIBLE = set().union(*FLEX_TYPES.values())
-
-# Tunable constants for the gradient need model
-FILLED_BASE = 0.60
-PARTIAL_FLOOR = 0.85
-NEED_CEILING = 1.25
-BYE_PENALTY = 0.04
 
 
 def needs_by_position(
@@ -83,15 +77,6 @@ def flex_need_for_position(position: str, needs: Mapping[str, int]) -> int:
     )
 
 
-def flex_target_for_position(position: str, roster: Mapping[str, int]) -> int:
-    """Return configured flex slot count that a position is eligible to fill."""
-    return sum(
-        int(roster.get(fkey, 0))
-        for fkey, elig in FLEX_TYPES.items()
-        if position in elig
-    )
-
-
 def is_player_eligible_for_roster(
     player: Player,
     my_roster: Mapping[str, List[Player]],
@@ -119,49 +104,6 @@ def is_player_eligible_for_roster(
     return current_size < capacity
 
 
-def position_need_multiplier(
-    position: str,
-    needs: Mapping[str, int],
-    config: LeagueConfig,
-    my_roster: Dict[str, List[Player]],
-    total_picks: int,
-    total_rounds: int,
-) -> float:
-    """Scale 0.60 (filled) to ~1.25 (empty) by need fraction + draft progress."""
-    pos_need = needs.get(position, 0)
-    flex_need = flex_need_for_position(position, needs)
-    effective_need = pos_need + flex_need
-
-    if effective_need <= 0:
-        return FILLED_BASE
-
-    starter_target = int(config.roster.get(position, 0))
-    starter_target += flex_target_for_position(position, config.roster)
-
-    need_frac = min(effective_need / max(starter_target, 1), 1.0)
-
-    if total_rounds > 0:
-        progress = min(total_picks / max(total_rounds * config.teams, 1), 1.0)
-    else:
-        progress = 0.0
-
-    multiplier = PARTIAL_FLOOR + (NEED_CEILING - PARTIAL_FLOOR) * need_frac
-    multiplier += 0.15 * progress * need_frac
-    return multiplier
-
-
-def apply_need_multiplier(score: float, mult: float) -> float:
-    """Scale a score by positional need without inverting negative scores.
-
-    Multiplying a negative score by a >1 need multiplier would rank a needed
-    position BELOW a filled one late in drafts; dividing instead keeps
-    "higher multiplier => ranks higher" true on both sides of zero.
-    """
-    if score >= 0:
-        return score * mult
-    return score / mult
-
-
-# Backward-compatible names retained for existing imports/tests.
-_position_need_multiplier = position_need_multiplier
-_apply_need_multiplier = apply_need_multiplier
+# The gradient need-multiplier model that used to live here is gone: the
+# rollout engine's impact score already prices positional need end to end
+# (see rollout.py), so nothing layered a multiplier on top of it any more.

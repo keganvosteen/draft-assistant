@@ -17,7 +17,7 @@ import json
 import time
 from typing import Dict, List, Optional
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from ..platform_sync import SyncedRosterPlayer, SyncedRosterTeam
@@ -105,6 +105,16 @@ def token_is_expired(token: Dict) -> bool:
 
 # ── API ───────────────────────────────────────────────────────────────────────
 
+def _seg(value: object) -> str:
+    """Escape a value being interpolated into a request path.
+
+    League and team keys come from the browser. Yahoo's keys contain dots
+    (``461.l.1234``), which ``quote`` leaves alone, but a ``?`` or ``../`` in a
+    hand-supplied key would otherwise reshape the request.
+    """
+    return quote(str(value or ""), safe="")
+
+
 def _api_get(access_token: str, path: str) -> Dict:
     sep = "&" if "?" in path else "?"
     url = f"{API_BASE}/{path}{sep}format=json"
@@ -165,8 +175,8 @@ def list_leagues(access_token: str) -> List[Dict[str, str]]:
 
 def fetch_league(access_token: str, league_key: str) -> Dict[str, object]:
     """League settings + teams in the same shape as the ESPN importer."""
-    settings = _api_get(access_token, f"league/{league_key}/settings")
-    teams = _api_get(access_token, f"league/{league_key}/teams")
+    settings = _api_get(access_token, f"league/{_seg(league_key)}/settings")
+    teams = _api_get(access_token, f"league/{_seg(league_key)}/teams")
     return _parse_league(settings, teams, league_key)
 
 
@@ -177,10 +187,10 @@ def fetch_league_rosters(access_token: str, league_key: str) -> List[SyncedRoste
     for each team's roster. Returned players are provider-neutral rows for the
     local matcher.
     """
-    teams_data = _api_get(access_token, f"league/{league_key}/teams")
+    teams_data = _api_get(access_token, f"league/{_seg(league_key)}/teams")
     teams: List[SyncedRosterTeam] = []
     for team_key, team_name in _team_key_names(teams_data):
-        roster = _api_get(access_token, f"team/{team_key}/roster")
+        roster = _api_get(access_token, f"team/{_seg(team_key)}/roster")
         teams.append(SyncedRosterTeam(
             name=team_name,
             provider_id=team_key,

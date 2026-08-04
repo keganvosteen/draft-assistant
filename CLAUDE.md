@@ -1,5 +1,9 @@
 # Fantasy Football Draft Assistant
 
+## Shell
+
+- **Default to the PowerShell tool for all commands.** The Bash tool often fails on this Windows machine — do not use it unless the owner says otherwise.
+
 ## Local Development
 
 - **Owner's local path (Windows):** `C:\Users\kegan\Documents\draft-assistant`
@@ -17,15 +21,23 @@
 ## Key Details
 
 - Python 3.10+, no external dependencies for core app
-- 139 tests in `tests/`
-- Web UI uses vendored React + in-browser Babel (no build step, works offline), Python stdlib HTTP server
-- Player data lives in `data/projections.json`
+- 212 tests in `tests/`
+- Web UI uses vendored React + in-browser Babel (no build step), Python stdlib HTTP server. Works offline apart from the optional Google Fonts link in `index.html`, which falls back to system fonts.
+- Player data lives in `data/projections.json` (tracked)
 - League config in `league.config.yaml`
-- Named profiles under `.draft_assistant_profiles/<name>/`
+- Named profiles under `.draft_assistant_profiles/<name>/` — gitignored, as is `draft_state.json`
+
+## Platform leagues
+
+- **Import + roster sync:** ESPN (`importers/free_sources.py`, public leagues), Yahoo (`importers/yahoo.py`, OAuth), Sleeper (`importers/sleeper.py`, public API — no auth). All three land on `POST /api/sync-league`, which maps provider rosters to board players via `platform_sync.py`.
+- **Matching** is by provider id first (`metadata.espn_id` / `metadata.sleeper_id`), then name+position fuzzy. Sleeper rosters carry only ids, which is why id-only matching must keep working — don't reintroduce a name/position guard before the provider lookup in `_PlayerMatcher.match`.
+- **Sleeper live draft sync** (`POST /api/sleeper/draft`) is the only real-draft feed: Sleeper publishes actual pick numbers and seats, so `synced_draft_to_picks` returns true picks and `draft-screen.jsx` polls it every 5s behind the "Go Live" button. **Every pick must survive to the output list.** The UI reads the next pick as `picks.length + 1`, so dropping one shifts the clock for the rest of the draft. Both an unmatched player *and* a second pick that resolves to an already-taken board player become placeholders — never `continue`.
 
 ## Recommendation engine
 
 - **One engine, all UIs:** `draft_assistant/rollout.py` (`rollout_values`) ranks the board by a rest-of-draft Monte Carlo rollout — each player's score is the expected effect of drafting them now on your **total season points**, accounting for who survives to your later picks (positional opportunity cost). `suggest.py` delegates to it.
 - **Web/desktop app** call it over HTTP via **`POST /api/suggest`** (`web/server.py::_handle_suggest`); `draft-screen.jsx` renders the result. The old client-side `scoring-engine.js` is retired (not loaded); `opponent-model.js` is kept for the Opponents panel only.
-- Servers are `ThreadingHTTPServer` (the rollout takes ~1.5–2s; a single-threaded server froze the UI).
+- Servers are `ThreadingHTTPServer` (the rollout takes ~1.5s; a single-threaded server froze the UI).
+- Only the leading `rollout_candidates` players (default 16) get a full rollout. Keep the sim pool decoupled from `top_n` — tying them together made every extra board row cost a full set of simulations.
+- The remaining requested rows come back with `simulated: false` and **`impact: null`**, and the board shows them as `—`. Don't be tempted to surface the prelim score there instead: a simulated impact compares two *completed* rosters, while a prelim row only knows what the player adds to the roster as it stands, so the two differ by roughly the value of every remaining pick (~1800 pts in a 17-round league). There is no cheap rescaling — closing that gap is what the simulation does.
 - Everything is config-driven (teams/roster/scoring per league). Tunables live in `config.draft`: `rollout_sims`, `rollout_candidates`, `adp_noise`.

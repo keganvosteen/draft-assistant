@@ -1,4 +1,4 @@
-"""Tests for draft_value.py — Monte Carlo draft-aware scoring."""
+"""Tests for draft_value.py — lineup optimization and snake-draft pick math."""
 import unittest
 
 from draft_assistant.draft_value import (
@@ -6,10 +6,7 @@ from draft_assistant.draft_value import (
     _draft_slot,
     _bench_multiplier,
     _bye_week_penalty,
-    _simulate_boards,
-    draft_window,
     roster_value,
-    draft_aware_values,
 )
 from draft_assistant.models import DraftState, LeagueConfig, Player
 
@@ -48,21 +45,22 @@ class TestSnakePickNumbers(unittest.TestCase):
         self.assertEqual(picks, [10, 11, 30])
 
 
-class TestDraftWindow(unittest.TestCase):
+class TestDraftSlot(unittest.TestCase):
     def test_empty_state_uses_config_slot(self):
         cfg = _config(teams=10, draft={"slot": 5})
-        window = draft_window(cfg, None)
-        self.assertEqual(window.draft_slot, 5)
-        self.assertEqual(window.current_pick, 1)
-        self.assertEqual(window.next_my_pick, 5)
+        self.assertEqual(_draft_slot(cfg, None), 5)
 
-    def test_mid_draft_computes_next_pick(self):
-        cfg = _config(teams=10, draft={"slot": 3})
+    def test_slot_inferred_from_my_picks(self):
+        cfg = _config(teams=10, draft={"slot": 1})
         state = DraftState(my_team_name="Me", league_teams=[f"T{i}" for i in range(10)])
-        # First 4 picks happened, pick 5 is next
-        state.picks = ["a", "b", "c", "d"]
-        window = draft_window(cfg, state)
-        self.assertEqual(window.current_pick, 5)
+        # I own overall pick 3, so my slot is 3 regardless of the config default.
+        state.picks = ["a", "b", "mine", "d"]
+        state.my_picks = ["mine"]
+        self.assertEqual(_draft_slot(cfg, state), 3)
+
+    def test_slot_clamped_to_team_count(self):
+        cfg = _config(teams=10, draft={"slot": 99})
+        self.assertEqual(_draft_slot(cfg, None), 10)
 
 
 class TestBenchMultiplier(unittest.TestCase):
@@ -88,29 +86,6 @@ class TestRosterValue(unittest.TestCase):
         self.assertIn(rb2, result.starters)
 
 
-class TestSimulateBoards(unittest.TestCase):
-    def test_boards_truncated_to_window(self):
-        players = [_make_player(f"P{i}", "WR", adp=float(i + 1)) for i in range(50)]
-        boards = _simulate_boards(players, picks_until_next=8, sims=20, adp_noise=5.0, seed=7)
-        self.assertEqual(len(boards), 20)
-        for board in boards:
-            self.assertEqual(len(board), 9)  # picks_until_next + 1
-
-    def test_deterministic_for_same_seed(self):
-        players = [_make_player(f"P{i}", "WR", adp=float(i + 1)) for i in range(30)]
-        a = _simulate_boards(players, picks_until_next=5, sims=10, adp_noise=8.0, seed=42)
-        b = _simulate_boards(players, picks_until_next=5, sims=10, adp_noise=8.0, seed=42)
-        self.assertEqual(a, b)
-
-    def test_low_adp_players_dominate_board_tops(self):
-        players = [_make_player(f"P{i}", "WR", adp=float((i + 1) * 10)) for i in range(30)]
-        boards = _simulate_boards(players, picks_until_next=3, sims=50, adp_noise=2.0, seed=1)
-        first_keys = {board[0] for board in boards}
-        # With tiny noise, the best-ADP player should top nearly every board.
-        self.assertIn("P0|WR", first_keys)
-        self.assertLessEqual(len(first_keys), 3)
-
-
 class TestByeWeekPenalty(unittest.TestCase):
     def test_counts_starters_sharing_bye_when_candidate_is_bench(self):
         # Two locked-in starters share bye 9; the weak candidate lands on the
@@ -130,21 +105,6 @@ class TestByeWeekPenalty(unittest.TestCase):
         pts = {rb1.key(): 200.0, cand.key(): 150.0}
         penalty = _bye_week_penalty(cand, [rb1], pts, {"RB": 2, "BN": 2})
         self.assertEqual(penalty, 0.0)
-
-
-class TestDraftAwareValues(unittest.TestCase):
-    def test_returns_ranked_list(self):
-        players = [
-            _make_player("QB1", "QB", {"pass_yd": 4500, "pass_td": 35}),
-            _make_player("RB1", "RB", {"rush_yd": 1200, "rush_td": 10, "rec": 50, "rec_yd": 400}),
-            _make_player("RB2", "RB", {"rush_yd": 900, "rush_td": 6}),
-            _make_player("WR1", "WR", {"rec": 100, "rec_yd": 1400, "rec_td": 10}),
-        ]
-        cfg = _config(draft={"slot": 1, "monte_carlo_sims": 0})
-        values = draft_aware_values(cfg, players, {}, None, top_n=5)
-        self.assertGreater(len(values), 0)
-        for v in values:
-            self.assertIsInstance(v.player, Player)
 
 
 class TestTypedFlex(unittest.TestCase):

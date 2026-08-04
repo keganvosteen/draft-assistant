@@ -42,6 +42,8 @@ function makeLeague(o = {}) {
     platform: 'ESPN',
     numTeams: 10,
     draftPosition: 5,
+    draftType: 'snake',
+    auctionBudget: 200,
     scoringType: 'ppr',
     customScoring: { ...DEFAULT_CUSTOM },
     rosterSlots: { ...DEFAULT_SLOTS },
@@ -184,21 +186,25 @@ function Select({ value, onChange, options, style={} }) {
 function DraftOrderEditor({ numTeams, teamNames, draftPosition, onChange }) {
   const names = Array.from({ length: numTeams }, (_, i) => (teamNames || [])[i] || '');
   const [pasteOpen, setPasteOpen] = React.useState(false);
+  const [dragFrom, setDragFrom] = React.useState(null);
+  const [dragOver, setDragOver] = React.useState(null);
 
   const setName = (i, v) => {
     const next = names.slice(); next[i] = v;
     onChange({ teamNames: next });
   };
-  const swap = (i, j) => {
-    if (j < 0 || j >= numTeams) return;
-    const next = names.slice();
-    [next[i], next[j]] = [next[j], next[i]];
+  const move = (from, to) => {
+    if (to < 0 || to >= numTeams || from === to) return;
+    const order = names.map((_, idx) => idx);
+    const [picked] = order.splice(from, 1);
+    order.splice(to, 0, picked);
     // Keep "Me" pinned to the same team as it moves between slots.
-    let dp = draftPosition;
-    if (draftPosition === i + 1) dp = j + 1;
-    else if (draftPosition === j + 1) dp = i + 1;
-    onChange({ teamNames: next, draftPosition: dp });
+    const dp = draftPosition >= 1 && draftPosition <= numTeams
+      ? order.indexOf(draftPosition - 1) + 1
+      : draftPosition;
+    onChange({ teamNames: order.map(idx => names[idx]), draftPosition: dp });
   };
+  const swap = (i, j) => move(i, j);
   const bulkPaste = text =>
     onChange({ teamNames: text.split('\n').map(s => s.trim()).slice(0, numTeams) });
 
@@ -224,12 +230,39 @@ function DraftOrderEditor({ numTeams, teamNames, draftPosition, onChange }) {
       <div style={{display:'flex', flexDirection:'column', gap:6}}>
         {names.map((nm, i) => {
           const isMe = draftPosition === i + 1;
+          const isDragged = dragFrom === i;
+          const isDropTarget = dragOver === i && dragFrom !== null && dragFrom !== i;
           return (
-            <div key={i} style={{
-              display:'flex', alignItems:'center', gap:8, padding:'6px 8px', borderRadius:T.rsm,
-              border:`1.5px solid ${isMe ? T.primary : T.border}`,
-              background: isMe ? T.primaryLight : T.surface,
-            }}>
+            <div key={i}
+              onDragOver={e => {
+                if (dragFrom === null) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (dragOver !== i) setDragOver(i);
+              }}
+              onDrop={e => {
+                e.preventDefault();
+                if (dragFrom !== null) move(dragFrom, i);
+                setDragFrom(null); setDragOver(null);
+              }}
+              style={{
+                display:'flex', alignItems:'center', gap:8, padding:'6px 8px', borderRadius:T.rsm,
+                border:`1.5px ${isDropTarget ? 'dashed' : 'solid'} ${isDropTarget ? T.primary : isMe ? T.primary : T.border}`,
+                background: isMe ? T.primaryLight : T.surface,
+                opacity: isDragged ? .45 : 1,
+              }}>
+              <span draggable title="Drag to reorder"
+                onDragStart={e => {
+                  e.dataTransfer.effectAllowed = 'move';
+                  e.dataTransfer.setData('text/plain', String(i)); // Firefox refuses to drag without data
+                  const row = e.currentTarget.parentElement;
+                  const r = row.getBoundingClientRect();
+                  e.dataTransfer.setDragImage(row, e.clientX - r.left, e.clientY - r.top);
+                  setDragFrom(i);
+                }}
+                onDragEnd={() => { setDragFrom(null); setDragOver(null); }}
+                style={{cursor:'grab', color:T.muted, fontSize:13, lineHeight:1, padding:'4px 2px', userSelect:'none'}}
+              >⠿</span>
               <span style={{width:20, textAlign:'center', fontSize:12, fontWeight:700, color:T.muted}}>{i + 1}</span>
               <input value={nm} onChange={e => setName(i, e.target.value)} placeholder={`Team ${i + 1}`}
                 style={{
@@ -267,8 +300,8 @@ function DraftOrderEditor({ numTeams, teamNames, draftPosition, onChange }) {
 
       <div style={{fontSize:11, color:T.muted, marginTop:6, lineHeight:1.45}}>
         Order = draft slot 1…N (snake seats). Reorder to match your draft, then mark your own
-        team with <b style={{color:T.text}}>Me</b>. Imports auto-fill names in platform order — drag
-        them into draft order here.
+        team with <b style={{color:T.text}}>Me</b>. ESPN/Yahoo imports auto-fill names in platform
+        order — drag them into draft order here. Sleeper imports arrive already in draft order.
       </div>
     </div>
   );
@@ -313,6 +346,55 @@ function LeagueSetupModal({ league, onSave, onClose }) {
       })
       .catch(() => setImportMsg({ ok: false, text: 'Import failed — is the league public?' }))
       .finally(() => setImporting(false));
+  };
+
+  // ── Sleeper import (public API — a username or a league id is all it takes) ──
+  const [sl, setSl] = React.useState({
+    username: '', leagueId: form.sleeperLeagueId || '', leagues: null,
+    busy: false, msg: null,
+  });
+  const slSet = patch => setSl(s => ({ ...s, ...patch }));
+  const slPost = (url, body, onOk) => {
+    slSet({ busy: true, msg: null });
+    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(r => r.json())
+      .then(d => { if (d.error) slSet({ msg: { ok: false, text: d.error } }); else onOk(d); })
+      .catch(() => slSet({ msg: { ok: false, text: 'Request failed' } }))
+      .finally(() => setSl(s => ({ ...s, busy: false })));
+  };
+  const sleeperFindLeagues = () => {
+    if (!sl.username.trim()) { slSet({ msg: { ok: false, text: 'Enter your Sleeper username' } }); return; }
+    slPost('/api/sleeper/leagues', { username: sl.username.trim() }, d => {
+      const lgs = d.leagues || [];
+      slSet({
+        leagues: lgs,
+        leagueId: (lgs[0] && lgs[0].leagueId) || '',
+        msg: { ok: lgs.length > 0, text: lgs.length ? `Found ${lgs.length} league(s) for ${d.season}.` : 'No leagues found for that username.' },
+      });
+    });
+  };
+  const sleeperImport = () => {
+    const id = (sl.leagueId || '').trim();
+    if (!id) return;
+    slPost('/api/sleeper/import', { leagueId: id, username: sl.username.trim() || undefined }, d => {
+      setForm(f => ({
+        ...f,
+        name: d.name || f.name,
+        platform: 'Sleeper',
+        numTeams: d.numTeams || f.numTeams,
+        scoringType: d.scoringType || f.scoringType,
+        rosterSlots: { ...DEFAULT_SLOTS, ...(d.rosterSlots || {}) },
+        teamNames: d.teamNames || [],
+        sleeperLeagueId: d.sleeperLeagueId || id,
+        sleeperDraftId: d.sleeperDraftId || null,
+        draftType: d.draftType || f.draftType,
+        // Sleeper knows the real seating, so the draft slot comes back too.
+        draftPosition: d.draftPosition || f.draftPosition,
+      }));
+      const seat = d.draftPosition ? `, your seat #${d.draftPosition}` : '';
+      slSet({ leagueId: d.sleeperLeagueId || id, msg: { ok: true,
+        text: `Imported "${d.name}" — ${d.numTeams} teams${seat}, ${d.scoringType}${d.sleeperDraftId ? ' · draft linked' : ''}` } });
+    });
   };
 
   // ── Yahoo OAuth import (multi-step: credentials -> authorize -> pick league) ──
@@ -396,6 +478,41 @@ function LeagueSetupModal({ league, onSave, onClose }) {
         <div style={{marginTop:6, fontSize:11, color:T.muted}}>
           Auto-fills teams, roster, scoring, and your league-mates' names. Find the ID in your
           ESPN league URL (…/leagues/<b>THIS</b>).
+        </div>
+      </div>
+
+      <div style={{marginBottom:16, padding:12, background:T.surfaceAlt, borderRadius:T.r, border:`1px solid ${T.border}`}}>
+        <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:8, letterSpacing:.5}}>
+          IMPORT FROM SLEEPER (no login needed)
+        </div>
+        <div style={{display:'flex', gap:8, alignItems:'center'}}>
+          <Input value={sl.username} onChange={e=>slSet({username:e.target.value})}
+            placeholder="Sleeper username" style={{flex:1}} />
+          <Btn variant="ghost" onClick={sleeperFindLeagues} disabled={sl.busy || !sl.username.trim()}>
+            {sl.busy ? '…' : 'Find leagues'}
+          </Btn>
+        </div>
+        <div style={{display:'flex', gap:8, alignItems:'center', marginTop:8}}>
+          <div style={{flex:1}}>
+            {sl.leagues && sl.leagues.length ? (
+              <Select value={sl.leagueId} onChange={e=>slSet({leagueId:e.target.value})}
+                options={sl.leagues.map(l=>({value:l.leagueId, label:`${l.name} (${l.season}, ${l.totalRosters} teams)`}))} />
+            ) : (
+              <Input value={sl.leagueId} onChange={e=>slSet({leagueId:e.target.value})}
+                placeholder="…or paste a Sleeper League ID" />
+            )}
+          </div>
+          <Btn variant="ghost" onClick={sleeperImport} disabled={sl.busy || !(sl.leagueId||'').trim()}>Import</Btn>
+        </div>
+        {sl.msg && (
+          <div style={{marginTop:8, fontSize:12, color: sl.msg.ok ? T.primary : '#c0392b'}}>
+            {(sl.msg.ok ? '✓ ' : '⚠ ') + sl.msg.text}
+          </div>
+        )}
+        <div style={{marginTop:6, fontSize:11, color:T.muted, lineHeight:1.45}}>
+          Imports teams, roster, scoring, and league-mates — with names already in <b>draft-slot
+          order</b> and your own seat set for you. Links the draft too, so the board can follow
+          picks live from the draft screen.
         </div>
       </div>
 
@@ -497,6 +614,31 @@ function LeagueSetupModal({ league, onSave, onClose }) {
               {l}
             </label>
           ))}
+        </div>
+      </Field>
+
+      <Field label="Draft Type">
+        <div style={{display:'flex', gap:8, alignItems:'center'}}>
+          {[['snake','Snake'],['auction','Auction']].map(([v,l]) => (
+            <label key={v} style={{
+              flex:1, border:`1.5px solid ${(form.draftType||'snake')===v ? T.primary : T.border}`,
+              borderRadius:T.rsm, padding:'8px 12px', cursor:'pointer', textAlign:'center',
+              background: (form.draftType||'snake')===v ? T.primaryLight : T.surface,
+              color: (form.draftType||'snake')===v ? T.primary : T.text,
+              fontSize:13, fontWeight:600,
+            }}>
+              <input type="radio" name="draftType" value={v} checked={(form.draftType||'snake')===v}
+                onChange={()=>set('draftType',v)} style={{display:'none'}} />
+              {l}
+            </label>
+          ))}
+          {(form.draftType||'snake') === 'auction' && (
+            <div style={{flex:1, display:'flex', alignItems:'center', gap:6}}>
+              <span style={{fontSize:12, fontWeight:600, color:T.muted, whiteSpace:'nowrap'}}>Budget $</span>
+              <Input type="number" value={form.auctionBudget || 200} min={1}
+                onChange={e=>set('auctionBudget', Math.max(1, parseInt(e.target.value)||200))} />
+            </div>
+          )}
         </div>
       </Field>
 
@@ -788,18 +930,28 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
 }
 
 // ─── AUCTION MODAL ───────────────────────────────────────────────────────────
-function AuctionModal({ onClose }) {
-  const [budget, setBudget] = React.useState(200);
+function AuctionModal({ league, onClose }) {
+  const [budget, setBudget] = React.useState((league && league.auctionBudget) || 200);
   const [topN, setTopN]     = React.useState(50);
   const [data, setData]     = React.useState(null);
   const [loading, setLoading] = React.useState(false);
 
   const handleFetch = () => {
     setLoading(true);
+    // Send the league's settings so values reflect ITS teams/roster/scoring,
+    // not the server profile defaults (same override shape as /api/suggest).
     fetch('/api/auction', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ budget, top: topN }),
+      body: JSON.stringify({
+        budget, top: topN,
+        league: league ? {
+          numTeams: league.numTeams,
+          rosterSlots: league.rosterSlots,
+          scoringType: league.scoringType,
+          customScoring: league.customScoring,
+        } : undefined,
+      }),
     })
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false); })
@@ -813,7 +965,7 @@ function AuctionModal({ onClose }) {
   };
 
   return (
-    <Modal title="Auction Values" onClose={onClose} width={560}>
+    <Modal title={league ? `Auction Values — ${league.name}` : 'Auction Values'} onClose={onClose} width={560}>
       <div style={{display:'flex', gap:12, marginBottom:16, alignItems:'flex-end'}}>
         <Field label="Budget per Team">
           <Input type="number" value={budget} onChange={e => setBudget(parseInt(e.target.value) || 200)}
@@ -881,9 +1033,9 @@ function FreeAgentPosBadge({ pos }) {
   );
 }
 
-function FreeAgentFinderModal({ leagues, picks, onClose }) {
+function FreeAgentFinderModal({ leagues, picks, onClose, initialLeagueId }) {
   const [topN, setTopN] = React.useState(6);
-  const [filter, setFilter] = React.useState('ALL');
+  const [filter, setFilter] = React.useState(initialLeagueId || 'ALL');
   const [data, setData] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
@@ -1008,12 +1160,93 @@ function FreeAgentFinderModal({ leagues, picks, onClose }) {
   );
 }
 
+// ─── FIRST-RUN SETUP GUIDE ───────────────────────────────────────────────────
+// Optional onboarding checklist: auto-opens once for new users (tracked via
+// localStorage), reopenable from the header. Steps check themselves off from
+// live app state so it doubles as a "what's left to set up" review.
+function SetupGuide({ playerCount, leagues, picks, onPullData, onAddLeague, onEditLeague, onClose }) {
+  const first = leagues[0];
+  const hasNames = !!first && (first.teamNames || []).some(Boolean);
+  const hasPicks = Object.values(picks || {}).some(arr => (arr || []).length > 0);
+  const steps = [
+    {
+      done: (playerCount || 0) > 0,
+      title: 'Player data',
+      body: (playerCount || 0) > 0
+        ? `${playerCount} players with projections and ADP are loaded. Pull fresh data any time before your draft.`
+        : 'No player data found — pull the free consensus sources to load projections and ADP.',
+      action: { label: 'Pull Data', onClick: onPullData },
+    },
+    {
+      done: leagues.length > 0,
+      title: 'Set up your league',
+      body: 'Teams, scoring, roster slots, and draft type (snake or auction). Importing from ESPN, Yahoo, or Sleeper auto-fills everything, including your league-mates’ names.',
+      action: first
+        ? { label: `Edit “${first.name}”`, onClick: () => onEditLeague(first.id) }
+        : { label: '+ Add League', onClick: onAddLeague },
+    },
+    {
+      done: hasNames,
+      title: 'Draft order & your team',
+      body: 'In the league editor, drag the teams into draft-slot order (ESPN and Yahoo imports arrive in platform order, not draft order) and mark your own team with “Me”. Sleeper imports already know the seating, so they arrive in order with your seat set.',
+      action: first ? { label: 'Open editor', onClick: () => onEditLeague(first.id) } : null,
+    },
+    {
+      done: hasPicks,
+      title: 'Draft day',
+      body: '“Draft →” on a league card opens the draft room: live pick recommendations, a pick ticker, and opponent predictions. In-season, “Free Agents” scans your waiver wire for upgrades.',
+      action: null,
+    },
+  ];
+  return (
+    <Modal title="Getting Started" onClose={onClose} width={620}>
+      <div style={{display:'flex', flexDirection:'column', gap:16}}>
+        {steps.map((s, i) => (
+          <div key={i} style={{display:'flex', gap:12, alignItems:'flex-start'}}>
+            <div style={{
+              width:26, height:26, borderRadius:'50%', flexShrink:0, display:'flex',
+              alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:800,
+              background: s.done ? T.greenLight : T.borderLight,
+              color: s.done ? T.green : T.muted,
+            }}>{s.done ? '✓' : i + 1}</div>
+            <div style={{flex:1, minWidth:0}}>
+              <div style={{fontSize:14, fontWeight:700, color:T.text}}>{s.title}</div>
+              <div style={{fontSize:12.5, color:T.muted, lineHeight:1.5, marginTop:2}}>{s.body}</div>
+            </div>
+            {s.action && (
+              <Btn variant="ghost" size="sm" onClick={s.action.onClick} style={{flexShrink:0}}>
+                {s.action.label}
+              </Btn>
+            )}
+          </div>
+        ))}
+      </div>
+      <div style={{
+        display:'flex', justifyContent:'space-between', alignItems:'center',
+        marginTop:22, paddingTop:16, borderTop:`1px solid ${T.border}`,
+      }}>
+        <span style={{fontSize:11.5, color:T.muted}}>Reopen any time via “Setup Guide” in the header.</span>
+        <Btn onClick={onClose}>Got it</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── HOME SCREEN ─────────────────────────────────────────────────────────────
 function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague, onDeleteLeague, onSyncLeague, playerCount, onRefreshPlayers }) {
   const platformColors = { ESPN:'#cc0000', Yahoo:'#6001d2', Sleeper:'#1e1e1e', 'NFL.com':'#013369', Other: T.muted };
   const [showPull, setShowPull]       = React.useState(false);
-  const [showAuction, setShowAuction] = React.useState(false);
-  const [showFreeAgents, setShowFreeAgents] = React.useState(false);
+  const [auctionFor, setAuctionFor]   = React.useState(null); // league whose $ values to show
+  // First-run setup guide: auto-open until dismissed once, reopenable from the header.
+  const [showGuide, setShowGuide] = React.useState(() => {
+    try { return !localStorage.getItem('fda_setup_seen'); } catch { return false; }
+  });
+  const closeGuide = () => {
+    setShowGuide(false);
+    try { localStorage.setItem('fda_setup_seen', '1'); } catch {}
+  };
+  // null = closed, 'ALL' = every league, or a league id to open scoped to that league
+  const [freeAgentsFor, setFreeAgentsFor] = React.useState(null);
   const [syncingId, setSyncingId] = React.useState(null);
   const [syncMsg, setSyncMsg] = React.useState(null);
 
@@ -1055,9 +1288,9 @@ function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague,
           )}
         </div>
         <div style={{display:'flex', alignItems:'center', gap:8}}>
+          <Btn variant="ghost" size="sm" onClick={() => setShowGuide(true)}>Setup Guide</Btn>
           <Btn variant="green" size="sm" onClick={() => setShowPull(true)}>Pull Data</Btn>
-          <Btn variant="ghost" size="sm" onClick={() => setShowFreeAgents(true)}>Free Agents</Btn>
-          <Btn variant="ghost" size="sm" onClick={() => setShowAuction(true)}>Auction $</Btn>
+          <Btn variant="ghost" size="sm" onClick={() => setFreeAgentsFor('ALL')}>Free Agents</Btn>
           <Btn onClick={onAddLeague}>+ Add League</Btn>
         </div>
       </div>
@@ -1093,17 +1326,12 @@ function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague,
           {leagues.map(lg => {
             const pc = platformColors[lg.platform] || T.muted;
             const totalSlots = Object.values(lg.rosterSlots).reduce((s,v) => s+v, 0);
-            const canSync = Boolean(lg.espnLeagueId || lg.yahooLeagueKey);
+            const canSync = Boolean(lg.espnLeagueId || lg.yahooLeagueKey || lg.sleeperLeagueId);
             return (
               <div key={lg.id} style={{
                 background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.r,
-                padding:20, cursor:'pointer', transition:'box-shadow .15s, transform .15s',
-                position:'relative', overflow:'hidden',
-              }}
-                onClick={() => onSelectLeague(lg.id)}
-                onMouseEnter={e => { e.currentTarget.style.boxShadow='0 4px 20px rgba(0,0,0,.1)'; e.currentTarget.style.transform='translateY(-2px)'; }}
-                onMouseLeave={e => { e.currentTarget.style.boxShadow='none'; e.currentTarget.style.transform='none'; }}
-              >
+                padding:20, position:'relative', overflow:'hidden',
+              }}>
                 <div style={{position:'absolute', top:0, left:0, right:0, height:3, background:pc}} />
 
                 <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:12, marginTop:4}}>
@@ -1133,18 +1361,32 @@ function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague,
                 <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
                   <Badge label={SCORING_LABELS[lg.scoringType]} color="blue" />
                   <Badge label={`${lg.numTeams} teams`} color="gray" />
-                  <Badge label={`Pick #${lg.draftPosition}`} color="gray" />
+                  {lg.draftType === 'auction'
+                    ? <Badge label={`Auction $${lg.auctionBudget || 200}`} color="amber" />
+                    : <Badge label={`Pick #${lg.draftPosition}`} color="gray" />}
                   <Badge label={`${totalSlots} slots`} color="gray" />
                 </div>
 
-                <div style={{
-                  marginTop:16, paddingTop:12, borderTop:`1px solid ${T.borderLight}`,
-                  display:'flex', alignItems:'center', justifyContent:'space-between',
-                }}>
-                  <span style={{fontSize:12, color:T.muted}}>
+                <div style={{marginTop:16, paddingTop:12, borderTop:`1px solid ${T.borderLight}`}}>
+                  <div style={{fontSize:12, color:T.muted, marginBottom:10}}>
                     QB{lg.rosterSlots.QB} · RB{lg.rosterSlots.RB} · WR{lg.rosterSlots.WR} · TE{lg.rosterSlots.TE} · K{lg.rosterSlots.K} · DST{lg.rosterSlots.DST}
-                  </span>
-                  <span style={{fontSize:12, fontWeight:600, color:T.primary}}>Draft →</span>
+                  </div>
+                  <div style={{display:'flex', gap:8}}>
+                    <Btn variant="ghost" size="sm" onClick={() => setFreeAgentsFor(lg.id)}
+                      style={{flex:1, justifyContent:'center', color:T.green, borderColor:T.green}}>
+                      Free Agents
+                    </Btn>
+                    {lg.draftType === 'auction' && (
+                      <Btn variant="ghost" size="sm" onClick={() => setAuctionFor(lg)}
+                        style={{flex:1, justifyContent:'center', color:T.amber, borderColor:T.amber}}>
+                        Auction $
+                      </Btn>
+                    )}
+                    <Btn size="sm" onClick={() => onSelectLeague(lg.id)}
+                      style={{flex:1, justifyContent:'center'}}>
+                      Draft →
+                    </Btn>
+                  </div>
                 </div>
               </div>
             );
@@ -1152,12 +1394,19 @@ function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague,
         </div>
       </div>
 
+      {showGuide && <SetupGuide
+        playerCount={playerCount} leagues={leagues} picks={picks}
+        onPullData={() => setShowPull(true)}
+        onAddLeague={onAddLeague}
+        onEditLeague={onEditLeague}
+        onClose={closeGuide} />}
       {showPull && <PullDataModal league={leagues[0]}
         espnLeagueId={(leagues.find(l => l.espnLeagueId) || {}).espnLeagueId}
         onClose={() => setShowPull(false)} onComplete={onRefreshPlayers} />}
-      {showFreeAgents && <FreeAgentFinderModal leagues={leagues} picks={picks}
-        onClose={() => setShowFreeAgents(false)} />}
-      {showAuction && <AuctionModal onClose={() => setShowAuction(false)} />}
+      {freeAgentsFor && <FreeAgentFinderModal leagues={leagues} picks={picks}
+        initialLeagueId={freeAgentsFor === 'ALL' ? null : freeAgentsFor}
+        onClose={() => setFreeAgentsFor(null)} />}
+      {auctionFor && <AuctionModal league={auctionFor} onClose={() => setAuctionFor(null)} />}
     </div>
   );
 }
