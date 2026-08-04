@@ -71,6 +71,7 @@ class AuctionTracker:
         for i in range(config.teams):
             self.budgets[f"Team {i+1}"] = budget_per_team
         self.won: Dict[str, List[Tuple[str, int]]] = {}  # team -> [(player_key, price)]
+        self.my_team = "Team 1"
 
     def set_my_team(self, name: str) -> None:
         if name not in self.budgets:
@@ -81,7 +82,16 @@ class AuctionTracker:
         """Record that `team` won `player_key` for `price`."""
         if team not in self.budgets:
             return False
-        if self.budgets[team] < price:
+        if isinstance(price, bool) or not isinstance(price, int) or price < 1:
+            return False
+        if not isinstance(player_key, str) or not player_key.strip():
+            return False
+        if any(player_key == won_key for wins in self.won.values() for won_key, _ in wins):
+            return False
+        total_slots = sum(max(0, int(v)) for v in self.config.roster.values())
+        if len(self.won.get(team, [])) >= total_slots:
+            return False
+        if price > self.max_bid(team):
             return False
         self.budgets[team] -= price
         self.won.setdefault(team, []).append((player_key, price))
@@ -92,7 +102,12 @@ class AuctionTracker:
 
     def max_bid(self, team: str) -> int:
         """Max a team can bid, reserving $1 per remaining roster slot."""
+        if team not in self.budgets:
+            return 0
         total_slots = sum(int(v) for v in self.config.roster.values())
         filled = len(self.won.get(team, []))
-        remaining_slots = max(total_slots - filled - 1, 0)  # -1 for current nomination
-        return max(self.budgets.get(team, 0) - remaining_slots, 1)
+        open_slots = total_slots - filled
+        if open_slots <= 0:
+            return 0
+        reserve_for_later = max(open_slots - 1, 0)
+        return max(self.budgets[team] - reserve_for_later, 0)

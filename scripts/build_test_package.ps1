@@ -28,7 +28,12 @@ if (!(Test-Path $BuildVenv)) {
 
 $Python = Join-Path $BuildVenv "Scripts\python.exe"
 & $Python -m pip install --upgrade pip
-& $Python -m pip install pyinstaller
+& $Python -m pip install -r (Join-Path $Root "requirements-build.txt")
+
+# Refuse to ship a silently degraded board (for example, a single-source pull
+# with no byes/history or an entire position with empty projections).
+& $Python (Join-Path $Root "scripts\check_projection_quality.py") `
+    (Join-Path $Root "data\projections.json")
 
 Remove-Item -LiteralPath $PyInstallerDist -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $PackageDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -54,7 +59,26 @@ Copy-Item -Path (Join-Path $PyInstallerDist "DraftAssistant\*") -Destination $Pa
 New-Item -ItemType Directory -Force -Path (Join-Path $PackageDir "data") | Out-Null
 Copy-RequiredFile (Join-Path $Root "data\projections.json") (Join-Path $PackageDir "data\projections.json")
 Copy-RequiredFile (Join-Path $Root "league.config.yaml") (Join-Path $PackageDir "league.config.yaml")
-Copy-RequiredFile (Join-Path $Root "draft_state.json") (Join-Path $PackageDir "draft_state.json")
+Copy-RequiredFile (Join-Path $Root "LICENSE") (Join-Path $PackageDir "LICENSE")
+Copy-RequiredFile (Join-Path $Root "THIRD_PARTY_NOTICES.md") (Join-Path $PackageDir "THIRD_PARTY_NOTICES.md")
+$StateSource = Join-Path $Root "draft_state.json"
+$StateDestination = Join-Path $PackageDir "draft_state.json"
+if (Test-Path $StateSource) {
+    Copy-RequiredFile $StateSource $StateDestination
+} else {
+    # Live state is intentionally gitignored. A clean clone therefore needs a
+    # generated empty state rather than treating the missing file as a build
+    # failure.
+    $ConfigData = Get-Content -LiteralPath (Join-Path $Root "league.config.yaml") -Raw | ConvertFrom-Json
+    $TeamCount = [Math]::Max(1, [int]$ConfigData.teams)
+    $LeagueTeams = @(1..$TeamCount | ForEach-Object { "Team $_" })
+    [ordered]@{
+        my_team_name = "My Team"
+        league_teams = $LeagueTeams
+        picks = @()
+        my_picks = @()
+    } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $StateDestination -Encoding UTF8
+}
 
 @"
 @echo off

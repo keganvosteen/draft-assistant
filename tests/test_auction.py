@@ -49,6 +49,9 @@ class TestDollarValues(unittest.TestCase):
 
 
 class TestAuctionTracker(unittest.TestCase):
+    def test_my_team_is_initialized(self):
+        self.assertEqual(AuctionTracker(_config()).my_team, "Team 1")
+
     def test_budget_tracking(self):
         tracker = AuctionTracker(_config(), budget_per_team=200)
         self.assertEqual(tracker.remaining_budget("Team 1"), 200)
@@ -60,6 +63,25 @@ class TestAuctionTracker(unittest.TestCase):
         result = tracker.record_win("Team 1", "QB1|QB", 250)
         self.assertFalse(result)
         self.assertEqual(tracker.remaining_budget("Team 1"), 200)
+
+    def test_rejects_nonpositive_and_duplicate_wins(self):
+        tracker = AuctionTracker(_config(), budget_per_team=200)
+        self.assertFalse(tracker.record_win("Team 1", "QB1|QB", 0))
+        self.assertTrue(tracker.record_win("Team 1", "QB1|QB", 10))
+        self.assertFalse(tracker.record_win("Team 2", "QB1|QB", 10))
+
+    def test_max_bid_reserves_one_dollar_for_each_later_slot(self):
+        tracker = AuctionTracker(_config(), budget_per_team=20)
+        total_slots = sum(ROSTER.values())
+        self.assertEqual(tracker.max_bid("Team 1"), 20 - (total_slots - 1))
+        self.assertFalse(tracker.record_win("Team 1", "QB1|QB", tracker.max_bid("Team 1") + 1))
+
+    def test_full_roster_rejects_more_players(self):
+        config = LeagueConfig(teams=1, roster={"QB": 1}, scoring=SCORING, provider={})
+        tracker = AuctionTracker(config, budget_per_team=10)
+        self.assertTrue(tracker.record_win("Team 1", "QB1|QB", 1))
+        self.assertEqual(tracker.max_bid("Team 1"), 0)
+        self.assertFalse(tracker.record_win("Team 1", "QB2|QB", 1))
 
 
 if __name__ == "__main__":

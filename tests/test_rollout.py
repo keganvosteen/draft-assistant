@@ -134,6 +134,53 @@ class TestPolicyDetails(unittest.TestCase):
         impacts = [r.impact for r in res if r.simulated]
         self.assertEqual(impacts, sorted(impacts, reverse=True))
 
+    def test_future_candidate_is_not_reserved_through_opponent_pick(self):
+        available = [
+            _p("WR_taken", "WR", 300, adp=1.0),
+            _p("RB_fallback", "RB", 250, adp=2.0),
+            _p("WR_fallback", "WR", 100, adp=3.0),
+        ]
+        cfg = _config({"RB": 1, "WR": 1}, teams=2, slot=2, sims=8, noise=0.0)
+        # Team 1 picks before our first decision. WR_taken is first by ADP, so
+        # forcing it at pick 2 must fall back exactly like the baseline.
+        state = DraftState("Me", ["Opponent", "Me"])
+        by_name = {
+            row.player.name: row
+            for row in rollout_values(cfg, available, {}, state=state, top_n=3)
+        }
+        self.assertAlmostEqual(by_name["WR_taken"].impact, 0.0, places=2)
+
+    def test_unmatched_personal_pick_occupies_slot_and_forces_kicker(self):
+        available = [
+            _p("RB_luxury", "RB", 400, adp=1.0),
+            _p("RB_luxury_2", "RB", 390, adp=2.0),
+            Player(id="K_required|K", name="K_required", position="K",
+                   projections={"fg_0_39": 30}, adp=99.0),
+        ]
+        cfg = _config({"RB": 1, "K": 1}, teams=2, slot=1, sims=8, noise=0.0)
+        # The first-round synced pick is not on the projection board, but it is
+        # still our RB and leaves only pick 4 to fill the required K slot.
+        state = DraftState(
+            "Me", ["Me", "Opponent"],
+            picks=["Deep Rookie|RB", "Other One|WR", "Other Two|WR"],
+            my_picks=["Deep Rookie|RB"],
+        )
+        result = rollout_values(cfg, available, {}, state=state, top_n=3)
+        self.assertEqual(result[0].player.position, "K")
+
+    def test_last_two_picks_complete_kicker_and_defense(self):
+        available = [
+            _p("RB_luxury", "RB", 400, adp=1.0),
+            Player(id="K_required|K", name="K_required", position="K",
+                   projections={"fg_0_39": 30}, adp=50.0),
+            _p("DST_required", "DST", 20, adp=60.0),
+        ]
+        cfg = _config({"K": 1, "DST": 1}, teams=2, slot=1, sims=8, noise=0.0)
+        result = rollout_values(cfg, available, {}, state=None, top_n=3)
+        self.assertIn(result[0].player.position, {"K", "DST"})
+        self.assertTrue(all(row.player.position in {"K", "DST"}
+                            for row in result if row.simulated))
+
 
 class TestSimulatedPool(unittest.TestCase):
     """Only the leading candidates get a full rollout; the rest fill the board.

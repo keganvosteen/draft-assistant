@@ -1,0 +1,2 @@
+# Reproducible major-version range for the Windows portable package.
+pyinstaller>=6.11,<7

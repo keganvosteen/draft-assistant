@@ -18,9 +18,16 @@ _PRESET_REC = {"standard": 0.0, "ppr": 1.0, "half-ppr": 0.5}
 def scoring_for_league(league: dict, base_scoring: dict) -> dict:
     """Overlay the web LeagueSetup scoring choice onto base scoring."""
     stype = league.get("scoringType")
-    if not stype:
+    imported = league.get("importedScoring")
+    if not stype and not isinstance(imported, dict):
         return base_scoring
     scoring = dict(base_scoring)
+    if isinstance(imported, dict):
+        for key, value in imported.items():
+            if isinstance(key, str) and isinstance(value, (int, float)):
+                scoring[key] = float(value)
+    if not stype:
+        return scoring
     if stype in _PRESET_REC:
         scoring["rec"] = _PRESET_REC[stype]
         return scoring
@@ -55,4 +62,4 @@ def scoring_for_league(league: dict, base_scoring: dict) -> dict:
         if cs.get("sackTaken"):
             scoring["sack_taken"] = float(cs["sackTaken"])
         return scoring
-    return base_scoring
+    return scoring

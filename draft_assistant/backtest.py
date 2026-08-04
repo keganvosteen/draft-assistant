@@ -27,6 +27,7 @@ Metrics per (source, season, position):
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from typing import Callable, Dict, List
 
@@ -45,6 +46,7 @@ from .importers.free_sources import (
 )
 from .importers.fftoday import fetch_all_fftoday
 from .scoring import fantasy_points
+from .storage import atomic_write_json
 
 CACHE_DIR = ".backtest_cache"
 POSITIONS = ["QB", "RB", "WR", "TE"]
@@ -65,12 +67,20 @@ def _cache(name: str, build: Callable[[], dict]) -> dict:
     os.makedirs(CACHE_DIR, exist_ok=True)
     path = os.path.join(CACHE_DIR, name)
     if os.path.exists(path):
-        with open(path) as fh:
-            return json.load(fh)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            pass
     data = build()
-    with open(path, "w") as fh:
-        json.dump(data, fh)
+    atomic_write_json(path, data)
     return data
+
+
+def _scoring_tag(scoring: dict) -> str:
+    """Short deterministic cache key for the complete scoring configuration."""
+    payload = json.dumps(scoring, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()[:12]
 
 
 # ── per-(source, season) → {nkey: points} ────────────────────────────────────
@@ -89,7 +99,7 @@ def actuals(season: int, scoring: dict) -> Dict[str, list]:
             pts = fantasy_points(_app_stats_from_nflverse(row, pos), scoring)
             out[_nkey(name, pos)] = [pos, round(pts, 2)]
         return out
-    return _cache(f"actuals_{season}.json", build)
+    return _cache(f"actuals_{season}_{_scoring_tag(scoring)}.json", build)
 
 
 def fftoday_proj(season: int, scoring: dict) -> Dict[str, float]:
@@ -98,7 +108,7 @@ def fftoday_proj(season: int, scoring: dict) -> Dict[str, float]:
             _nkey(p.name, p.position): round(fantasy_points(p.projections, scoring), 2)
             for p in fetch_all_fftoday(season)
         }
-    return _cache(f"fftoday_{season}.json", build)
+    return _cache(f"fftoday_{season}_{_scoring_tag(scoring)}.json", build)
 
 
 def sleeper_proj(season: int, scoring: dict, players_map: dict) -> Dict[str, float]:
@@ -109,7 +119,7 @@ def sleeper_proj(season: int, scoring: dict, players_map: dict) -> Dict[str, flo
             _nkey(p.name, p.position): round(fantasy_points(p.projections, scoring), 2)
             for p in players if p.position in POSITIONS
         }
-    return _cache(f"sleeper_{season}.json", build)
+    return _cache(f"sleeper_{season}_{_scoring_tag(scoring)}.json", build)
 
 
 def _pts_only(actual_map: Dict[str, list]) -> Dict[str, float]:
@@ -144,6 +154,24 @@ def _season_frame(season: int, scoring: dict, sources: Dict[str, Dict[str, float
     return df
 
 
+def _preseason_relevant(
+    sub: pd.DataFrame, sources: Dict[str, Dict[str, float]], position: str
+) -> pd.DataFrame:
+    """Select the evaluation population without looking at season outcomes.
+
+    Average percentile rank across the clean preseason forecasts/baselines, then
+    keep the configured depth. Selecting the top actual scorers used hindsight,
+    excluded preseason misses, and made every source look better than it was.
+    """
+    clean_sources = [name for name in sources if not name.endswith("*")]
+    rank_columns = [sub[name].rank(pct=True) for name in clean_sources if name in sub]
+    if not rank_columns:
+        return sub.iloc[0:0]
+    composite = pd.concat(rank_columns, axis=1).mean(axis=1, skipna=True)
+    keys = composite.nlargest(RELEVANT_TOP[position]).index
+    return sub.loc[keys]
+
+
 def evaluate(seasons: List[int], scoring: dict, include_sleeper: bool = True) -> pd.DataFrame:
     players_map = _fetch_sleeper_players() if include_sleeper else {}
     rows: List[dict] = []
@@ -158,7 +186,7 @@ def evaluate(seasons: List[int], scoring: dict, include_sleeper: bool = True) ->
         df = _season_frame(season, scoring, srcs)
         for pos in POSITIONS:
             sub = df[df["pos"] == pos]
-            relevant = sub.nlargest(RELEVANT_TOP[pos], "actual")
+            relevant = _preseason_relevant(sub, srcs, pos)
             if len(relevant) < 5:
                 continue
             for src in srcs:
@@ -261,7 +289,7 @@ def calibrate_blend(seasons: List[int]) -> Dict[str, float]:
     Accuracy = mean Spearman across seasons AND scorings (standard/half/ppr), so
     the chosen weights are league-rule-agnostic. Returns {pos: best_w}.
     """
-    grid = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    grid = [i / 10 for i in range(11)]
     rows: List[dict] = []
     for season in seasons:
         ff, tr, act = fftoday_stats(season), trend_stats(season), actual_stats(season)
@@ -278,13 +306,43 @@ def calibrate_blend(seasons: List[int]) -> Dict[str, float]:
                         blended = {s: w * ffs.get(s, 0.0) + (1 - w) * trs.get(s, 0.0) for s in stats}
                         proj_pts.append(fantasy_points(blended, sc))
                         act_pts.append(fantasy_points(act[k][1], sc))
-                    rows.append({"pos": pos, "w": w, "spearman": _spearman(proj_pts, act_pts)})
+                    rows.append({
+                        "season": season, "pos": pos, "scoring": sc_name,
+                        "w": w, "spearman": _spearman(proj_pts, act_pts),
+                    })
     df = pd.DataFrame(rows)
+    if df.empty:
+        return {}
     table = df.groupby(["pos", "w"])["spearman"].mean().unstack("w")
     print("=== blend calibration: mean Spearman by projection-weight w (per position) ===")
     print(table.to_string())
     best = {pos: float(table.loc[pos].idxmax()) for pos in table.index}
     print(f"\nOptimal projection weight w per position (rest = recent-production trend):\n  {best}\n")
+
+    # Leave one season out: select w on every other season, then score only the
+    # held-out season. This is a validation diagnostic, not another opportunity
+    # to tune against the same outcomes.
+    validation: List[dict] = []
+    unique_seasons = sorted(df["season"].unique())
+    if len(unique_seasons) >= 2:
+        for held_out in unique_seasons:
+            training = df[df["season"] != held_out]
+            held = df[df["season"] == held_out]
+            for pos in sorted(df["pos"].unique()):
+                train_pos = training[training["pos"] == pos]
+                if train_pos.empty:
+                    continue
+                chosen = float(train_pos.groupby("w")["spearman"].mean().idxmax())
+                score = held[(held["pos"] == pos) & (held["w"] == chosen)]["spearman"].mean()
+                validation.append({
+                    "season": held_out, "pos": pos,
+                    "chosen_w": chosen, "spearman": score,
+                })
+    if validation:
+        validation_df = pd.DataFrame(validation)
+        print("=== leave-one-season-out validation ===")
+        print(validation_df.groupby("pos")[["chosen_w", "spearman"]].mean().to_string())
+        print()
     return best
 
 

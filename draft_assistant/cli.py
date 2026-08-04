@@ -83,7 +83,7 @@ def cmd_suggest(args: argparse.Namespace) -> None:
         if args.draft_slot is not None:
             draft_settings["slot"] = args.draft_slot
         if args.sims is not None:
-            draft_settings["monte_carlo_sims"] = args.sims
+            draft_settings["rollout_sims"] = args.sims
         config.draft = draft_settings
     tracker = DraftTracker(config, state, players)
     avail = tracker.available_players()

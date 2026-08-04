@@ -43,7 +43,10 @@ function useTweaks(defaults) {
   const [values, setValues] = React.useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('fda_tweaks') || 'null');
-      return saved ? { ...defaults, ...saved } : defaults;
+      if (!saved || typeof saved !== 'object') return defaults;
+      return Object.fromEntries(Object.keys(defaults).map(key => [
+        key, Object.prototype.hasOwnProperty.call(saved, key) ? saved[key] : defaults[key],
+      ]));
     } catch { return defaults; }
   });
   const update = React.useCallback((keyOrObj, val) => {

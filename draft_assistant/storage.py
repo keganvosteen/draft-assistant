@@ -2,26 +2,43 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from typing import List
+import threading
+import warnings
+from typing import Callable, List
 
 from .models import DraftState, Player
+
+
+_locks_guard = threading.Lock()
+_path_locks: dict[str, threading.RLock] = {}
+
+
+def _lock_for(path: str) -> threading.RLock:
+    normalized = os.path.normcase(os.path.abspath(os.fspath(path)))
+    with _locks_guard:
+        return _path_locks.setdefault(normalized, threading.RLock())
 
 
 def atomic_write_json(path: str, payload: object) -> None:
     """Write JSON via a temp file + rename so a crash mid-write can't leave a
     corrupt file behind (draft state is saved after every live pick)."""
+    path = os.fspath(path)
     directory = os.path.dirname(path) or "."
-    fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-        os.replace(tmp_path, path)
-    except BaseException:
+    os.makedirs(directory, exist_ok=True)
+    with _lock_for(path):
+        fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp")
         try:
-            os.remove(tmp_path)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        except BaseException:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 def save_state(state: DraftState, path: str = "draft_state.json") -> None:
@@ -34,16 +51,77 @@ def save_state(state: DraftState, path: str = "draft_state.json") -> None:
 
 
 def load_state(path: str = "draft_state.json") -> DraftState:
-    if not os.path.exists(path):
-        return DraftState(my_team_name="My Team", league_teams=[f"Team {i+1}" for i in range(12)])
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    path = os.fspath(path)
+    with _lock_for(path):
+        if not os.path.exists(path):
+            return _default_state()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return _state_from_dict(data)
+        except (json.JSONDecodeError, UnicodeError, ValueError, TypeError) as exc:
+            backup = _corrupt_backup_path(path)
+            os.replace(path, backup)
+            warnings.warn(
+                f"Invalid draft state moved to {backup}: {exc}", RuntimeWarning,
+                stacklevel=2,
+            )
+            return _default_state()
+
+
+def update_state(
+    path: str, mutator: Callable[[DraftState], None]
+) -> DraftState:
+    """Atomically apply a read-modify-write state update for one profile."""
+    with _lock_for(path):
+        state = load_state(path)
+        mutator(state)
+        # Validate before replacing the last known-good state.
+        _state_from_dict({
+            "my_team_name": state.my_team_name,
+            "league_teams": state.league_teams,
+            "picks": state.picks,
+            "my_picks": state.my_picks,
+        })
+        save_state(state, path)
+        return state
+
+
+def _default_state() -> DraftState:
     return DraftState(
-        my_team_name=data.get("my_team_name", "My Team"),
-        league_teams=data.get("league_teams", [f"Team {i+1}" for i in range(12)]),
-        picks=data.get("picks", []),
-        my_picks=data.get("my_picks", []),
+        my_team_name="My Team",
+        league_teams=[f"Team {i + 1}" for i in range(12)],
     )
+
+
+def _state_from_dict(data: object) -> DraftState:
+    if not isinstance(data, dict):
+        raise ValueError("draft state must be a JSON object")
+
+    def string_list(key: str, default: List[str], maximum: int) -> List[str]:
+        value = data.get(key, default)
+        if (not isinstance(value, list) or len(value) > maximum
+                or not all(isinstance(item, str) and len(item) <= 256 for item in value)):
+            raise ValueError(f"{key} must be a list of at most {maximum} short strings")
+        return list(value)
+
+    name = data.get("my_team_name", "My Team")
+    if not isinstance(name, str) or len(name) > 200:
+        raise ValueError("my_team_name must be a short string")
+    teams = string_list(
+        "league_teams", [f"Team {i + 1}" for i in range(12)], 32)
+    picks = string_list("picks", [], 1024)
+    my_picks = string_list("my_picks", [], 1024)
+    return DraftState(name, teams, picks, my_picks)
+
+
+def _corrupt_backup_path(path: str) -> str:
+    candidate = f"{path}.corrupt"
+    index = 1
+    while os.path.exists(candidate):
+        candidate = f"{path}.corrupt.{index}"
+        index += 1
+    return candidate
 
 
 def _player_to_dict(p: Player) -> dict:
@@ -105,10 +183,23 @@ def save_players(players: List[Player], path: str = "data/projections.json") -> 
     atomic_write_json(path, {"players": [_player_to_dict(p) for p in players]})
 
 
+def update_players(
+    path: str, updater: Callable[[List[Player]], List[Player]]
+) -> List[Player]:
+    """Atomically merge a newly collected board with the latest on-disk board."""
+    with _lock_for(path):
+        players = updater(load_players(path))
+        save_players(players, path)
+        return players
+
+
 def load_players(path: str = "data/projections.json") -> List[Player]:
     """Load players directly from JSON (bypasses provider)."""
-    if not os.path.exists(path):
-        return []
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return [_player_from_dict(p) for p in data.get("players", [])]
+    with _lock_for(path):
+        if not os.path.exists(path):
+            return []
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or not isinstance(data.get("players", []), list):
+            raise ValueError("projection file must contain a players list")
+        return [_player_from_dict(p) for p in data.get("players", [])]

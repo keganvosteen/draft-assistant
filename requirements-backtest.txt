@@ -1,0 +1,3 @@
+# Optional analytics dependencies; the core application remains stdlib-only.
+numpy>=1.23,<3
+pandas>=1.5,<3

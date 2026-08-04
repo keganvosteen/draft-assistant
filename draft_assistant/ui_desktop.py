@@ -495,7 +495,7 @@ class DraftAssistantApp:
         draft_box.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 8))
         draft_settings = self.config.draft or {}
         draft_slot_var = tk.StringVar(value=str(int(draft_settings.get("slot", 1))))
-        sims_var = tk.StringVar(value=str(int(draft_settings.get("monte_carlo_sims", 250))))
+        sims_var = tk.StringVar(value=str(int(draft_settings.get("rollout_sims", 48))))
         noise_var = tk.StringVar(value=str(float(draft_settings.get("adp_noise", 8.0))))
         ttk.Label(draft_box, text="Snake Slot").grid(row=0, column=0, sticky="w", padx=(0, 4), pady=3)
         ttk.Entry(draft_box, textvariable=draft_slot_var, width=6).grid(row=0, column=1, sticky="w", pady=3)
@@ -614,8 +614,7 @@ class DraftAssistantApp:
             draft_settings = dict(self.config.draft or {})
             draft_settings.update({
                 "slot": draft_slot,
-                "snake": True,
-                "monte_carlo_sims": sims,
+                "rollout_sims": sims,
                 "adp_noise": adp_noise,
             })
             self.config.draft = draft_settings

@@ -607,11 +607,11 @@ function RecommendationBar({ scored, myPlayers, league, oppData }) {
   const bestByNeed = sortedByScore.find(p => p.draftScore > NEED_EPS && fillsNeed(p)) || null;
   const isSame = bestByNeed && bestOverall.id === bestByNeed.id;
 
-  let scarce = null;
+  let atRisk = null;
   rolled.forEach(p => {
-    if (p.scarcityBonus == null || p.availPct == null) return;
-    if (p.scarcityBonus >= 4 && p.availPct <= 60) {
-      if (!scarce || p.scarcityBonus > scarce.scarcityBonus) scarce = p;
+    if (p.vorp == null || p.availPct == null) return;
+    if (p.vorp > 0 && p.availPct <= 60) {
+      if (!atRisk || p.vorp > atRisk.vorp) atRisk = p;
     }
   });
 
@@ -636,8 +636,8 @@ function RecommendationBar({ scored, myPlayers, league, oppData }) {
   let situational = null;
   if (runAlert && !dupId(runAlert.player.id)) {
     situational = { kind:'run', ...runAlert };
-  } else if (scarce && !dupId(scarce.id)) {
-    situational = { kind:'scarce', player: scarce };
+  } else if (atRisk && !dupId(atRisk.id)) {
+    situational = { kind:'at-risk', player: atRisk };
   } else if (reach && reach.player.id !== bestOverall.id) {
     situational = { kind:'reach', ...reach };
   }
@@ -646,7 +646,7 @@ function RecommendationBar({ scored, myPlayers, league, oppData }) {
     <div style={{padding:'12px 16px', background:T.surface, borderBottom:`1px solid ${T.border}`}}>
       <div style={{fontSize:10, fontWeight:700, color:T.muted, letterSpacing:.5, marginBottom:8}}>RECOMMENDATIONS</div>
       <div style={{display:'flex', gap:10, flexWrap:'wrap'}}>
-        <RecCard icon="▲" label="BEST DRAFT SCORE"
+        <RecCard icon="▲" label="BEST DRAFT IMPACT"
           player={bestOverall}
           reason={isSame
             ? 'Top season-points impact AND fills an open starting slot.'
@@ -663,10 +663,10 @@ function RecommendationBar({ scored, myPlayers, league, oppData }) {
             reason={`~${situational.exp.toFixed(1)} ${situational.pos}s likely gone before your next pick — only ${situational.player.availPct}% chance ${situational.player.name.split(' ').pop()} survives.`}
             highlight />
         )}
-        {situational && situational.kind === 'scarce' && (
-          <RecCard icon="⚠" label={`${situational.player.pos} SCARCE`}
+        {situational && situational.kind === 'at-risk' && (
+          <RecCard icon="⚠" label={`${situational.player.pos} VALUE AT RISK`}
             player={situational.player}
-            reason={`+${Math.round(situational.player.scarcityBonus)} pts of this pick's value is scarcity — only ${situational.player.availPct}% chance they last.`}
+            reason={`${Math.round(situational.player.vorp)} pts above replacement — only ${situational.player.availPct}% chance they last.`}
             highlight />
         )}
         {situational && situational.kind === 'reach' && (
@@ -680,7 +680,7 @@ function RecommendationBar({ scored, myPlayers, league, oppData }) {
             flex:'1 1 200px', minWidth:200, background:T.surfaceAlt, border:`1.5px dashed ${T.border}`,
             borderRadius:T.r, padding:'12px 14px', display:'flex', alignItems:'center', justifyContent:'center',
           }}>
-            <span style={{fontSize:12, color:T.muted}}>No run, scarcity, or reach alerts.</span>
+            <span style={{fontSize:12, color:T.muted}}>No run, value-risk, or reach alerts.</span>
           </div>
         )}
       </div>
@@ -984,7 +984,7 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
         {isWide && <span style={{textAlign:'center'}}>BYE</span>}
         {(isWide || isMedium) && <span style={{textAlign:'right'}}>PROJ</span>}
         <span style={{textAlign:'right'}}>VORP</span>
-        <span style={{textAlign:'right', color:T.primary}}>SCORE ↓</span>
+        <span style={{textAlign:'right', color:T.primary}}>IMPACT ↓</span>
         <span></span>
       </div>
 
@@ -997,8 +997,6 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
         {filtered.map((p,i) => {
           const isHov = hoverId === p.id;
           const tierDot = ['','#d97706','#6b7280','#9ca3af','#d1d5db','#e5e7eb'][p.tier] || '#e5e7eb';
-          const slotColor = p.slotType === 'starter' ? T.green : p.slotType === 'flex' ? T.blue : T.muted;
-
           const teamText = p.nflTeam || 'FA';
           const byeText = p.byeWeek ? `Bye ${p.byeWeek}` : null;
           const projText = `${Math.round(p.projPts)} pts`;
@@ -1013,7 +1011,7 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
               onMouseEnter={() => setHoverId(p.id)}
               onMouseLeave={() => setHoverId(null)}
               title={p.draftScore != null
-                ? `Draft Score: ${Math.round(p.draftScore)} | Lineup Gain: ${p.lineupGain} | Scarcity Bonus: ${p.scarcityBonus} | Need ×${p.needMult} | Slot: ${p.slotType || '—'} | Avail: ${p.availPct}%`
+                ? `Draft impact: ${Math.round(p.draftScore)} | Immediate lineup gain: ${p.lineupGain} | Available next pick: ${p.availPct}%`
                 : undefined}
               style={{
                 display:'grid', gridTemplateColumns:GRID,
@@ -1034,7 +1032,6 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
                 </div>
                 {isHov && p.draftScore != null ? (
                   <div style={{fontSize:10, color:T.muted, marginTop:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
-                    <span style={{color:slotColor, fontWeight:700, marginRight:4}}>{(p.slotType||'bench').toUpperCase()}</span>
                     avail {p.availPct}%
                     {p.byePen > 0 && <span style={{color:T.amber}}> · bye −{p.byePen}</span>}
                   </div>
@@ -1394,7 +1391,10 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
   React.useEffect(() => {
     const force = forceRef.current;
     forceRef.current = false;
-    const shouldCompute = force || picks.length === 0 || untilMyTurn <= 1;
+    // A recommendation means "draft this player now", so only compute it on
+    // the user's actual turn.  Computing one pick early let the rollout reserve
+    // candidates through an opponent selection and overstated availability.
+    const shouldCompute = untilMyTurn === 0;
     if (!shouldCompute) {
       setSuggest(s => ({ ...s, loading: false, stale: true }));
       return;
@@ -1413,6 +1413,8 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
         rosterSlots: league.rosterSlots,
         scoringType: league.scoringType,
         customScoring: league.customScoring,
+        importedScoring: league.importedScoring,
+        draftType: league.draftType,
         adpNoise,
         sims: (tweaks && tweaks.sims) || undefined,
       },
@@ -1466,9 +1468,7 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
         goneRisk: r.goneRisk,
         availPct: Math.max(0, Math.round(100 * (1 - (r.goneRisk || 0)))),
         lineupGain: r.immediateGain,
-        scarcityBonus: r.impact == null ? null : +(r.impact - r.immediateGain).toFixed(1),
-        needMult: 1,
-        slotType: '',
+        byePen: r.byePenalty || 0,
       };
     });
   }, [available, suggest]);

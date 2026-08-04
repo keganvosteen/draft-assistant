@@ -69,6 +69,35 @@ class TestSameOriginGuard(_ServerFixture):
             "GET", "/api/state", headers={"Sec-Fetch-Site": "cross-site"})
         self.assertEqual(status, 403)
 
+    def test_same_site_is_not_same_origin(self):
+        status, _ = self.request(
+            "POST", "/api/state", {"picks": []},
+            headers={"Sec-Fetch-Site": "same-site"},
+        )
+        self.assertEqual(status, 403)
+
+    def test_mismatched_origin_is_refused(self):
+        status, _ = self.request(
+            "POST", "/api/state", {"picks": []},
+            headers={
+                "Sec-Fetch-Site": "same-origin",
+                "Origin": "http://localhost:1",
+            },
+            host=f"localhost:{self.port}",
+        )
+        self.assertEqual(status, 403)
+
+    def test_exact_origin_is_allowed(self):
+        status, _ = self.request(
+            "POST", "/api/import-espn", {"leagueId": ""},
+            headers={
+                "Sec-Fetch-Site": "same-origin",
+                "Origin": f"http://localhost:{self.port}",
+            },
+            host=f"localhost:{self.port}",
+        )
+        self.assertEqual(status, 400)
+
     def test_direct_navigation_is_allowed(self):
         # Sec-Fetch-Site: none means the user typed the URL / used a bookmark.
         status, _ = self.request(
@@ -119,7 +148,19 @@ class TestRequestBodyLimits(_ServerFixture):
             status = conn.getresponse().status
         finally:
             conn.close()
-        self.assertEqual(status, 500)  # handled as an error, not a crash
+        self.assertEqual(status, 413)
+
+    def test_non_json_content_type_is_rejected(self):
+        status, _ = self.request(
+            "POST", "/api/state", {"picks": []},
+            headers={"Content-Type": "text/plain"},
+        )
+        self.assertEqual(status, 415)
+
+    def test_suggestion_top_is_bounded_before_work_runs(self):
+        status, body = self.request("POST", "/api/suggest", {"top": 101})
+        self.assertEqual(status, 400)
+        self.assertIn(b"top", body)
 
 
 class TestMalformedBodyHandling(_ServerFixture):
@@ -136,8 +177,22 @@ class TestMalformedBodyHandling(_ServerFixture):
             status, body = resp.status, resp.read()
         finally:
             conn.close()
-        self.assertEqual(status, 500)
+        self.assertEqual(status, 400)
         self.assertIn(b"error", body)
+
+    def test_json_array_body_is_rejected(self):
+        conn = HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            conn.request(
+                "POST", "/api/state", body=b"[]",
+                headers={"Content-Type": "application/json"},
+            )
+            resp = conn.getresponse()
+            status, body = resp.status, resp.read()
+        finally:
+            conn.close()
+        self.assertEqual(status, 400)
+        self.assertIn(b"object", body)
 
     def test_unknown_route_returns_404_json(self):
         status, body = self.request("POST", "/api/does-not-exist", {})

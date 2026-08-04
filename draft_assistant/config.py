@@ -44,10 +44,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "draft": {
         "slot": 1,
-        "snake": True,
-        "monte_carlo_sims": 250,
+        "rollout_sims": 48,
         "adp_noise": 8.0,
-        "candidate_pool": 120
+        "rollout_candidates": 16,
     }
 }
 
@@ -84,7 +83,21 @@ def load_config(path: str = "league.config.yaml") -> LeagueConfig:
     merged = _defaults_copy()
     for key in DEFAULT_CONFIG:
         if key in data:
-            merged[key] = data[key]
+            if isinstance(merged[key], dict) and isinstance(data[key], dict):
+                merged[key].update(data[key])
+            else:
+                merged[key] = data[key]
+
+    # Backward-compatible migration from the pre-rollout option names. Keep
+    # this at the config boundary so the engine has one unambiguous schema.
+    draft = merged["draft"]
+    raw_draft = data.get("draft") if isinstance(data.get("draft"), dict) else {}
+    if "rollout_sims" not in raw_draft and "monte_carlo_sims" in raw_draft:
+        draft["rollout_sims"] = raw_draft["monte_carlo_sims"]
+    if "rollout_candidates" not in raw_draft and "candidate_pool" in raw_draft:
+        draft["rollout_candidates"] = min(int(raw_draft["candidate_pool"]), 64)
+    for obsolete in ("monte_carlo_sims", "candidate_pool", "snake"):
+        draft.pop(obsolete, None)
     return LeagueConfig(**merged)
 
 
