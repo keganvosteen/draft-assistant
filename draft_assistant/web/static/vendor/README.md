@@ -6,9 +6,9 @@ reviewing its upstream release and license.
 
 | File | Version | SHA-256 |
 |---|---:|---|
-| `react.production.min.js` | 18.3.1 | `d72610e728466bf70f27ecc9a1a14580fd8f1e75b977aa0612146cab0e80a3fe` |
-| `react-dom.production.min.js` | 18.3.1 | `13b1c0705b9fa93346936ed98bd4a858fea4cdacdb09e564f897c5ba6bd0943a` |
-| `babel.min.js` | 7.26.4 | `7094c930172b48b4b05f2b7b102be439af601fc873b64b857a4c5eb779476d93` |
+| `react.production.min.js` | 18.3.1 | `d949f1c3687aedadcedac85261865f29b17cd273997e7f6b2bfc53b2f9d4c4dd` |
+| `react-dom.production.min.js` | 18.3.1 | `35f4f974f4b2bcd44da73963347f8952e341f83909e4498227d4e26b98f66f0d` |
+| `babel.min.js` | 7.26.4 | `a12872ea8da3d29b2a296c51bfac7c482e81419c755f2207a49ad9b77200f4ea` |
 
 License text and attribution are in the repository's
 `THIRD_PARTY_NOTICES.md`.
