@@ -1,0 +1,103 @@
+name: Build installers
+
+# Push a tag to cut a release:  git tag v1.0.0 && git push origin v1.0.0
+# Or run manually from the Actions tab to get installers without tagging.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover tests -v
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Inno Setup
+        run: winget install -e --id JRSoftware.InnoSetup --accept-package-agreements --accept-source-agreements --disable-interactivity
+        shell: pwsh
+
+      - name: Build installer
+        run: powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/installers/*.exe
+          if-no-files-found: error
+
+  macos:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon: covers every Mac sold since late 2020.
+          - runner: macos-14
+            label: apple-silicon
+          # Intel: drop this entry once no tester is on an Intel Mac.
+          - runner: macos-13
+            label: intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build .app and .dmg
+        run: |
+          chmod +x packaging/macos/build.sh packaging/macos/smoke_test.sh
+          ./packaging/macos/build.sh
+        # Unsigned/ad-hoc build. To sign, add an Apple Developer certificate to
+        # the keychain here and set DRAFT_ASSISTANT_CODESIGN_IDENTITY.
+        # See docs/DISTRIBUTION.md.
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg-${{ matrix.label }}
+          path: dist/installers/*.dmg
+          if-no-files-found: error
+
+  release:
+    # Only publish a GitHub Release for tag pushes; manual runs just leave
+    # artifacts attached to the workflow run.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          body: |
+            ## Installing
+
+            **Windows** — download the `.exe`, run it. SmartScreen will warn
+            because the build is unsigned: click **More info → Run anyway**.
+
+            **macOS** — download the `.dmg` matching your Mac (Apple Silicon or
+            Intel), open it, drag Draft Assistant to Applications. On first
+            launch macOS blocks it because the build is unsigned: open
+            **System Settings → Privacy & Security**, scroll down, and click
+            **Open Anyway**.

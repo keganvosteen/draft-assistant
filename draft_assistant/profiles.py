@@ -8,11 +8,14 @@ from typing import List
 
 from .config import DEFAULT_CONFIG, load_config, save_config
 from .models import DraftState, LeagueConfig
+from .paths import resolve, seed_user_data
 from .storage import save_players, save_state
 
 DEFAULT_PROFILE = "default"
-PROFILE_ROOT = Path(".draft_assistant_profiles")
-SHARED_PROJECTIONS_PATH = "data/projections.json"
+# resolve() is a no-op in a source checkout and redirects to the per-user data
+# directory in a packaged build — see paths.py.
+PROFILE_ROOT = Path(resolve(".draft_assistant_profiles"))
+SHARED_PROJECTIONS_PATH = resolve("data/projections.json")
 
 
 @dataclass(frozen=True)
@@ -41,9 +44,9 @@ def get_profile_paths(name: str) -> ProfilePaths:
     if profile == DEFAULT_PROFILE:
         return ProfilePaths(
             profile=DEFAULT_PROFILE,
-            base_dir=".",
-            config_path="league.config.yaml",
-            state_path="draft_state.json",
+            base_dir=os.fspath(PROFILE_ROOT.parent) if PROFILE_ROOT.is_absolute() else ".",
+            config_path=resolve("league.config.yaml"),
+            state_path=resolve("draft_state.json"),
             projections_path=SHARED_PROJECTIONS_PATH,
         )
     base = PROFILE_ROOT / profile
@@ -82,10 +85,15 @@ def _default_state(teams: int) -> DraftState:
 
 
 def ensure_profile(name: str) -> ProfilePaths:
+    # In a packaged build this is first run: copy the shipped player board and
+    # default config out of the read-only bundle into the user data directory.
+    seed_user_data()
+
     paths = get_profile_paths(name)
     if paths.profile != DEFAULT_PROFILE:
         os.makedirs(paths.base_dir, exist_ok=True)
-    os.makedirs(os.path.dirname(paths.projections_path), exist_ok=True)
+    os.makedirs(os.path.dirname(paths.config_path) or ".", exist_ok=True)
+    os.makedirs(os.path.dirname(paths.projections_path) or ".", exist_ok=True)
 
     config_exists = os.path.exists(paths.config_path)
     if config_exists:

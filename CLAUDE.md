@@ -27,6 +27,14 @@
 - League config in `league.config.yaml`
 - Named profiles under `.draft_assistant_profiles/<name>/` — gitignored, as is `draft_state.json`
 
+## Packaging
+
+- **One spec, both platforms:** `packaging/DraftAssistant.spec` drives the Windows installer (`packaging/windows/build.ps1` → Inno Setup) and the macOS `.dmg` (`packaging/macos/build.sh`). CI builds all three artifacts via `.github/workflows/release.yml`. Version comes from `draft_assistant.__version__` — bump it there only.
+- **Paths are the load-bearing part.** `paths.py::resolve()` returns the plain relative path in a source checkout and an absolute per-user path (`%LOCALAPPDATA%\DraftAssistant`, `~/Library/Application Support/DraftAssistant`) when frozen. An installed app cannot write beside its executable, so **anything that persists state must route through `resolve()`** — hardcoding a relative path works in dev and silently breaks the installed build. `DRAFT_ASSISTANT_HOME` overrides it.
+- Tests assert the dev-mode paths verbatim (`tests/test_profiles.py`) and chdir into temp dirs, so `resolve()` must stay a no-op unless frozen.
+- Both build scripts smoke-test the bundle (launch it, hit `/api/state`, check seeding) before packaging. That is what catches a missing `--add-data` file or hidden import.
+- The packaged app ships the **web UI only** — `tkinter` is deliberately excluded from the bundle, so `draft-assistant ui` stays a source-checkout feature.
+
 ## Platform leagues
 
 - **Import + roster sync:** ESPN (`importers/free_sources.py`, public leagues), Yahoo (`importers/yahoo.py`, OAuth), Sleeper (`importers/sleeper.py`, public API — no auth). All three land on `POST /api/sync-league`, which maps provider rosters to board players via `platform_sync.py`.

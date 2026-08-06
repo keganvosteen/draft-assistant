@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Entitlements for a MAC APP STORE submission. Not used by the .dmg build.
+
+  App Sandbox is mandatory on the App Store. This app needs:
+    * network.server  - the UI is served from a 127.0.0.1 HTTP server
+    * network.client  - Sleeper / ESPN / Yahoo imports
+    * files.user-selected.read-write - the FantasyPros CSV import file picker
+
+  The cs.* exceptions used by the direct-download build are NOT permitted on
+  the App Store, which is the core reason a PyInstaller bundle usually fails
+  review. See docs/MAC_APP_STORE.md before attempting a submission.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+</dict>
+</plist>

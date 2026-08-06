@@ -30,15 +30,30 @@ The desktop UI opens a Tkinter window with a draft board, roster panel, and a le
 
 ---
 
-## Share a Tester Package
+## Installable Builds
 
-On Windows, build a portable zip that includes an executable launcher, the web UI assets, league config, draft state, and player data:
+Ship a real installer that bundles its own Python — testers install nothing else.
 
 ```powershell
-.\scripts\build_test_package.ps1
+# Windows -> dist\installers\DraftAssistant-Setup-<version>.exe
+powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ```
 
-Send `dist\DraftAssistant-test-package.zip` to your tester. They unzip it and double-click `Start Draft Assistant.bat`; no Python install is required. The package starts a local server on `127.0.0.1` and opens the app in their browser. Keep the console window open while testing.
+```bash
+# macOS -> dist/installers/DraftAssistant-<version>-<arch>.dmg
+./packaging/macos/build.sh
+```
+
+Or push a tag and let CI build both: `git tag v1.0.0 && git push origin v1.0.0`.
+
+The packaged app opens in a native window (falling back to the browser if the
+system webview is unavailable) and keeps config, draft state and the player
+board in a per-user data directory rather than next to the executable, so it
+survives being installed somewhere read-only.
+
+- [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md) — building, CI, and code signing
+- [docs/FOR_TESTERS.md](docs/FOR_TESTERS.md) — send this to whoever is testing
+- [docs/MAC_APP_STORE.md](docs/MAC_APP_STORE.md) — what an App Store release would take
 
 ---
 
