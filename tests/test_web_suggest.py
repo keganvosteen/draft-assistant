@@ -56,6 +56,15 @@ class TestScoringForLeague(unittest.TestCase):
             {"scoringType": "custom", "customScoring": {"reception": 1.0}}, BASE)
         self.assertEqual(s["fumbles"], -2)  # falls back to base, not 0
 
+    def test_imported_provider_scoring_is_preserved_beyond_receptions(self):
+        imported = {"pass_td": 6, "fg_50_59": 7, "sack": 2, "rec": 0.5}
+        s = scoring_for_league(
+            {"scoringType": "ppr", "importedScoring": imported}, BASE)
+        self.assertEqual(s["pass_td"], 6)
+        self.assertEqual(s["fg_50_59"], 7)
+        self.assertEqual(s["sack"], 2)
+        self.assertEqual(s["rec"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

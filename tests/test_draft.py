@@ -22,6 +22,21 @@ def _state():
 
 
 class TestRecordPick(unittest.TestCase):
+    def test_stable_provider_id_is_persisted(self):
+        player = Player(id="sleeper:123", name="Renamed Player", position="WR")
+        state = _state()
+        tracker = DraftTracker(_config(), state, [player])
+        tracker.record_pick("Renamed Player", my_pick=True)
+        self.assertEqual(state.picks, ["sleeper:123"])
+
+    def test_legacy_saved_key_still_resolves(self):
+        player = Player(id="sleeper:123", name="Renamed Player", position="WR")
+        state = DraftState("Me", ["Me"], picks=["Renamed Player|WR"],
+                           my_picks=["Renamed Player|WR"])
+        tracker = DraftTracker(_config(), state, [player])
+        self.assertEqual(tracker.available_players(), [])
+        self.assertEqual(tracker.my_roster()["WR"], [player])
+
     def test_exact_match(self):
         players = [_make_player("Josh Allen", "QB"), _make_player("CeeDee Lamb", "WR")]
         tracker = DraftTracker(_config(), _state(), players)

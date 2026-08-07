@@ -1,6 +1,7 @@
 """Tests for atomic JSON persistence."""
 import os
 import tempfile
+import threading
 import unittest
 
 from draft_assistant.models import DraftState, Player
@@ -10,6 +11,7 @@ from draft_assistant.storage import (
     load_state,
     save_players,
     save_state,
+    update_state,
 )
 
 
@@ -36,6 +38,40 @@ class TestAtomicWrite(unittest.TestCase):
 
 
 class TestStateRoundTrip(unittest.TestCase):
+    def test_corrupt_state_is_preserved_and_recovers_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "draft_state.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("{not valid json")
+            with self.assertWarns(RuntimeWarning):
+                state = load_state(path)
+            self.assertEqual(state.my_team_name, "My Team")
+            self.assertFalse(os.path.exists(path))
+            self.assertTrue(os.path.exists(path + ".corrupt"))
+
+    def test_partial_updates_do_not_overwrite_each_other(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "draft_state.json")
+            save_state(DraftState("Me", ["Me", "Them"]), path)
+            barrier = threading.Barrier(2)
+
+            def set_picks():
+                barrier.wait()
+                update_state(path, lambda state: setattr(state, "picks", ["a"]))
+
+            def set_my_picks():
+                barrier.wait()
+                update_state(path, lambda state: setattr(state, "my_picks", ["a"]))
+
+            threads = [threading.Thread(target=set_picks), threading.Thread(target=set_my_picks)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+            state = load_state(path)
+            self.assertEqual(state.picks, ["a"])
+            self.assertEqual(state.my_picks, ["a"])
+
     def test_state_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "draft_state.json")

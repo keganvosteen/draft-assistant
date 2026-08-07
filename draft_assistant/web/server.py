@@ -6,6 +6,7 @@ React frontend can load player data from the Python backend.
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import time
@@ -16,8 +17,9 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlsplit
 
-from ..models import DraftState, LeagueConfig
+from ..models import DraftState, FLEX_TYPES, LeagueConfig
 from ..profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from ..providers.base import build_provider
 from ..free_agents import free_agent_recommendations
@@ -25,19 +27,51 @@ from ..platform_sync import synced_draft_to_picks, synced_rosters_to_picks
 from ..rollout import rollout_values
 from ..sample_data import sample_players
 from ..scoring import fantasy_points
-from ..storage import load_players, load_state, save_players, save_state
+from ..storage import load_players, load_state, save_players, update_players, update_state
 from .scoring import STANDARD_SCORING, scoring_for_league
 
 STATIC_DIR = Path(__file__).parent / "static"
 
 # Host names this server will answer API calls on (see
 # DraftAPIHandler._request_is_same_origin).
-ALLOWED_HOSTNAMES = {"127.0.0.1", "localhost", "[::1]", "::1"}
+ALLOWED_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
 
 # Ceiling on a request body. Generous next to the biggest real payload (a
 # pasted draft room log) and small enough that a bogus Content-Length can't
 # exhaust memory.
 MAX_BODY_BYTES = 8 * 1024 * 1024
+MAX_PICKS = 1024
+MAX_TEAMS = 32
+MAX_ROSTER_SLOTS = 50
+MAX_WEB_SIMS = 96
+
+
+class PayloadTooLarge(ValueError):
+    pass
+
+
+def _bounded_int(value, label: str, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be an integer")
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be an integer") from exc
+    if result < minimum or result > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}")
+    return result
+
+
+def _bounded_float(value, label: str, minimum: float, maximum: float) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be a number")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a number") from exc
+    if not math.isfinite(result) or result < minimum or result > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}")
+    return result
 
 # Last-resort fallback only (a past season's byes — goes stale). Byes are
 # preferred from player data, then from per-team byes derived from that data.
@@ -63,9 +97,25 @@ def _team_byes_from_players(players) -> dict:
             byes[player.team] = player.bye_week
     return byes
 
+
+def _player_indexes(players) -> tuple[dict, dict]:
+    """Return canonical players and aliases for pre-stable-id saved drafts."""
+    canonical = {player.key(): player for player in players}
+    aliases = {
+        player.legacy_key(): player.key()
+        for player in players
+        if player.legacy_key() != player.key()
+    }
+    return canonical, aliases
+
+
+def _canonicalize_player_keys(keys, aliases: dict) -> list[str]:
+    return [aliases.get(key, key) for key in keys]
+
 # Tracks background tasks (pull-free-data, collect-all, etc.)
 _tasks: dict[str, dict] = {}
 _task_lock = threading.Lock()
+_task_slots = threading.BoundedSemaphore(2)
 
 
 def _player_to_js(player, config: LeagueConfig, team_byes: Optional[dict] = None) -> dict:
@@ -108,21 +158,17 @@ def _player_to_js(player, config: LeagueConfig, team_byes: Optional[dict] = None
     elif adp <= 90:
         tier = 4
 
-    # Raw stat lines the frontend needs to apply fully custom scoring.
-    custom_keys = (
-        "pass_yd", "pass_td", "pass_int", "pass_2pt",
-        "rush_yd", "rush_td", "rush_2pt",
-        "rec", "rec_yd", "rec_td", "rec_2pt",
-        "sack_taken", "fumbles", "fumbles_total", "fum_ret_td",
-    )
+    # Keep every numeric raw stat so imported provider scoring (including
+    # bonuses and K/DST categories) can be rendered exactly in the browser.
     stats = {
         key: round(float(proj.get(key, 0.0)), 1)
-        for key in custom_keys
-        if proj.get(key)
+        for key in proj
+        if isinstance(proj.get(key), (int, float)) and proj.get(key)
     }
 
     return {
         "id": player.key(),
+        "legacyId": player.legacy_key(),
         "name": player.name,
         "pos": player.position,
         "nflTeam": player.team or "FA",
@@ -170,6 +216,9 @@ def _prune_tasks():
 
 def _run_task(task_id: str, fn, *args, **kwargs):
     """Run *fn* in a background thread, storing result in _tasks."""
+    if not _task_slots.acquire(blocking=False):
+        return False
+
     def _worker():
         try:
             result = fn(*args, **kwargs)
@@ -184,6 +233,8 @@ def _run_task(task_id: str, fn, *args, **kwargs):
             with _task_lock:
                 _tasks[task_id]["status"] = "error"
                 _tasks[task_id]["error"] = str(exc)
+        finally:
+            _task_slots.release()
 
     with _task_lock:
         _prune_tasks()
@@ -194,6 +245,7 @@ def _run_task(task_id: str, fn, *args, **kwargs):
             "created_at": time.time(),
         }
     threading.Thread(target=_worker, daemon=True).start()
+    return True
 
 
 def _pick_player_ids(picks) -> list[str]:
@@ -258,6 +310,9 @@ def _free_agent_row(rec) -> dict:
 class DraftAPIHandler(SimpleHTTPRequestHandler):
     """Serves static files from STATIC_DIR and handles /api/ routes."""
 
+    server_version = "DraftAssistant"
+    sys_version = ""
+
     def __init__(self, *args, profile: str = DEFAULT_PROFILE, **kwargs):
         self.profile = profile
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
@@ -284,6 +339,21 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if not self._request_is_same_origin():
             self._send_json({"error": "cross-origin request refused"}, 403)
+            return
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._send_json({"error": "Content-Type must be application/json"}, 415)
+            return
+        try:
+            # Parse and cache once before dispatch. This gives every endpoint
+            # consistent 400/413 handling instead of each broad exception block
+            # translating malformed input into an internal-server error.
+            self._request_body = self._read_body()
+        except PayloadTooLarge as exc:
+            self._send_json({"error": str(exc)}, 413)
+            return
+        except (ValueError, json.JSONDecodeError, UnicodeError) as exc:
+            self._send_json({"error": f"invalid JSON body: {exc}"}, 400)
             return
         if self.path == "/api/state":
             self._handle_save_state()
@@ -349,38 +419,79 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         Non-browser clients (curl, the tests) send no Sec-Fetch-Site and are
         allowed through — the Host check still applies to them.
         """
-        host = self.headers.get("Host", "")
-        if host:
-            hostname = host.rsplit(":", 1)[0].strip().lower()
-            if hostname not in ALLOWED_HOSTNAMES:
-                return False
-        site = self.headers.get("Sec-Fetch-Site")
-        if site is not None and site not in ("same-origin", "same-site", "none"):
+        host = self.headers.get("Host", "").strip()
+        if not host:
             return False
+        try:
+            hostname = (urlsplit(f"//{host}").hostname or "").lower()
+        except ValueError:
+            return False
+        if hostname not in ALLOWED_HOSTNAMES:
+            return False
+        site = self.headers.get("Sec-Fetch-Site")
+        if site is not None and site not in ("same-origin", "none"):
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            try:
+                parsed = urlsplit(origin)
+            except ValueError:
+                return False
+            if parsed.scheme != "http" or parsed.netloc.lower() != host.lower():
+                return False
         return True
 
     def _read_body(self) -> dict:
-        length = int(self.headers.get("Content-Length", 0) or 0)
+        cached = getattr(self, "_request_body", None)
+        if cached is not None:
+            return cached
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid Content-Length") from exc
+        if length < 0:
+            raise ValueError("invalid Content-Length")
         if length <= 0:
             return {}
         # Cap the read: Content-Length is attacker-controlled, and allocating
         # whatever it claims is a free way to exhaust memory. The largest real
         # payload is a pasted draft log, far under this.
         if length > MAX_BODY_BYTES:
-            raise ValueError("request body too large")
-        return json.loads(self.rfile.read(length))
+            raise PayloadTooLarge("request body too large")
+        def reject_constant(value):
+            raise ValueError(f"non-finite JSON number {value!r} is not allowed")
+
+        data = json.loads(self.rfile.read(length), parse_constant=reject_constant)
+        if not isinstance(data, dict):
+            raise ValueError("JSON body must be an object")
+        return data
 
     @staticmethod
     def _picks_list(value) -> list:
         """Validate a picks payload: must be a list of player-key strings."""
-        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-            raise ValueError("picks must be a list of player key strings")
+        if (not isinstance(value, list) or len(value) > MAX_PICKS
+                or not all(isinstance(item, str) and len(item) <= 256 for item in value)):
+            raise ValueError(
+                f"picks must be a list of at most {MAX_PICKS} short player key strings")
         return value
+
+    def end_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+        )
+        super().end_headers()
 
     def _send_json(self, data, code=200):
         body = json.dumps(data).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -412,27 +523,44 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     def _suggest_config(self, body: dict, config: LeagueConfig) -> LeagueConfig:
         """Build the effective LeagueConfig for a suggestion request.
 
-        The league you create (server profile config) is the source of truth for
-        scoring — including K/DST weights the browser never sees. The live UI may
-        override teams / draft slot / roster slots / sim count per request, so
-        the engine always reflects whatever league you are actually drafting.
+        The profile supplies defaults, while an imported league can carry its
+        complete provider scoring map (including K/DST and uncommon bonuses).
+        The live UI may override teams / slot / roster / sim count per request.
         """
         league = body.get("league") or {}
-        teams = int(league.get("numTeams") or config.teams)
+        if not isinstance(league, dict):
+            raise ValueError("league must be an object")
+        teams = _bounded_int(
+            league.get("numTeams") or config.teams, "numTeams", 2, MAX_TEAMS)
         roster = dict(config.roster)
         slots = league.get("rosterSlots")
         if isinstance(slots, dict):
-            roster.update({k: int(v) for k, v in slots.items() if v is not None})
+            allowed_slots = {"QB", "RB", "WR", "TE", "K", "DST", "BN", "IR", *FLEX_TYPES}
+            unknown_slots = set(slots) - allowed_slots
+            if unknown_slots:
+                raise ValueError(f"unknown roster slots: {', '.join(sorted(unknown_slots))}")
+            roster.update({
+                key: _bounded_int(value, f"rosterSlots.{key}", 0, 30)
+                for key, value in slots.items() if value is not None
+            })
+        if sum(roster.values()) > MAX_ROSTER_SLOTS:
+            raise ValueError(f"roster may contain at most {MAX_ROSTER_SLOTS} total slots")
+        imported_scoring = league.get("importedScoring")
+        if isinstance(imported_scoring, dict) and len(imported_scoring) > 256:
+            raise ValueError("importedScoring may contain at most 256 categories")
         scoring = scoring_for_league(league, config.scoring)
         draft = dict(config.draft or {})
         if league.get("draftPosition"):
-            draft["slot"] = max(1, min(int(league["draftPosition"]), teams))
-        if league.get("sims"):
-            draft["rollout_sims"] = max(1, int(league["sims"]))
+            draft["slot"] = _bounded_int(
+                league["draftPosition"], "draftPosition", 1, teams)
+        if league.get("sims") is not None:
+            draft["rollout_sims"] = _bounded_int(
+                league["sims"], "sims", 1, MAX_WEB_SIMS)
         # Opponent ADP noise: the UI derives this from how many opponents are
         # autodrafting (more autodrafters -> they follow ADP -> less noise).
         if league.get("adpNoise") is not None:
-            draft["adp_noise"] = max(0.0, float(league["adpNoise"]))
+            draft["adp_noise"] = _bounded_float(
+                league["adpNoise"], "adpNoise", 0.0, 50.0)
         # Common-random-numbers keeps impact stable at modest sim counts, so the
         # web default favors responsiveness; bump via league.sims for precision.
         draft.setdefault("rollout_sims", 24)
@@ -445,18 +573,23 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         """Rank the board by the rest-of-draft season-points rollout engine.
 
         Body: {picks: [key...], my_picks: [key...], top: int, league: {...}}.
-        Player ids are ``Player.key()`` ("name|POS"), matching /api/players, so
-        the frontend can merge the returned impact scores straight onto its board.
+        Player ids are stable provider ids matching /api/players, so the
+        frontend can merge returned impact scores straight onto its board.
         """
         try:
             body = self._read_body()
             picks = self._picks_list(body.get("picks", []))
             my_picks = self._picks_list(body.get("my_picks", []))
-            top_n = max(1, int(body.get("top", 50)))
+            top_n = _bounded_int(body.get("top", 50), "top", 1, 100)
             players, config = _load_players(self.profile)
             eff = self._suggest_config(body, config)
+            if str((body.get("league") or {}).get("draftType") or "snake").lower() == "auction":
+                self._send_json({"error": "Snake recommendations are unavailable for auction drafts"}, 400)
+                return
 
-            by_key = {p.key(): p for p in players}
+            by_key, aliases = _player_indexes(players)
+            picks = _canonicalize_player_keys(picks, aliases)
+            my_picks = _canonicalize_player_keys(my_picks, aliases)
             picked = set(picks)
             available = [p for k, p in by_key.items() if k not in picked]
             my_roster: dict = {}
@@ -513,16 +646,16 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         try:
             body = self._read_body()
             leagues = body.get("leagues") or []
-            if not isinstance(leagues, list):
-                self._send_json({"error": "leagues must be a list"}, 400)
+            if not isinstance(leagues, list) or len(leagues) > 50:
+                self._send_json({"error": "leagues must be a list of at most 50 items"}, 400)
                 return
             picks_by_league = body.get("picks") or {}
             if not isinstance(picks_by_league, dict):
                 picks_by_league = {}
-            top_n = max(1, min(int(body.get("top", 8)), 30))
+            top_n = _bounded_int(body.get("top", 8), "top", 1, 30)
 
             players, config = _load_players(self.profile)
-            by_key = {p.key(): p for p in players}
+            by_key, aliases = _player_indexes(players)
             response_rows = []
 
             for index, league in enumerate(leagues):
@@ -531,8 +664,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 league_id = str(league.get("id") or f"league-{index + 1}")
                 league_picks = picks_by_league.get(league_id, [])
                 draft_position = int(league.get("draftPosition") or 1)
-                picked_keys = set(_pick_player_ids(league_picks))
-                my_keys = _my_pick_ids(league_picks, draft_position)
+                picked_keys = set(_canonicalize_player_keys(
+                    _pick_player_ids(league_picks), aliases))
+                my_keys = _canonicalize_player_keys(
+                    _my_pick_ids(league_picks, draft_position), aliases)
 
                 eff = self._suggest_config({"league": league}, config)
                 available = [p for key, p in by_key.items() if key not in picked_keys]
@@ -867,12 +1002,16 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     def _save_draft_state(self) -> dict:
         body = self._read_body()
         paths = ensure_profile(self.profile)
-        state = load_state(paths.state_path)
-        if "picks" in body:
-            state.picks = self._picks_list(body["picks"])
-        if "my_picks" in body:
-            state.my_picks = self._picks_list(body["my_picks"])
-        save_state(state, paths.state_path)
+        picks = self._picks_list(body["picks"]) if "picks" in body else None
+        my_picks = self._picks_list(body["my_picks"]) if "my_picks" in body else None
+
+        def mutate(state):
+            if picks is not None:
+                state.picks = picks
+            if my_picks is not None:
+                state.my_picks = my_picks
+
+        update_state(paths.state_path, mutate)
         return {"ok": True, "path": str(paths.state_path)}
 
     def _handle_get_state(self):
@@ -930,8 +1069,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 )
                 # Accumulate history across pulls: keep prior seasons on disk
                 # rather than overwriting them with this pull's seasons only.
-                players = merge_historical_into(result.players, load_players(paths.projections_path))
-                save_players(players, paths.projections_path)
+                players = update_players(
+                    paths.projections_path,
+                    lambda current: merge_historical_into(result.players, current),
+                )
                 seasons = sorted({s for p in players for s in p.historical_stats})
                 reports = [
                     {"source": r.source, "records": r.records, "ok": r.ok, "detail": r.detail}
@@ -942,7 +1083,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                         "consensusPlayers": result.consensus_players,
                         "warnings": list(result.warnings)}
 
-            _run_task(task_id, _do_pull)
+            if not _run_task(task_id, _do_pull):
+                self._send_json({"error": "Two data jobs are already running"}, 429)
+                return
             self._send_json({"taskId": task_id})
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
@@ -969,7 +1112,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 save_players(players, paths.projections_path)
                 return {"players": len(players)}
 
-            _run_task(task_id, _do_collect)
+            if not _run_task(task_id, _do_collect):
+                self._send_json({"error": "Two data jobs are already running"}, 429)
+                return
             self._send_json({"taskId": task_id})
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
@@ -992,8 +1137,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     def _handle_auction(self):
         try:
             body = self._read_body()
-            budget = body.get("budget", 200)
-            top_n = body.get("top", 50)
+            budget = _bounded_int(body.get("budget", 200), "budget", 1, 10000)
+            top_n = _bounded_int(body.get("top", 50), "top", 1, 200)
             paths = ensure_profile(self.profile)
             config = load_profile_config(paths)
             provider = build_provider(config.provider)

@@ -39,7 +39,15 @@ if (!(Test-Path $Python)) {
     python -m venv $BuildVenv
 }
 & $Python -m pip install --upgrade pip --quiet
-& $Python -m pip install --upgrade pyinstaller pywebview --quiet
+& $Python -m pip install -r (Join-Path $Root "requirements-build.txt") --quiet
+& $Python -m pip install -r (Join-Path $Root "requirements-desktop.txt") --quiet
+
+# --- release gate ---------------------------------------------------------
+# Refuse to ship a silently degraded board (for example, a single-source pull
+# with no byes/history or an entire position with empty projections).
+& $Python (Join-Path $Root "scripts\check_projection_quality.py") `
+    (Join-Path $Root "data\projections.json")
+if ($LASTEXITCODE -ne 0) { throw "Projection quality gate failed - not shipping this board." }
 
 # --- icons ----------------------------------------------------------------
 & $Python (Join-Path $Root "packaging\make_icons.py")

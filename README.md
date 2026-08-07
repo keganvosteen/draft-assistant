@@ -1,6 +1,6 @@
 # Fantasy Football Draft Assistant
 
-A Python draft assistant with three user interfaces (terminal, desktop GUI, browser web UI), multi-league profiles, draft-aware Monte Carlo scoring, league-wide free-agent scanning, historical trend analysis, and free public-data ingestion.
+A local-first Python draft assistant with terminal, Tkinter, browser, and pywebview interfaces; multi-league profiles; rest-of-draft simulation; free-agent scanning; auction values; and public-data ingestion.
 
 ---
 
@@ -9,6 +9,9 @@ A Python draft assistant with three user interfaces (terminal, desktop GUI, brow
 **Requirements:** Python 3.10+. Core app has no external dependencies.
 
 ```bash
+# Editable install with the `draft-assistant` command
+python -m pip install -e .
+
 # Launch terminal UI (default, works everywhere)
 python -m draft_assistant
 
@@ -18,13 +21,17 @@ python -m draft_assistant web
 # Launch Tkinter desktop UI
 python -m draft_assistant ui
 
+# Optional native webview shell
+python -m pip install -e ".[desktop]"
+python -m draft_assistant app
+
 # Target a specific league profile
 python -m draft_assistant --profile home draft
 ```
 
 The terminal UI walks you through league setup on first run (teams, scoring format, roster, draft position), seeds sample player data, and drops you into a live draft board with commands like `pick <name>`, `my <name>`, `undo`, `log`, `auction`.
 
-The web UI starts a local HTTP server (default `http://127.0.0.1:8080`) and opens your browser. It loads real player data from your active profile and provides a live Draft Score / VORP draft board with server-backed rollout recommendations, scarcity alerts, auction values, a tweakable scoring panel, and a Free Agent Finder that scans all saved leagues for waiver upgrades. Add `--port N` or `--no-open` to customize.
+The web UI starts a loopback-only HTTP server (default `http://127.0.0.1:8080`) and opens your browser. It provides a live impact/VORP board, server-backed rollout recommendations, opponent-run and value-at-risk alerts, auction values, and a Free Agent Finder. Add `--port N` or `--no-open` to customize.
 
 The desktop UI opens a Tkinter window with a draft board, roster panel, and a league switcher.
 
@@ -32,7 +39,7 @@ The desktop UI opens a Tkinter window with a draft board, roster panel, and a le
 
 ## Installable Builds
 
-Ship a real installer that bundles its own Python — testers install nothing else.
+Ship a real installer that bundles its own Python, offline web assets, player data, and license notices — testers install nothing else.
 
 ```powershell
 # Windows -> dist\installers\DraftAssistant-Setup-<version>.exe
@@ -44,7 +51,11 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ./packaging/macos/build.sh
 ```
 
-Or push a tag and let CI build both: `git tag v1.0.0 && git push origin v1.0.0`.
+Or push a tag and let CI build both: `git tag v0.1.0 && git push origin v0.1.0`.
+
+Both builds run the projection-quality release gate first, so a degraded
+single-source or position-incomplete board cannot be shipped accidentally, and
+then smoke-test the packaged app before wrapping it.
 
 The packaged app opens in a native window (falling back to the browser if the
 system webview is unavailable) and keeps config, draft state and the player
@@ -59,22 +70,19 @@ survives being installed somewhere read-only.
 
 ## How Suggestions Are Scored
 
-Recommendations combine two scoring approaches:
+`draft_assistant/rollout.py` is the single recommendation engine for every UI. For each leading candidate it simulates the rest of the snake draft using noisy ADP opponent orders and the exact league teams, draft slot, roster shape, typed flex eligibility, and scoring rules. Your simulated picks maximize the final legal roster; required kicker and defense slots are enforced.
 
-### Base: Monte Carlo Draft-Aware VOR
-- **Lineup gain** — how much the player improves your starter + bench value relative to your current roster.
-- **Scarcity** — simulates opponent picks via ADP until your next snake-draft slot, estimates the drop-off in available value at each position.
-- **VOR** — classic projected points above positional replacement level.
-- **ADP discount** — small adjustment when a player is projected to be available after your next pick.
+The displayed **impact** is:
 
-### Layer: Gradient Need + Historical Adjustment
-On top of the base score, we apply:
-- **Gradient position need** — multiplier scales smoothly from 0.60 (position fully filled) to ~1.25 (position empty), factoring in draft progress.
-- **FLEX awareness** — RB/WR/TE overflow fills FLEX slots first, then need kicks in for additional picks.
-- **Bye-week stacking penalty** — small subtraction when a player shares a bye week with someone already on your roster.
-- **Age curves + historical blending** — projections are blended 60/40 with a weighted multi-year trend (when `age` and `historical_stats` are available), then adjusted by the year-over-year change in the positional age curve (RBs decline faster than WRs or QBs). Players with past stats but no published projection fall back to their age-adjusted trend.
-- **Team-change haircut** — players who switched NFL teams get a small projection discount.
-- **Confidence score** — 0–1 rating shown in the UI reflecting data richness (seasons of history, injury flags, team stability).
+```text
+expected final-roster season points after drafting this player
+minus expected final-roster season points under the default greedy pick
+minus the small configured bye-week tiebreaker
+```
+
+This captures opportunity cost: a lower-scoring player can be the better pick when their position will collapse before your later selections. Candidates are never reserved through intervening opponent picks, and recommendations are computed only on your actual turn. The board also shows league-scored projection, VORP, immediate lineup gain, and simulated availability at the following pick.
+
+Before scoring, published stat projections can be blended with recent history using position-specific weights, year-over-year age curves, and a team-change adjustment. Imported ESPN, Sleeper, and Yahoo scoring maps are retained in full, including kicker, defense, and uncommon categories.
 
 ---
 
@@ -173,13 +181,31 @@ pip install -r requirements-data.txt
 python -m draft_assistant collect-all --season 2026 --scoring ppr --teams 12
 ```
 
-Both paths populate each player with: projections, ADP, age, experience, historical stats, bye week, and team. `collect-all` additionally fills injury history and previous team (for team-change detection); `pull-free-data` carries one season of historical stats (more via `--stats-season` runs merged with `consensus`).
+Both paths populate players with projections, ADP, age, experience, historical stats, bye week, provenance, and team when their upstream sources provide them. `collect-all` additionally fills injury history and previous team. Free-data pulls report a warning when only one projection source succeeded; packaging and CI enforce stronger bundled-board coverage thresholds.
 
 ### Other importers
 
 - `import-fpros --offense offense.csv --k k.csv --dst dst.csv` — FantasyPros CSV exports
 - `pull-fftoday --season 2024` — FFToday HTML scraping (experimental)
 - `consensus --sources a.json b.json --method median` — merge multiple projection files
+
+---
+
+## Backtesting
+
+Install the optional analytics dependencies, then evaluate archived preseason
+sources against completed seasons:
+
+```bash
+python -m pip install -e ".[backtest]"
+python -m draft_assistant.backtest
+```
+
+Evaluation populations are selected from preseason ranks rather than hindsight
+top scorers, cache files include the full scoring configuration, and blend
+calibration prints leave-one-season-out validation. Historical Sleeper numbers
+are marked contaminated because that endpoint reflects in-season updates; they
+are shown for reference, not treated as a clean preseason source.
 
 ---
 
@@ -192,7 +218,7 @@ Edit `league.config.yaml` (or use the setup wizards):
   "teams": 12,
   "roster": {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 2, "K": 1, "DST": 1, "BN": 7},
   "scoring": {"pass_yd": 0.04, "pass_td": 4, "rec": 0.5, "rec_yd": 0.1, ...},
-  "draft": {"slot": 5, "monte_carlo_sims": 250, "adp_noise": 8.0},
+  "draft": {"slot": 5, "rollout_sims": 48, "rollout_candidates": 16, "adp_noise": 8.0},
   "provider": {"type": "local_json", "options": {"path": "data/projections.json"}}
 }
 ```
@@ -214,8 +240,9 @@ draft_assistant/
 ├── config.py              # League config load/save
 ├── models.py              # Player, LeagueConfig, DraftState dataclasses
 ├── draft.py               # DraftTracker with fuzzy matching + multi-step undo
-├── draft_value.py         # Monte Carlo draft-aware VOR scoring
-├── suggest.py             # Gradient need + bye penalty + historical layer
+├── rollout.py             # Rest-of-draft Monte Carlo recommendation engine
+├── draft_value.py         # Lineup optimizer, typed flex, snake-pick utilities
+├── suggest.py             # Compatibility entry point for recommendations
 ├── projections.py         # VOR and replacement-level computation
 ├── scoring.py             # Fantasy points from stat projections
 ├── historical.py          # Age curves, trend blending, confidence scoring
@@ -224,6 +251,8 @@ draft_assistant/
 ├── consensus.py           # Multi-source projection merging
 ├── fuzzy.py               # Levenshtein name matching
 ├── storage.py             # JSON persistence
+├── data_quality.py        # Release gate for the bundled projection board
+├── platform_sync.py       # Stable provider-id roster/draft synchronization
 ├── export.py              # CSV export
 ├── sample_data.py         # Built-in sample players
 ├── collectors/            # Richer data collectors (require nfl_data_py)
@@ -241,7 +270,7 @@ draft_assistant/
     ├── base.py
     └── sleeper.py
 
-tests/                     # 212 tests
+tests/                     # Unit and local HTTP integration tests
 ├── test_scoring.py
 ├── test_projections.py
 ├── test_suggest.py
@@ -270,12 +299,15 @@ tests/                     # 212 tests
 python -m unittest discover tests -v
 ```
 
-212 tests cover scoring, VOR/replacement levels, roster needs, FLEX, bye-week penalty, snake-pick math, the rest-of-draft rollout, free-agent add/drop recommendations, historical adjustments + age curves, fuzzy matching, platform roster/draft sync, the web server's same-origin guard and request limits, draft tracking (pick/undo/log), auction values, data collectors, config/persistence robustness, and profile management.
+The 240+ tests cover scoring, VOR/replacement levels, typed flex, bye-week penalties, snake-pick math, rollout timing and roster completion, stable-id migration, imported scoring, free-agent add/drop recommendations, historical adjustments, platform sync, auction validation, collectors, atomic persistence, and the local API's origin/input controls.
 
 ---
 
 ## Notes
 
-- Network fetches are optional. All UIs and the CLI work offline with the built-in sample data — the web UI's React/Babel assets are vendored locally, so draft day doesn't depend on a CDN (only the optional web fonts load remotely, with system-font fallback).
+- Network fetches are optional. All UIs and the CLI work offline; React and Babel assets are vendored, hashed, and license-inventoried, and the UI makes no font/CDN request.
 - Draft state persists to `draft_state.json` (or `.draft_assistant_profiles/<name>/draft_state.json` for non-default profiles).
+- Draft picks persist stable provider ids. Older `name|POS` state is migrated automatically, and malformed state is preserved as a `.corrupt` backup before defaults are recovered.
+- The web API binds to loopback, rejects cross-origin and non-JSON mutation requests, bounds expensive inputs, and limits concurrent data jobs.
 - For Pro Football Reference and sites that block scraping, prefer the `collect-all` + `pull-free-data` paths which use public API endpoints and GitHub-hosted datasets.
+- Project-original code is all-rights-reserved; vendored component terms are listed in `THIRD_PARTY_NOTICES.md`.

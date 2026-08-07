@@ -3,26 +3,21 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "draft-assistant"
-version = "1.0.0"
-description = "Fantasy football draft assistant with a Monte Carlo rest-of-draft recommendation engine."
+name = "fantasy-draft-assistant"
+version = "0.1.0"
+description = "Local-first fantasy football draft and roster assistant"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Proprietary" }
-authors = [{ name = "Kegan Vosteen" }]
-keywords = ["fantasy-football", "draft", "monte-carlo"]
-classifiers = [
-    "Private :: Do Not Upload",
-    "Programming Language :: Python :: 3",
-    "Environment :: Console",
-    "Environment :: Web Environment",
-]
-# The core app is stdlib-only by design — see CLAUDE.md.
+authors = [{name = "Draft Assistant contributors"}]
 dependencies = []
 
 [project.optional-dependencies]
-desktop = ["pywebview>=4.0"]
-build = ["pyinstaller>=6.6", "pywebview>=4.0"]
+desktop = ["pywebview>=4,<7"]
+data = ["nfl_data_py>=0.3,<0.4", "pandas>=1.5,<2"]
+backtest = ["numpy>=1.23,<3", "pandas>=1.5,<3"]
+# pywebview ships in the installers so the packaged app gets a native window
+# rather than falling back to the browser.
+build = ["pyinstaller>=6.11,<7", "pywebview>=4,<7"]
 
 [project.scripts]
 draft-assistant = "draft_assistant.cli:main"
@@ -34,4 +29,11 @@ draft-assistant-app = "draft_assistant.desktop:run_desktop"
 include = ["draft_assistant*"]
 
 [tool.setuptools.package-data]
-"draft_assistant.web" = ["static/**/*"]
+draft_assistant = [
+  "web/static/*.html",
+  "web/static/*.jsx",
+  "web/static/components/*.js",
+  "web/static/components/*.jsx",
+  "web/static/vendor/*.js",
+  "web/static/vendor/*.md",
+]

@@ -10,9 +10,13 @@ class DraftTracker:
         self.config = config
         self.state = state
         self.players = {p.key(): p for p in players}
+        self.aliases = {p.legacy_key(): p.key() for p in players}
+
+    def _canonical_key(self, key: str) -> str:
+        return self.aliases.get(key, key)
 
     def available_players(self) -> List[Player]:
-        picked = self.state.picked_set()
+        picked = {self._canonical_key(key) for key in self.state.picked_set()}
         return [p for k, p in self.players.items() if k not in picked]
 
     def record_pick(self, player_name: str, position: Optional[str] = None, my_pick: bool = False) -> Optional[Player]:
@@ -84,7 +88,7 @@ class DraftTracker:
     def my_roster(self) -> Dict[str, List[Player]]:
         roster: Dict[str, List[Player]] = {}
         for key in self.state.my_picks:
-            p = self.players.get(key)
+            p = self.players.get(self._canonical_key(key))
             if not p:
                 continue
             roster.setdefault(p.position, []).append(p)
@@ -92,9 +96,9 @@ class DraftTracker:
 
     def draft_log(self) -> List[Tuple[int, str, bool]]:
         """Return full draft log as list of (pick_number, player_key, is_mine)."""
-        my_set = set(self.state.my_picks)
+        my_set = {self._canonical_key(key) for key in self.state.my_picks}
         log: List[Tuple[int, str, bool]] = []
         for i, key in enumerate(self.state.picks, 1):
-            log.append((i, key, key in my_set))
+            log.append((i, key, self._canonical_key(key) in my_set))
         return log
 

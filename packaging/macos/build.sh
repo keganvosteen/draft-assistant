@@ -35,9 +35,15 @@ if [ ! -x "$PY" ]; then
     python3 -m venv "$BUILD_VENV"
 fi
 "$PY" -m pip install --upgrade pip --quiet
+"$PY" -m pip install -r requirements-build.txt --quiet
 # pyobjc-* are pywebview's Cocoa backend; without them the native window falls
 # back to the browser.
-"$PY" -m pip install --upgrade pyinstaller pywebview pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-WebKit --quiet
+"$PY" -m pip install -r requirements-desktop.txt pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-WebKit --quiet
+
+# --- release gate ---------------------------------------------------------
+# Refuse to ship a silently degraded board (for example, a single-source pull
+# with no byes/history or an entire position with empty projections).
+"$PY" scripts/check_projection_quality.py data/projections.json
 
 # --- icons ----------------------------------------------------------------
 "$PY" packaging/make_icons.py

@@ -187,6 +187,11 @@ class _PlayerMatcher:
             self.by_exact[(norm, pos)] = player
             self.by_norm_name_pos[(norm, pos)] = player
             self.norm_names_by_pos.setdefault(pos, []).append(norm)
+            stable_provider = _provider_prefix(player.id)
+            stable_value = _provider_value(player.id)
+            if stable_provider and stable_value:
+                self.by_provider[(stable_provider, stable_value, pos)] = player
+                self.by_provider_id.setdefault((stable_provider, stable_value), player)
             for provider, key in (("espn", "espn_id"), ("sleeper", "sleeper_id")):
                 value = (player.metadata or {}).get(key)
                 if value is not None:

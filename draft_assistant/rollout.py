@@ -82,6 +82,43 @@ def _flatten(my_roster: Dict[str, List[Player]]) -> List[Player]:
     return players
 
 
+def _unmatched_roster_players(
+    state: Optional[DraftState], roster_players: List[Player]
+) -> List[Player]:
+    """Represent synced picks that are not present on the projection board.
+
+    Live provider sync deliberately retains an unmatched pick as ``name|POS``
+    so the draft clock remains correct.  It must also occupy a roster slot:
+    silently dropping it here made the engine believe the user had extra picks
+    and still needed a player at that position.  A zero-point placeholder is a
+    conservative value estimate while preserving roster shape.
+    """
+    if state is None:
+        return []
+    known = {
+        key
+        for player in roster_players
+        for key in (player.key(), player.legacy_key())
+    }
+    placeholders: List[Player] = []
+    valid_positions = {"QB", "RB", "WR", "TE", "K", "DST"}
+    for key in state.my_picks:
+        if key in known:
+            continue
+        name, separator, position = str(key).rpartition("|")
+        position = position.upper() if separator else "UNKNOWN"
+        if position not in valid_positions:
+            position = "UNKNOWN"
+        placeholders.append(Player(
+            id=f"unmatched:{key}",
+            name=name or str(key),
+            position=position,
+            metadata={"unmatched_roster_placeholder": True},
+        ))
+        known.add(key)
+    return placeholders
+
+
 def rollout_values(
     config: LeagueConfig,
     available: List[Player],
@@ -97,12 +134,16 @@ def rollout_values(
     simulate).
     """
     settings = config.draft or {}
-    sims = max(0, int(settings.get("rollout_sims", DEFAULT_SIMS)))
-    noise = float(settings.get("adp_noise", 8.0))
-    n_simulated = max(1, int(settings.get("rollout_candidates", 0) or 0) or DEFAULT_SIM_CANDIDATES)
+    sims = max(0, min(int(settings.get("rollout_sims", DEFAULT_SIMS)), 512))
+    noise = max(0.0, min(float(settings.get("adp_noise", 8.0)), 100.0))
+    n_simulated = max(1, min(
+        int(settings.get("rollout_candidates", 0) or 0) or DEFAULT_SIM_CANDIDATES,
+        64,
+    ))
     roster = config.roster
 
     roster_players = _flatten(my_roster)
+    roster_players.extend(_unmatched_roster_players(state, roster_players))
     all_players = available + roster_players
     points_map = compute_points(all_players, config.scoring)
     by_key: Dict[str, Player] = {p.key(): p for p in all_players}
@@ -127,9 +168,16 @@ def rollout_values(
     draft_slot = _draft_slot(config, state)
     total_rounds = sum(int(v) for k, v in roster.items() if k != "IR")
     my_picks_all = _snake_pick_numbers(teams, draft_slot, rounds=max(total_rounds, 1))
-    used = len(roster_players)
-    my_remaining = my_picks_all[used:] if used < len(my_picks_all) else []
-    current_pick = (len(state.picks) + 1) if state else (my_remaining[0] if my_remaining else 1)
+    if state is not None:
+        current_pick = len(state.picks) + 1
+        # The actual board clock is authoritative.  Counting matched roster
+        # objects loses unmatched provider picks and can point at a turn that is
+        # already in the past.
+        my_remaining = [pick for pick in my_picks_all if pick >= current_pick]
+    else:
+        used = len(roster_players)
+        my_remaining = my_picks_all[used:] if used < len(my_picks_all) else []
+        current_pick = my_remaining[0] if my_remaining else 1
 
     # Degenerate cases: no lookahead possible -> return prelim ranking.
     if sims <= 0 or not my_remaining or not available:
@@ -150,7 +198,7 @@ def rollout_values(
         ]
 
     decision_pick = my_remaining[0]
-    start_pick = min(current_pick, decision_pick)
+    start_pick = current_pick
     last_pick = my_remaining[-1]
     my_set = set(my_remaining)
 
@@ -196,6 +244,8 @@ def rollout_values(
         best_key: Optional[str] = None
         best_score = float("-inf")
         for pos, keys in by_pos_sorted.items():
+            if must_fill_kdst and pos not in DEFER_LAST:
+                continue
             if pos in DEFER_LAST:
                 need = k_need if pos == "K" else d_need
                 if not (must_fill_kdst and need > 0):
@@ -216,14 +266,13 @@ def rollout_values(
 
     def one_rollout(order: List[str], forced_key: Optional[str]) -> float:
         avail = set(avail_keys)
-        if forced_key is not None:
-            avail.discard(forced_key)  # reserve it for my decision pick
         my_players = list(roster_players)
         cursor: Dict[str, int] = {}
         opp = 0
         for pick_no in range(start_pick, last_pick + 1):
             if pick_no in my_set:
-                if pick_no == decision_pick and forced_key is not None:
+                if (pick_no == decision_pick and forced_key is not None
+                        and forced_key in avail):
                     choice: Optional[str] = forced_key
                 else:
                     choice = greedy_pick(my_players, avail, picks_left_from(pick_no), cursor)
@@ -263,12 +312,39 @@ def rollout_values(
         hit = sum(1 for order in orders if key in order[:gap])
         return round(hit / len(orders), 2)
 
-    # Make sure candidates pool includes top prelim + top 3 VOR per position
-    candidates = [t[0] for t in prelim[:n_simulated]]
+    # A legal finished roster must contain its configured K/DST slots.  When
+    # the remaining number of picks equals the number still missing, only a
+    # missing K/DST is a feasible decision.  Previously those positions were
+    # deferred but never forced, so otherwise-good simulations could finish
+    # with an invalid roster.
+    have_at_decision: Dict[str, int] = {}
+    for player in roster_players:
+        have_at_decision[player.position] = have_at_decision.get(player.position, 0) + 1
+    deferred_need = {
+        pos: max(0, int(roster.get(pos, 0)) - have_at_decision.get(pos, 0))
+        for pos in DEFER_LAST
+    }
+    decision_picks_left = picks_left_from(decision_pick)
+    must_fill_deferred = decision_picks_left <= sum(deferred_need.values())
+
+    def feasible_candidate(player: Player) -> bool:
+        return (not must_fill_deferred
+                or (player.position in DEFER_LAST
+                    and deferred_need.get(player.position, 0) > 0))
+
+    eligible_prelim = [entry for entry in prelim if feasible_candidate(entry[0])]
+    # If the data pool itself lacks a required position, return the best board
+    # available instead of returning no recommendations at all.  The data
+    # quality gate prevents this in release datasets.
+    if not eligible_prelim:
+        eligible_prelim = prelim
+
+    # Make sure the candidate pool includes top prelim + top 3 VOR per position.
+    candidates = [t[0] for t in eligible_prelim[:n_simulated]]
     cand_keys = {p.key() for p in candidates}
 
-    for pos in ["QB", "RB", "WR", "TE"]:
-        pos_avail = [p for p in available if p.position == pos]
+    for pos in ["QB", "RB", "WR", "TE", "K", "DST"]:
+        pos_avail = [p for p in available if p.position == pos and feasible_candidate(p)]
         pos_avail.sort(key=lambda p: points_map.get(p.key(), 0.0) - repl.get(p.position, 0.0), reverse=True)
         for p in pos_avail[:3]:
             if p.key() not in cand_keys:

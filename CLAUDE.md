@@ -6,9 +6,7 @@
 
 ## Local Development
 
-- **Owner's local path (Windows):** `C:\Users\kegan\Documents\draft-assistant`
-- **Cloud dev environment:** `/home/user/draft-assistant`
-- **Primary branch:** `claude/fantasy-draft-recommender-NxX9l`
+- **Primary branch:** `master`
 
 ## Running
 
@@ -21,8 +19,8 @@
 ## Key Details
 
 - Python 3.10+, no external dependencies for core app
-- 212 tests in `tests/`
-- Web UI uses vendored React + in-browser Babel (no build step), Python stdlib HTTP server. Works offline apart from the optional Google Fonts link in `index.html`, which falls back to system fonts.
+- 240+ tests in `tests/`
+- Web UI uses hashed, license-inventoried vendored React + in-browser Babel (no build step), with no runtime CDN dependency.
 - Player data lives in `data/projections.json` (tracked)
 - League config in `league.config.yaml`
 - Named profiles under `.draft_assistant_profiles/<name>/` — gitignored, as is `draft_state.json`
@@ -38,7 +36,7 @@
 ## Platform leagues
 
 - **Import + roster sync:** ESPN (`importers/free_sources.py`, public leagues), Yahoo (`importers/yahoo.py`, OAuth), Sleeper (`importers/sleeper.py`, public API — no auth). All three land on `POST /api/sync-league`, which maps provider rosters to board players via `platform_sync.py`.
-- **Matching** is by provider id first (`metadata.espn_id` / `metadata.sleeper_id`), then name+position fuzzy. Sleeper rosters carry only ids, which is why id-only matching must keep working — don't reintroduce a name/position guard before the provider lookup in `_PlayerMatcher.match`.
+- **Matching** is by stable `Player.id` or provider metadata first, then name+position fuzzy. Sleeper rosters carry only ids, which is why id-only matching must keep working — don't reintroduce a name/position guard before the provider lookup in `_PlayerMatcher.match`.
 - **Sleeper live draft sync** (`POST /api/sleeper/draft`) is the only real-draft feed: Sleeper publishes actual pick numbers and seats, so `synced_draft_to_picks` returns true picks and `draft-screen.jsx` polls it every 5s behind the "Go Live" button. **Every pick must survive to the output list.** The UI reads the next pick as `picks.length + 1`, so dropping one shifts the clock for the rest of the draft. Both an unmatched player *and* a second pick that resolves to an already-taken board player become placeholders — never `continue`.
 
 ## Recommendation engine

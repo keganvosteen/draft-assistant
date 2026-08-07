@@ -45,6 +45,7 @@ function makeLeague(o = {}) {
     draftType: 'snake',
     auctionBudget: 200,
     scoringType: 'ppr',
+    importedScoring: null,
     customScoring: { ...DEFAULT_CUSTOM },
     rosterSlots: { ...DEFAULT_SLOTS },
     ...o,
@@ -66,8 +67,31 @@ function leagueFromBackendConfig(cfg) {
     numTeams: cfg.teams || 10,
     draftPosition: draft.slot || 5,
     scoringType,
+    importedScoring: cfg.scoring || null,
     rosterSlots: { ...DEFAULT_SLOTS, ...roster },
   });
+}
+
+// Saved browser drafts from older builds used "name|POS" ids. Migrate them as
+// soon as the current player board arrives so renames and punctuation changes
+// no longer orphan picks.
+function migratePickIds(picksByLeague, players) {
+  const aliases = {};
+  (players || []).forEach(player => {
+    aliases[player.id] = player.id;
+    if (player.legacyId) aliases[player.legacyId] = player.id;
+  });
+  let changed = false;
+  const migrated = {};
+  Object.entries(picksByLeague || {}).forEach(([leagueId, leaguePicks]) => {
+    migrated[leagueId] = (Array.isArray(leaguePicks) ? leaguePicks : []).map(pick => {
+      const stableId = aliases[pick.playerId] || pick.playerId;
+      if (stableId === pick.playerId) return pick;
+      changed = true;
+      return { ...pick, playerId: stableId };
+    });
+  });
+  return changed ? migrated : picksByLeague;
 }
 
 // ─── SMALL SHARED UI ─────────────────────────────────────────────────────────
@@ -337,6 +361,7 @@ function LeagueSetupModal({ league, onSave, onClose }) {
           platform: 'ESPN',
           numTeams: d.numTeams || f.numTeams,
           scoringType: d.scoringType || f.scoringType,
+          importedScoring: d.scoring || null,
           rosterSlots: { ...DEFAULT_SLOTS, ...(d.rosterSlots || {}) },
           teamNames: d.teamNames || [],
           espnLeagueId: d.espnLeagueId || id,
@@ -383,6 +408,7 @@ function LeagueSetupModal({ league, onSave, onClose }) {
         platform: 'Sleeper',
         numTeams: d.numTeams || f.numTeams,
         scoringType: d.scoringType || f.scoringType,
+        importedScoring: d.scoring || null,
         rosterSlots: { ...DEFAULT_SLOTS, ...(d.rosterSlots || {}) },
         teamNames: d.teamNames || [],
         sleeperLeagueId: d.sleeperLeagueId || id,
@@ -440,6 +466,7 @@ function LeagueSetupModal({ league, onSave, onClose }) {
       setForm(f => ({
         ...f, name: d.name || f.name, platform: 'Yahoo', numTeams: d.numTeams || f.numTeams,
         scoringType: d.scoringType || f.scoringType, rosterSlots: { ...DEFAULT_SLOTS, ...(d.rosterSlots || {}) },
+        importedScoring: d.scoring || null,
         teamNames: d.teamNames || [], yahooLeagueKey: d.yahooLeagueKey,
       }));
       yhSet({ msg: { ok: true, text: `Imported "${d.name}" — ${d.numTeams} teams, ${(d.teamNames || []).length} names, ${d.scoringType}` } });
@@ -950,6 +977,7 @@ function AuctionModal({ league, onClose }) {
           rosterSlots: league.rosterSlots,
           scoringType: league.scoringType,
           customScoring: league.customScoring,
+          importedScoring: league.importedScoring,
         } : undefined,
       }),
     })
@@ -1376,16 +1404,17 @@ function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague,
                       style={{flex:1, justifyContent:'center', color:T.green, borderColor:T.green}}>
                       Free Agents
                     </Btn>
-                    {lg.draftType === 'auction' && (
-                      <Btn variant="ghost" size="sm" onClick={() => setAuctionFor(lg)}
-                        style={{flex:1, justifyContent:'center', color:T.amber, borderColor:T.amber}}>
-                        Auction $
+                    {lg.draftType === 'auction' ? (
+                      <Btn size="sm" onClick={() => setAuctionFor(lg)}
+                        style={{flex:1, justifyContent:'center'}}>
+                        Auction Values →
+                      </Btn>
+                    ) : (
+                      <Btn size="sm" onClick={() => onSelectLeague(lg.id)}
+                        style={{flex:1, justifyContent:'center'}}>
+                        Draft →
                       </Btn>
                     )}
-                    <Btn size="sm" onClick={() => onSelectLeague(lg.id)}
-                      style={{flex:1, justifyContent:'center'}}>
-                      Draft →
-                    </Btn>
                   </div>
                 </div>
               </div>
@@ -1429,7 +1458,12 @@ function App() {
   const refreshPlayers = React.useCallback(() => {
     return fetch('/api/players')
       .then(r => r.json())
-      .then(data => { if (!data.error) setPlayers(data); })
+      .then(data => {
+        if (!data.error) {
+          setPlayers(data);
+          setPicks(prev => migratePickIds(prev, data));
+        }
+      })
       .catch(() => {});
   }, []);
 
@@ -1439,6 +1473,7 @@ function App() {
       .then(data => {
         if (data.error) throw new Error(data.error);
         setPlayers(data);
+        setPicks(prev => migratePickIds(prev, data));
       })
       .catch(err => setLoadError(String(err)));
 
