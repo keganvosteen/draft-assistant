@@ -29,8 +29,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Chocolatey is preinstalled on the runners; winget is not reliably
+      # usable from a non-interactive Actions session.
       - name: Install Inno Setup
-        run: winget install -e --id JRSoftware.InnoSetup --accept-package-agreements --accept-source-agreements --disable-interactivity
+        run: choco install innosetup --no-progress -y
         shell: pwsh
 
       - name: Build installer

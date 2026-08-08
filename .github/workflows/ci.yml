@@ -42,12 +42,15 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: .\scripts\build_test_package.ps1 -PackageName DraftAssistant-ci
-        shell: powershell
-      - run: if (!(Test-Path .\dist\DraftAssistant-ci.zip)) { throw "package zip missing" }
-        shell: powershell
+      # Builds and smoke-tests the unpacked app. Compiling the Inno Setup
+      # installer is skipped here — that runs in release.yml, and this job only
+      # needs to catch a bundle that is missing a data file or hidden import.
+      - run: powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1 -SkipInstaller
+        shell: pwsh
+      - run: if (!(Test-Path .\dist\pyinstaller\DraftAssistant\DraftAssistant.exe)) { throw "packaged exe missing" }
+        shell: pwsh
       - uses: actions/upload-artifact@v4
         with:
           name: DraftAssistant-windows
-          path: dist/DraftAssistant-ci.zip
+          path: dist/pyinstaller/DraftAssistant
           if-no-files-found: error
