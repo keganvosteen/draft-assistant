@@ -24,15 +24,35 @@ PY="$BUILD_VENV/bin/python"
 PYI_DIST="$ROOT/dist/pyinstaller"
 APP="$PYI_DIST/Draft Assistant.app"
 INSTALLER_DIR="$ROOT/dist/installers"
-ARCH="$(uname -m)"
 
-VERSION="$(python3 -c 'import draft_assistant; print(draft_assistant.__version__)')"
+# A universal2 build needs a universal2 interpreter to build *from* — the
+# python.org installers are, Homebrew and actions/setup-python are not. Point
+# PYTHON_BIN at one and set DRAFT_ASSISTANT_TARGET_ARCH=universal2 to get a
+# single .dmg that runs on both Apple Silicon and Intel.
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+ARCH="${DRAFT_ASSISTANT_TARGET_ARCH:-$(uname -m)}"
+
+VERSION="$("$PYTHON_BIN" -c 'import draft_assistant; print(draft_assistant.__version__)')"
 echo "Building Draft Assistant $VERSION (macOS, $ARCH)"
+
+if [ "${DRAFT_ASSISTANT_TARGET_ARCH:-}" = "universal2" ]; then
+    # Fail loudly here rather than with an opaque PyInstaller error later.
+    "$PYTHON_BIN" - <<'PYCHECK'
+import sys, sysconfig
+plat = sysconfig.get_platform()
+if "universal2" not in plat:
+    sys.exit(
+        f"PYTHON_BIN is not a universal2 interpreter (platform: {plat}, exe: {sys.executable}).\n"
+        "Install one from python.org and point PYTHON_BIN at it."
+    )
+print(f"universal2 interpreter confirmed ({plat})")
+PYCHECK
+fi
 
 # --- build venv -----------------------------------------------------------
 if [ ! -x "$PY" ]; then
     echo "Creating build venv..."
-    python3 -m venv "$BUILD_VENV"
+    "$PYTHON_BIN" -m venv "$BUILD_VENV"
 fi
 "$PY" -m pip install --upgrade pip --quiet
 "$PY" -m pip install -r requirements-build.txt --quiet

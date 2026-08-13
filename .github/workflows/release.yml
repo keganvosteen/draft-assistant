@@ -47,34 +47,45 @@ jobs:
 
   macos:
     needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Apple Silicon: covers every Mac sold since late 2020.
-          - runner: macos-14
-            label: apple-silicon
-          # Intel: drop this entry once no tester is on an Intel Mac.
-          - runner: macos-13
-            label: intel
-    runs-on: ${{ matrix.runner }}
+    # One universal2 .dmg covering both Apple Silicon and Intel. Building each
+    # arch natively would be simpler, but GitHub's Intel runner (macos-13) no
+    # longer picks up jobs, so cross-building from arm64 is the only option.
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
 
-      - name: Build .app and .dmg
+      # actions/setup-python is arch-specific; PyInstaller can only emit a
+      # universal2 binary from a universal2 interpreter, which python.org ships.
+      - name: Install universal2 Python
         run: |
-          chmod +x packaging/macos/build.sh packaging/macos/smoke_test.sh
-          ./packaging/macos/build.sh
+          set -euxo pipefail
+          PKG=python-3.12.8-macos11.pkg
+          curl -fsSL -o "$PKG" "https://www.python.org/ftp/python/3.12.8/$PKG"
+          sudo installer -pkg "$PKG" -target /
+          echo "PYTHON_BIN=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3" >> "$GITHUB_ENV"
+
+      - name: Build universal .app and .dmg
+        env:
+          DRAFT_ASSISTANT_TARGET_ARCH: universal2
         # Unsigned/ad-hoc build. To sign, add an Apple Developer certificate to
         # the keychain here and set DRAFT_ASSISTANT_CODESIGN_IDENTITY.
         # See docs/DISTRIBUTION.md.
+        run: |
+          chmod +x packaging/macos/build.sh packaging/macos/smoke_test.sh
+          ./packaging/macos/build.sh
+
+      - name: Verify the binary really is universal
+        run: |
+          set -euo pipefail
+          BIN="dist/pyinstaller/Draft Assistant.app/Contents/MacOS/DraftAssistant"
+          file "$BIN"
+          lipo -archs "$BIN" | tee /tmp/archs
+          grep -q x86_64 /tmp/archs && grep -q arm64 /tmp/archs \
+            || { echo "ERROR: binary is not universal (Intel testers would get a broken app)" >&2; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg-${{ matrix.label }}
+          name: macos-dmg-universal
           path: dist/installers/*.dmg
           if-no-files-found: error
 
@@ -98,8 +109,10 @@ jobs:
             **Windows** — download the `.exe`, run it. SmartScreen will warn
             because the build is unsigned: click **More info → Run anyway**.
 
-            **macOS** — download the `.dmg` matching your Mac (Apple Silicon or
-            Intel), open it, drag Draft Assistant to Applications. On first
-            launch macOS blocks it because the build is unsigned: open
+            **macOS** — download the `.dmg`, open it, drag Draft Assistant to
+            Applications. One download works on both Apple Silicon and Intel.
+            On first launch macOS blocks it because the build is unsigned: open
             **System Settings → Privacy & Security**, scroll down, and click
             **Open Anyway**.
+
+            Full step-by-step: [docs/FOR_TESTERS.md](https://github.com/keganvosteen/draft-assistant/blob/master/docs/FOR_TESTERS.md)

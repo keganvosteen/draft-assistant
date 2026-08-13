@@ -9,7 +9,7 @@ You do **not** need Python or anything else installed.
 
 ## Windows
 
-1. Download **`DraftAssistant-Setup-1.0.0.exe`**.
+1. Download **`DraftAssistant-Setup-0.1.0.exe`**.
 2. Run it. Windows will show a blue **"Windows protected your PC"** box —
    that's because the app isn't signed with a (fairly expensive) certificate,
    not because anything is wrong with it.
@@ -24,13 +24,9 @@ To remove it: Settings → Apps → Draft Assistant → Uninstall.
 
 ## Mac
 
-1. Download the `.dmg` that matches your Mac:
-   - **Apple Silicon** (M1/M2/M3/M4 — any Mac from late 2020 onward):
-     `DraftAssistant-1.0.0-arm64.dmg`
-   - **Intel** (older Macs): `DraftAssistant-1.0.0-x86_64.dmg`
-
-   Not sure? Click the  menu → About This Mac. "Chip" means Apple Silicon,
-   "Processor" means Intel.
+1. Download **`DraftAssistant-0.1.0-universal2.dmg`**. The one file works on
+   both Apple Silicon (M1/M2/M3/M4) and older Intel Macs — you don't need to
+   know which you have.
 
 2. Open the `.dmg` and drag **Draft Assistant** onto the **Applications**
    folder.
