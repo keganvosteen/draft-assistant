@@ -825,6 +825,13 @@ def _merge_player(base: Player, incoming: Player, source: str) -> None:
         base.age = incoming.age
     if base.experience is None and incoming.experience is not None:
         base.experience = incoming.experience
+    if not base.previous_team and incoming.previous_team:
+        base.previous_team = incoming.previous_team
+    if not base.draft_capital and incoming.draft_capital:
+        base.draft_capital = incoming.draft_capital
+    for injury in incoming.injury_history:
+        if injury not in base.injury_history:
+            base.injury_history.append(injury)
     for season, season_stats in incoming.historical_stats.items():
         base.historical_stats.setdefault(season, season_stats)
     if not _has_projection_value(base.projections) and _has_projection_value(incoming.projections):

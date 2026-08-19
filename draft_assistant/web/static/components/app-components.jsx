@@ -795,9 +795,10 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
   const handlePull = () => {
     const endpoint = mode === 'free' ? '/api/pull-free-data' : '/api/collect-all';
     // Fold an imported ESPN league's projections into the consensus automatically.
-    const body = mode === 'free'
-      ? { season, statsSeason, history, teams, adpFormat, skipFftoday: skipFf, espnLeagueId }
-      : { season, teams, scoring: adpFormat, history };
+    // Full Collect runs the same free-source pull and then enriches it, so both
+    // modes take the identical options — sending less would shrink the board.
+    const body = { season, statsSeason, history, teams, adpFormat,
+                   scoring: adpFormat, skipFftoday: skipFf, espnLeagueId };
     fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -890,7 +891,7 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
             <div style={{display:'flex', gap:8}}>
               {[
                 {v:'free', l:'Free Sources', hint:'No dependencies'},
-                {v:'full', l:'Full Collect', hint:'Requires nfl_data_py'},
+                {v:'full', l:'Full Collect', hint:'Free sources + nfl_data_py'},
               ].map(({v, l, hint}) => (
                 <label key={v} style={{
                   flex:1, border:`1.5px solid ${mode===v ? T.primary : T.border}`,
@@ -910,31 +911,27 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
             <Field label="Projection Season">
               <Input type="number" value={season} onChange={e => setSeason(parseInt(e.target.value) || currentYear)} />
             </Field>
-            {mode === 'free' && (
-              <Field label="Stats Season" hint="most recent">
-                <Input type="number" value={statsSeason} onChange={e => setStats(parseInt(e.target.value) || currentYear-1)} />
-              </Field>
-            )}
+            <Field label="Stats Season" hint="most recent">
+              <Input type="number" value={statsSeason} onChange={e => setStats(parseInt(e.target.value) || currentYear-1)} />
+            </Field>
             <Field label="History Seasons" hint="years of stats">
               <Input type="number" value={history} onChange={e => setHistory(parseInt(e.target.value) || 3)}
                 min={1} max={5} />
             </Field>
           </div>
 
-          {mode === 'free' && (
-            <div style={{marginTop:8}}>
-              <label style={{display:'flex', alignItems:'center', gap:8, fontSize:13, color:T.text, cursor:'pointer'}}>
-                <input type="checkbox" checked={skipFf} onChange={e => setSkipFf(e.target.checked)} />
-                Skip FFToday scraping
-              </label>
-              <div style={{fontSize:11, color:T.muted, marginTop:4, marginLeft:24, lineHeight:1.4}}>
-                FFToday is the only source pulled by scraping web pages — the rest are fast
-                JSON/CSV feeds — so it's the slowest, most fragile step. Skip it for a quicker
-                pull; leave it on to add another projection source that fills gaps. Either way,
-                if it fails the pull still completes.
-              </div>
+          <div style={{marginTop:8}}>
+            <label style={{display:'flex', alignItems:'center', gap:8, fontSize:13, color:T.text, cursor:'pointer'}}>
+              <input type="checkbox" checked={skipFf} onChange={e => setSkipFf(e.target.checked)} />
+              Skip FFToday scraping
+            </label>
+            <div style={{fontSize:11, color:T.muted, marginTop:4, marginLeft:24, lineHeight:1.4}}>
+              FFToday is the only source pulled by scraping web pages — the rest are fast
+              JSON/CSV feeds — so it's the slowest, most fragile step. Skip it for a quicker
+              pull; leave it on to add another projection source that fills gaps. Either way,
+              if it fails the pull still completes.
             </div>
-          )}
+          </div>
 
           <div style={{
             marginTop:16, padding:'10px 14px', background:T.surfaceAlt,

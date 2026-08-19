@@ -39,6 +39,13 @@
 - **Matching** is by stable `Player.id` or provider metadata first, then name+position fuzzy. Sleeper rosters carry only ids, which is why id-only matching must keep working — don't reintroduce a name/position guard before the provider lookup in `_PlayerMatcher.match`.
 - **Sleeper live draft sync** (`POST /api/sleeper/draft`) is the only real-draft feed: Sleeper publishes actual pick numbers and seats, so `synced_draft_to_picks` returns true picks and `draft-screen.jsx` polls it every 5s behind the "Go Live" button. **Every pick must survive to the output list.** The UI reads the next pick as `picks.length + 1`, so dropping one shifts the clock for the rest of the draft. Both an unmatched player *and* a second pick that resolves to an already-taken board player become placeholders — never `continue`.
 
+## Data pulls
+
+- **Full Collect is a superset of Free Sources, not an alternative.** `collectors/combined.py::collect_all_result` runs `pull_free_data` first — that is the player pool — then `_absorb`s `nfl_data_py` and Sleeper's season-stats archive onto it. It used to be a separate, narrower pipeline (nflverse rosters ∪ Sleeper only), which is how "Full" came back ~450 players *smaller* than "Free" on the same board. Enrichment must only ever add: never rebuild the pool from an enrichment source.
+- Both `/api/pull-free-data` and `/api/collect-all` take the same request body and both must route their save through `update_players` + `merge_historical_into`. Calling `save_players` directly drops every stats season an earlier pull banked.
+- `_align_names` renames a near-miss enrichment record onto the pool's spelling before merging, so "Deandre Swift" enriches "D'Andre Swift" instead of landing beside it. Merge keys come from `free_sources._merge_key` (team code for DST, compact normalized name otherwise) — keep both sides on that one function.
+- `free_sources._merge_player` is the single gap-fill merge. Anything added to `Player` needs a line there or it silently vanishes whenever two sources describe the same player.
+
 ## Recommendation engine
 
 - **One engine, all UIs:** `draft_assistant/rollout.py` (`rollout_values`) ranks the board by a rest-of-draft Monte Carlo rollout — each player's score is the expected effect of drafting them now on your **total season points**, accounting for who survives to your later picks (positional opportunity cost). `suggest.py` delegates to it.

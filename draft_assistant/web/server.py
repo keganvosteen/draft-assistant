@@ -1099,18 +1099,37 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             task_id = f"collect-all-{uuid.uuid4().hex}"
 
             def _do_collect():
-                from ..collectors.combined import collect_all
+                from ..collectors.combined import collect_all_result
+                from ..importers.free_sources import merge_historical_into
                 paths = ensure_profile(profile)
-                players = collect_all(
-                    current_season=body.get("season", 2026),
+                config = load_profile_config(paths)
+                result = collect_all_result(
+                    current_season=body.get("season"),
                     history_seasons=body.get("history", 3),
-                    scoring_format=body.get("scoring", "ppr"),
+                    scoring_format=body.get("scoring") or body.get("adpFormat", "ppr"),
                     teams=body.get("teams", 12),
                     skip_sleeper=body.get("skipSleeper", False),
                     skip_adp=body.get("skipAdp", False),
+                    config=config,
+                    stats_season=body.get("statsSeason"),
+                    include_fftoday=not body.get("skipFftoday", False),
+                    espn_league_id=body.get("espnLeagueId"),
                 )
-                save_players(players, paths.projections_path)
-                return {"players": len(players)}
+                # Same history accumulation as the free pull — a full collect
+                # must not discard seasons an earlier pull already banked.
+                players = update_players(
+                    paths.projections_path,
+                    lambda current: merge_historical_into(result.players, current),
+                )
+                seasons = sorted({s for p in players for s in p.historical_stats})
+                reports = [
+                    {"source": r.source, "records": r.records, "ok": r.ok, "detail": r.detail}
+                    for r in result.reports
+                ]
+                return {"players": len(players), "reports": reports,
+                        "historySeasons": seasons,
+                        "consensusPlayers": result.consensus_players,
+                        "warnings": list(result.warnings)}
 
             if not _run_task(task_id, _do_collect):
                 self._send_json({"error": "Two data jobs are already running"}, 429)

@@ -124,7 +124,7 @@ All commands accept `--profile <name>` to target a specific league:
 | `save` / `load` | Persist / restore draft state |
 | `fetch` | Refresh from configured provider |
 | `auction [--budget N] [-n N]` | Auction dollar values |
-| `collect-all` | nflverse + Sleeper + FFC ADP collector (requires `nfl_data_py`) |
+| `collect-all` | The free pull plus `nfl_data_py` and Sleeper's stats archive (superset of `pull-free-data`) |
 | `collect` | Sleeper-only historical stats collector |
 | `pull-free-data` | No-dep collector (direct GitHub release CSVs + ESPN optional) |
 | `pull-fftoday` | FFToday HTML scraper |
@@ -171,9 +171,12 @@ Reads directly from nflverse GitHub release CSVs, Sleeper API, and Fantasy Footb
 python -m draft_assistant pull-free-data --season 2026 --stats-season 2025
 ```
 
-### Option 2: `collect-all` (richer, requires pip install)
+### Option 2: `collect-all` (a superset of Option 1)
 
-Uses `nfl_data_py` for historical stats + injuries + derived bye weeks, combined with Sleeper projections and FFC ADP.
+Runs the free pull above and *then* layers `nfl_data_py` (age, draft capital, injury
+history, derived bye weeks) and Sleeper's season-stats archive on top. Enrichment only
+ever adds, so this path can never return a smaller board than the free pull — it takes
+the same `--stats-season`, `--skip-fftoday`, and `--espn-league-id` options.
 
 ```bash
 # Use Python 3.10 or 3.11 for this optional collector.
@@ -181,7 +184,10 @@ pip install -r requirements-data.txt
 python -m draft_assistant collect-all --season 2026 --scoring ppr --teams 12
 ```
 
-Both paths populate players with projections, ADP, age, experience, historical stats, bye week, provenance, and team when their upstream sources provide them. `collect-all` additionally fills injury history and previous team. Free-data pulls report a warning when only one projection source succeeded; packaging and CI enforce stronger bundled-board coverage thresholds.
+`nfl_data_py` is optional: without it, `collect-all` still returns the full free-source
+board and simply reports the enrichment step as skipped.
+
+Both paths populate players with projections, ADP, age, experience, historical stats, bye week, provenance, and team when their upstream sources provide them. `collect-all` fills injury history, previous team, and draft capital more deeply. Free-data pulls report a warning when only one projection source succeeded; packaging and CI enforce stronger bundled-board coverage thresholds.
 
 ### Other importers
 

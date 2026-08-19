@@ -367,7 +367,7 @@ def main() -> None:
     p_collect.add_argument("--out", type=str, default=None)
     p_collect.set_defaults(func=cmd_collect)
 
-    # collect-all (nflverse + Sleeper + FFC ADP)
+    # collect-all (free sources + nfl_data_py + Sleeper archive)
     def cmd_collect_all(args: argparse.Namespace) -> None:
         paths = ensure_profile(args.profile)
         from .collectors.combined import collect_all
@@ -378,6 +378,9 @@ def main() -> None:
             teams=args.teams,
             skip_sleeper=args.skip_sleeper,
             skip_adp=args.skip_adp,
+            stats_season=args.stats_season,
+            include_fftoday=not args.skip_fftoday,
+            espn_league_id=args.espn_league_id,
         )
         if not players:
             print("Collection failed or returned no players.")
@@ -387,14 +390,21 @@ def main() -> None:
         print(f"\nSaved {len(players)} fully enriched players to {out}")
 
     p_ca = sub.add_parser("collect-all",
-        help="Collect from all sources: nflverse + Sleeper + FFC ADP (requires nfl_data_py)")
+        help="Collect from every source: the free pull plus nfl_data_py and "
+             "Sleeper's stats archive (nfl_data_py optional)")
     p_ca.add_argument("--season", type=int, default=2026)
     p_ca.add_argument("--history", type=int, default=3)
+    p_ca.add_argument("--stats-season", type=int, default=None,
+        help="most recent completed season (default: last year)")
     p_ca.add_argument("--scoring", choices=["ppr", "half-ppr", "standard"], default="ppr")
     p_ca.add_argument("--teams", type=int, default=12)
     p_ca.add_argument("--out", type=str, default=None)
     p_ca.add_argument("--skip-sleeper", action="store_true")
     p_ca.add_argument("--skip-adp", action="store_true")
+    p_ca.add_argument("--skip-fftoday", action="store_true",
+        help="skip the FFToday scrape during the free-source step")
+    p_ca.add_argument("--espn-league-id", type=str, default=None,
+        help="public ESPN league whose projections join the consensus")
     p_ca.set_defaults(func=cmd_collect_all)
 
     # consensus (multi-source merge)
