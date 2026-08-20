@@ -40,6 +40,7 @@
 - `static/styles.css` owns what inline styles cannot: the font stack, `:focus-visible` rings, hover/active states, scrollbars, animations, tables, and the menu/toast/dialog CSS. Its custom properties and `T` are mirrors of each other — change both together.
 - **No `window.confirm`/`alert`.** Destructive actions go through `confirmDialog(...)` (a promise of a boolean) and outcomes report through `toast(msg, 'ok'|'error'|'info')`.
 - `useLayout()` is the single breakpoint vocabulary (`isMobile` < 760, `isTablet`, `isDesktop` ≥ 1140). The draft room's phone header only fits four controls — panels move into the More menu there.
+- **News context in the UI:** `/api/players` and `/api/suggest` attach `availability` and `signals` per player, and `/api/free-agents` returns `weeklyRecommendations` + `rosRecommendations` with `points`, `urgency`, and `weeklyProjectionOrigin`. Render availability through `AvailabilityChip` (it abbreviates the feed's spelled-out statuses) and always filter signal lists through `playerNewsSignals()` — raw lists contain `source_updated` entries, which are bookkeeping about the feed and say nothing about the player.
 - `rosterTotal()` (in `shared-utils.js`) is the draftable roster size: it skips `IR`, which is a roster slot but never a draft round. Counting it inflated "N slots" and drew a phantom extra round on the pick ticker.
 
 ## Platform leagues
