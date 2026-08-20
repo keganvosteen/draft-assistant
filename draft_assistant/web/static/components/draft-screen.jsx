@@ -461,6 +461,7 @@ function RecCard({ label, player, reason, highlight, onDraft, bestImpact }) {
       <div style={{display:'flex', alignItems:'center', gap:8, minWidth:0}}>
         <PosBadge pos={player.pos} />
         <span className="da-ellipsis" style={{fontSize:14, fontWeight:700, color:T.text}}>{player.name}</span>
+        <AvailabilityChip status={player.availability} />
       </div>
       <div style={{display:'flex', alignItems:'center', gap:9, flexWrap:'wrap'}}>
         <span style={{fontSize:11, color:T.muted}}>{player.nflTeam}</span>
@@ -470,6 +471,12 @@ function RecCard({ label, player, reason, highlight, onDraft, bestImpact }) {
       {reason && (
         <div style={{fontSize:11.5, color: highlight ? T.primary : T.muted, lineHeight:1.45}}>{reason}</div>
       )}
+      {playerNewsSignals(player.signals).slice(0, 1).map((sig, i) => (
+        <div key={i} title={`${sig.source} · ${sig.observed_at}`}
+          style={{fontSize:11, color:T.primary, lineHeight:1.4}}>
+          {sig.attribution || sig.source}: {String(sig.kind).replace(/_/g, ' ')} {sig.value}
+        </div>
+      ))}
       <Btn size="sm" variant={highlight ? 'primary' : 'secondary'} onClick={() => onDraft(player)}
         style={{marginTop:2, alignSelf:'flex-start'}}>
         Draft {player.name.split(' ').slice(-1)[0]}
@@ -886,7 +893,7 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
               ? [teamText, byeText, `ADP ${p.adp}`].filter(Boolean).join(' · ')
               : (p.tier ? `Tier ${p.tier}` : '');
           // News signals from /api/context: injury, depth chart, snaps, trending adds.
-          const updateDetails = (p.signals || []).map(sig =>
+          const updateDetails = playerNewsSignals(p.signals).map(sig =>
             `${sig.attribution || sig.source}: ${sig.kind.replace(/_/g, ' ')} ${sig.value}`
           );
           const rowTitle = [
@@ -895,8 +902,7 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
               : null,
             p.availability ? `Availability: ${p.availability}` : null,
             ...updateDetails,
-          ].filter(Boolean).join('
-');
+          ].filter(Boolean).join('\n');
 
           return (
             <div key={p.id}
@@ -1353,6 +1359,10 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
         availPct: Math.max(0, Math.round(100 * (1 - (r.goneRisk || 0)))),
         lineupGain: r.immediateGain,
         byePen: r.byePenalty || 0,
+        // News context from /api/context, joined server-side onto each row.
+        availability: r.availability || p.availability,
+        confidence: r.confidence,
+        signals: r.signals && r.signals.length ? r.signals : p.signals,
       };
     });
   }, [available, suggest]);

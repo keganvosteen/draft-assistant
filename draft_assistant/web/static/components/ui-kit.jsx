@@ -191,9 +191,13 @@ function PosBadge({ pos }) {
 // colour-coded rather than always-red: a questionable tag and a season-ending
 // one should not read the same at a glance on a draft board.
 const AVAILABILITY_TONE = {
-  OUT: 'red', IR: 'red', PUP: 'red', SUS: 'red', NFI: 'red', DNR: 'red',
-  D: 'amber', DOUBTFUL: 'amber', Q: 'amber', QUESTIONABLE: 'amber',
+  OUT: 'red', IR: 'red', PUP: 'red', SUS: 'red', NFI: 'red', DNR: 'red', NA: 'red',
+  DOUBTFUL: 'amber', QUESTIONABLE: 'amber',
 };
+// The feed spells these out ("Questionable"), which is far too wide for a chip
+// sitting beside a player name on a dense board. Abbreviate, keep the full
+// wording in the tooltip.
+const AVAILABILITY_SHORT = { QUESTIONABLE: 'Q', DOUBTFUL: 'D', OUT: 'OUT' };
 
 function AvailabilityChip({ status, title }) {
   if (!status) return null;
@@ -204,8 +208,14 @@ function AvailabilityChip({ status, title }) {
     <span title={title || `Availability: ${status}`} style={{
       background: c.bg, color: c.fg, borderRadius: 3, padding: '1px 5px',
       fontSize: 9.5, fontWeight: 800, letterSpacing: .3, flexShrink: 0, whiteSpace: 'nowrap',
-    }}>{status}</span>
+    }}>{AVAILABILITY_SHORT[key] || status}</span>
   );
+}
+
+// "source updated" is bookkeeping about the feed, not news about the player —
+// it should never occupy the one line a card has for explaining a change.
+function playerNewsSignals(signals) {
+  return (signals || []).filter(sig => sig && sig.kind !== 'source_updated');
 }
 
 function Spinner({ size = 32 }) {
@@ -589,7 +599,7 @@ function Note({ children, tone = 'neutral', style = {} }) {
 Object.assign(window, {
   T, POSITIONS, POS_COLORS, PLATFORM_COLORS,
   useWindowWidth, useLayout, useEscape, useFocusTrap,
-  Btn, Badge, PosBadge, AvailabilityChip, Spinner,
+  Btn, Badge, PosBadge, AvailabilityChip, playerNewsSignals, Spinner,
   Field, Input, Textarea, Select, SegmentedControl, Checkbox,
   Modal, Drawer, Menu,
   toast, dismissToast, Toaster, confirmDialog, ConfirmHost,

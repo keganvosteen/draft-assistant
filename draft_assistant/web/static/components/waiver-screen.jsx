@@ -81,12 +81,18 @@ function signed(n, digits = 1) {
 function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditLeague }) {
   const [topN, setTopN]           = React.useState(15);
   const [posFilter, setPosFilter] = React.useState('ALL');
+  // "This week" answers the start/sit question; "Rest of season" answers the
+  // stash question. They rank differently often enough that one number would
+  // be misleading, so the engine returns both and this picks between them.
+  const [horizon, setHorizon]     = React.useState('weekly');
+  const [week, setWeek]           = React.useState(null); // null = whatever the server considers current
   const [data, setData]           = React.useState(null);
   const [loading, setLoading]     = React.useState(false);
   const [error, setError]         = React.useState(null);
   const [syncing, setSyncing]     = React.useState(false);
+  const [updating, setUpdating]   = React.useState(false);
   const [showRoster, setShowRoster] = React.useState(false);
-  const { isMobile } = useLayout();
+  const { isMobile, isDesktop }   = useLayout();
 
   const linkedTo = league.sleeperLeagueId ? 'Sleeper'
     : league.espnLeagueId ? 'ESPN'
@@ -107,18 +113,50 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
     fetch('/api/free-agents', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leagues: [league], picks: { [league.id]: picks }, top: 30 }),
+      body: JSON.stringify({
+        leagues: [league], picks: { [league.id]: picks }, top: 30,
+        ...(week ? { week } : {}),
+      }),
     })
       .then(r => r.json())
       .then(d => {
         if (d.error) { setError(d.error); setData(null); return; }
-        setData((d.leagues || [])[0] || null);
+        // contextAsOf / contextStale / week are response-level, not per-league.
+        const row = (d.leagues || [])[0] || null;
+        setData(row ? { ...row, week: d.week, contextAsOf: d.contextAsOf, contextStale: d.contextStale } : null);
+        if (week == null && d.week) setWeek(d.week);
       })
       .catch(err => setError(String(err)))
       .finally(() => setLoading(false));
-  }, [league, picks]);
+  }, [league, picks, week]);
 
   React.useEffect(() => { scan(); }, [scan]);
+
+  // Pull fresh injury / depth-chart / snap / trending signals, then re-rank.
+  const refreshUpdates = () => {
+    setUpdating(true);
+    setError(null);
+    fetch('/api/context/refresh', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ week, force: true }),
+    })
+      .then(r => r.json())
+      .then(started => {
+        if (started.error) throw new Error(started.error);
+        if (!started.taskId) throw new Error('Update refresh did not start');
+        let attempts = 0;
+        const poll = () => fetch(`/api/task/${started.taskId}`)
+          .then(r => r.json())
+          .then(task => {
+            if (task.status === 'done') { setUpdating(false); toast('Player updates refreshed.', 'ok'); scan(); return; }
+            if (task.status === 'error') throw new Error(task.error || 'Update refresh failed');
+            if (attempts++ > 120) throw new Error('Update refresh timed out');
+            setTimeout(poll, 1000);
+          });
+        poll().catch(err => { setUpdating(false); toast(String(err.message || err), 'error', 6000); });
+      })
+      .catch(err => { setUpdating(false); toast(String(err.message || err), 'error', 6000); });
+  };
 
   const sync = () => {
     setSyncing(true);
@@ -128,7 +166,8 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
       .finally(() => setSyncing(false));
   };
 
-  const allRows = (data && data.recommendations) || [];
+  const allRows = (data && (horizon === 'weekly' ? data.weeklyRecommendations : data.rosRecommendations))
+    || (data && data.recommendations) || [];
   const rows = (posFilter === 'ALL' ? allRows : allRows.filter(r => r.pos === posFilter)).slice(0, topN);
   const counts = allRows.reduce((acc, r) => { acc[r.pos] = (acc[r.pos] || 0) + 1; return acc; }, {});
 
@@ -139,7 +178,9 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
       <AppBar
         onBack={onBack} backLabel={league.name}
         title="Waiver wire"
-        subtitle={data ? `${data.available} available · ${myPlayers.length} on your roster` : 'Scanning the pool…'}
+        subtitle={data
+          ? `${horizon === 'weekly' ? `Week ${data.week || week || '—'}` : 'Rest of season'} · ${data.available} available · ${myPlayers.length} on your roster`
+          : 'Scanning the pool…'}
         compact>
         {isMobile && (
           <Btn variant="secondary" size="sm" onClick={() => setShowRoster(true)}>
@@ -188,6 +229,45 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
             </label>
           </div>
 
+          <div style={{
+            padding: '8px 14px', background: T.surface, borderBottom: `1px solid ${T.border}`,
+            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', flexShrink: 0,
+          }}>
+            <div role="radiogroup" aria-label="Ranking horizon"
+              style={{ display: 'inline-flex', border: `1px solid ${T.border}`, borderRadius: T.rsm, overflow: 'hidden' }}>
+              {[['weekly', 'This week'], ['ros', 'Rest of season']].map(([value, label]) => {
+                const on = horizon === value;
+                return (
+                  <button key={value} onClick={() => setHorizon(value)} aria-pressed={on} style={{
+                    border: 'none', padding: '6px 13px', cursor: 'pointer', fontSize: 12.5, fontWeight: 700,
+                    background: on ? T.primary : T.surface, color: on ? '#fff' : T.muted,
+                  }}>{label}</button>
+                );
+              })}
+            </div>
+
+            {horizon === 'weekly' && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.muted }}>
+                Week
+                <Input type="number" min={1} max={18} value={week || ''}
+                  aria-label="NFL week"
+                  onChange={e => setWeek(Math.max(1, Math.min(parseInt(e.target.value, 10) || 1, 18)))}
+                  style={{ width: 64, padding: '5px 8px', fontSize: 12 }} />
+              </label>
+            )}
+
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 11.5, color: data && data.contextStale ? T.amber : T.mutedLight }}>
+                {data && data.contextAsOf
+                  ? `Player news as of ${new Date(data.contextAsOf).toLocaleString()}${data.contextStale ? ' · may be stale' : ''}`
+                  : 'Player news not refreshed yet'}
+              </span>
+              <Btn variant="secondary" size="sm" onClick={refreshUpdates} disabled={updating}>
+                {updating ? 'Updating…' : 'Refresh news'}
+              </Btn>
+            </div>
+          </div>
+
           <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? 12 : 18 }}>
             {error && <Note tone="error" style={{ marginBottom: 14 }}>{error}</Note>}
 
@@ -227,13 +307,25 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
                         <th style={{ width: 32 }}>#</th>
                         <th>Add</th>
                         <th style={{ width: 52 }}>Pos</th>
-                        <th style={{ textAlign: 'right', width: 96 }} title="Points this add gains your starting lineup over a full season">
+                        <th style={{ textAlign: 'right', width: 70 }}
+                          title={horizon === 'weekly'
+                            ? 'Projected points for this player in the selected week'
+                            : 'Projected points for this player over the rest of the season'}>
+                          {horizon === 'weekly' ? 'Wk pts' : 'ROS pts'}
+                        </th>
+                        <th style={{ textAlign: 'right', width: 84 }} title="Points this add gains your starting lineup">
                           Starters
                         </th>
-                        <th style={{ textAlign: 'right', width: 96 }} title="Points this add gains your whole roster, starters and bench">
-                          Roster
+                        {isDesktop && (
+                          <th style={{ textAlign: 'right', width: 84 }} title="Points this add gains your whole roster, starters and bench">
+                            Roster
+                          </th>
+                        )}
+                        <th style={{ textAlign: 'center', width: 60 }}
+                          title="Momentum from the news feed - trending adds, snap share, and depth-chart moves">
+                          Trend
                         </th>
-                        <th style={{ width: 150 }}>Drop</th>
+                        <th style={{ width: 140 }}>Drop</th>
                         {!isMobile && <th>Why</th>}
                       </tr>
                     </thead>
@@ -242,7 +334,10 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
                         <tr key={row.id}>
                           <td className="da-num" style={{ color: T.mutedLight, fontSize: 12 }}>{i + 1}</td>
                           <td>
-                            <div style={{ fontWeight: 700, color: T.text }}>{row.name}</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <span style={{ fontWeight: 700, color: T.text }}>{row.name}</span>
+                              <AvailabilityChip status={row.availability} />
+                            </div>
                             <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>
                               {row.nflTeam}
                               {row.byeWeek ? ` · BYE ${row.byeWeek}` : ''}
@@ -253,21 +348,45 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
                             )}
                           </td>
                           <td><PosBadge pos={row.pos} /></td>
+                          <td className="da-num" style={{ textAlign: 'right', fontWeight: 700, color: T.text }}>
+                            {Number(row.points || 0).toFixed(1)}
+                          </td>
                           <td className="da-num" style={{
                             textAlign: 'right', fontWeight: 800,
                             color: row.starterGain > 0 ? T.green : T.mutedLight,
                           }}>{signed(row.starterGain)}</td>
+                          {isDesktop && (
+                            <td className="da-num" style={{
+                              textAlign: 'right', fontWeight: 700,
+                              color: row.rosterGain > 0 ? T.text : T.mutedLight,
+                            }}>{signed(row.rosterGain)}</td>
+                          )}
                           <td className="da-num" style={{
-                            textAlign: 'right', fontWeight: 700,
-                            color: row.rosterGain > 0 ? T.text : T.mutedLight,
-                          }}>{signed(row.rosterGain)}</td>
+                            textAlign: 'center', fontWeight: 800,
+                            color: row.urgency > 0 ? T.green : row.urgency < 0 ? T.red : T.mutedLight,
+                          }} title="Positive means the news is trending this player up">
+                            {row.urgency > 0 ? `+${row.urgency}` : (row.urgency || '—')}
+                          </td>
                           <td style={{ color: row.drop ? T.text : T.muted, fontSize: 12.5 }}>
                             {row.drop
                               ? <span>{row.drop.name} <span style={{ color: T.muted }}>({row.drop.pos})</span></span>
                               : <span style={{ color: T.green }}>Open slot</span>}
                           </td>
                           {!isMobile && (
-                            <td style={{ color: T.muted, fontSize: 12, lineHeight: 1.45 }}>{row.reason}</td>
+                            <td style={{ color: T.muted, fontSize: 12, lineHeight: 1.45 }}>
+                              <div>{row.reason}</div>
+                              {playerNewsSignals(row.signals).slice(0, 2).map((sig, si) => (
+                                <div key={si} title={`${sig.source} · ${sig.observed_at}`}
+                                  style={{ fontSize: 11, marginTop: 2, color: T.primary }}>
+                                  {sig.attribution || sig.source}: {String(sig.kind).replace(/_/g, ' ')} {sig.value}
+                                </div>
+                              ))}
+                              {horizon === 'weekly' && row.weeklyProjectionOrigin && (
+                                <div style={{ fontSize: 10.5, marginTop: 2, color: T.mutedLight }}>
+                                  {row.weeklyProjectionOrigin}
+                                </div>
+                              )}
+                            </td>
                           )}
                         </tr>
                       ))}
@@ -279,10 +398,12 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
 
             {myPlayers.length > 0 && rows.length > 0 && (
               <Note style={{ marginTop: 14 }}>
-                <b style={{ color: T.text }}>Starters</b> is the season-point swing to your starting
-                lineup — the number that decides most weeks. <b style={{ color: T.text }}>Roster</b>{' '}
-                counts bench depth too, so a high roster gain with a flat starter gain is insurance,
-                not an upgrade. A drop is only suggested when your roster is already full.
+                <b style={{ color: T.text }}>Starters</b> is the point swing to your starting lineup —
+                the number that decides most weeks. <b style={{ color: T.text }}>Roster</b> counts bench
+                depth too, so a high roster gain with a flat starter gain is insurance, not an upgrade.
+                <b style={{ color: T.text }}> Trend</b> and the blue notes come from the news feed
+                (injuries, depth chart, snap share, trending adds) — that is what moves a player between
+                refreshes. A drop is only suggested when your roster is already full.
               </Note>
             )}
           </div>
