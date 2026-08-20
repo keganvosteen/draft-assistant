@@ -26,3 +26,5 @@ yahoo.json
 # (data/projections.json) stays tracked so a clone is usable immediately.
 draft_state.json
 .draft_assistant_profiles/
+# Dynamic injury/trend/weekly context is regenerated and never bundled.
+data/player_context.json

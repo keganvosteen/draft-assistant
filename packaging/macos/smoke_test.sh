@@ -57,4 +57,9 @@ BOARD="$DATA_DIR/data/projections.json"
 PLAYERS=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1]))['players']))" "$BOARD")
 [ "$PLAYERS" -gt 0 ] || { echo "ERROR: seeded player board is empty" >&2; exit 1; }
 
-echo "  smoke test OK - served UI, seeded $PLAYERS players"
+curl -fsS "http://127.0.0.1:$PORT/api/context" | grep -q '"stale"' \
+    || { echo "ERROR: /api/context contract missing" >&2; exit 1; }
+curl -fsS "http://127.0.0.1:$PORT/api/update" | grep -q '"currentVersion"' \
+    || { echo "ERROR: /api/update contract missing" >&2; exit 1; }
+
+echo "  smoke test OK - served UI, context/update APIs, seeded $PLAYERS players"

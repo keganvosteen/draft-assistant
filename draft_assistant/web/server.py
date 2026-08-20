@@ -19,15 +19,30 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlsplit
 
-from ..models import DraftState, FLEX_TYPES, LeagueConfig
+from .. import __version__
+from ..context import (
+    confidence_for_player,
+    context_payload,
+    default_season,
+    default_week,
+    is_candidate_eligible,
+    load_context,
+    primary_availability,
+    refresh_context,
+    save_context,
+    season_adjusted_players,
+    signal_summary,
+)
+from ..models import DraftState, FLEX_TYPES, LeagueConfig, PlayerContext
 from ..profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from ..providers.base import build_provider
-from ..free_agents import free_agent_recommendations
+from ..free_agents import free_agent_recommendations, rank_recommendations
 from ..platform_sync import synced_draft_to_picks, synced_rosters_to_picks
 from ..rollout import rollout_values
 from ..sample_data import sample_players
 from ..scoring import fantasy_points
 from ..storage import load_players, load_state, save_players, update_players, update_state
+from ..update_checker import check_for_update
 from .scoring import STANDARD_SCORING, scoring_for_league
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -118,7 +133,8 @@ _task_lock = threading.Lock()
 _task_slots = threading.BoundedSemaphore(2)
 
 
-def _player_to_js(player, config: LeagueConfig, team_byes: Optional[dict] = None) -> dict:
+def _player_to_js(player, config: LeagueConfig, team_byes: Optional[dict] = None,
+                  context: Optional[PlayerContext] = None) -> dict:
     """Convert a Python Player to the JS frontend's expected format.
 
     stdPts is standard (0 pt/rec) scoring; recPts is the full 1-pt-per-reception
@@ -179,6 +195,11 @@ def _player_to_js(player, config: LeagueConfig, team_byes: Optional[dict] = None
         "byeWeek": bye,
         "age": player.age,
         "stats": stats,
+        "availability": primary_availability(context, player),
+        "confidence": confidence_for_player(context, player),
+        "signals": signal_summary(context, player),
+        "contextAsOf": context.refreshed_at if context else None,
+        "eligible": is_candidate_eligible(context, player),
     }
 
 
@@ -281,8 +302,19 @@ def _my_pick_ids(picks, draft_position: int) -> list[str]:
     return ids
 
 
-def _free_agent_row(rec) -> dict:
-    drop = rec.drop_player
+def _drop_row(drop, points) -> Optional[dict]:
+    if not drop:
+        return None
+    return {
+        "id": drop.key(), "name": drop.name, "pos": drop.position,
+        "nflTeam": drop.team or "FA", "points": points,
+    }
+
+
+def _free_agent_row(rec, horizon: str = "ros") -> dict:
+    weekly = horizon == "weekly"
+    drop = rec.weekly_drop_player if weekly else rec.ros_drop_player
+    drop_points = rec.weekly_drop_points if weekly else rec.ros_drop_points
     return {
         "id": rec.player.key(),
         "name": rec.player.name,
@@ -290,20 +322,29 @@ def _free_agent_row(rec) -> dict:
         "nflTeam": rec.player.team or "FA",
         "adp": round(rec.player.adp, 1) if rec.player.adp else None,
         "byeWeek": rec.player.bye_week,
-        "points": rec.points,
-        "vor": rec.vor,
-        "score": rec.score,
-        "rosterGain": rec.roster_gain,
-        "starterGain": rec.starter_gain,
-        "benchGain": rec.bench_gain,
-        "reason": rec.reason,
-        "drop": ({
-            "id": drop.key(),
-            "name": drop.name,
-            "pos": drop.position,
-            "nflTeam": drop.team or "FA",
-            "points": rec.drop_points,
-        } if drop else None),
+        "points": rec.weekly_points if weekly else rec.ros_points,
+        "vor": rec.weekly_vor if weekly else rec.ros_vor,
+        "score": rec.weekly_score if weekly else rec.ros_score,
+        "rosterGain": rec.weekly_gain if weekly else rec.ros_gain,
+        "starterGain": rec.weekly_starter_gain if weekly else rec.ros_starter_gain,
+        "benchGain": rec.weekly_bench_gain if weekly else rec.ros_bench_gain,
+        "reason": rec.weekly_reason if weekly else rec.ros_reason,
+        "drop": _drop_row(drop, drop_points),
+        "weeklyPoints": rec.weekly_points,
+        "weeklyGain": rec.weekly_gain,
+        "weeklyScore": rec.weekly_score,
+        "weeklyDrop": _drop_row(rec.weekly_drop_player, rec.weekly_drop_points),
+        "weeklyReason": rec.weekly_reason,
+        "rosPoints": rec.ros_points,
+        "rosGain": rec.ros_gain,
+        "rosScore": rec.ros_score,
+        "rosDrop": _drop_row(rec.ros_drop_player, rec.ros_drop_points),
+        "rosReason": rec.ros_reason,
+        "urgency": rec.urgency,
+        "availability": rec.availability,
+        "confidence": rec.confidence,
+        "signals": rec.signals,
+        "weeklyProjectionOrigin": rec.weekly_projection_origin,
     }
 
 
@@ -331,6 +372,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_get_state()
         elif self.path == "/api/yahoo/status":
             self._handle_yahoo_status()
+        elif self.path == "/api/context":
+            self._handle_context()
+        elif self.path == "/api/update":
+            self._handle_update()
         elif self.path.startswith("/api/task/"):
             self._handle_task_status()
         else:
@@ -369,6 +414,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_suggest()
         elif self.path == "/api/free-agents":
             self._handle_free_agents()
+        elif self.path == "/api/context/refresh":
+            self._handle_context_refresh()
         elif self.path == "/api/sync-league":
             self._handle_sync_league()
         elif self.path == "/api/import-espn":
@@ -501,11 +548,22 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     def _handle_players(self):
         try:
             players, config = _load_players(self.profile)
+            context = load_context()
+            players = season_adjusted_players(players, context)
             team_byes = _team_byes_from_players(players)
-            js_players = [_player_to_js(p, config, team_byes) for p in players]
+            js_players = [_player_to_js(p, config, team_byes, context) for p in players]
             self._send_json(js_players)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
+
+    def _handle_context(self):
+        try:
+            self._send_json(context_payload(load_context()))
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_update(self):
+        self._send_json(check_for_update(__version__))
 
     def _handle_config(self):
         try:
@@ -582,6 +640,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             my_picks = self._picks_list(body.get("my_picks", []))
             top_n = _bounded_int(body.get("top", 50), "top", 1, 100)
             players, config = _load_players(self.profile)
+            context = load_context()
+            players = season_adjusted_players(players, context)
             eff = self._suggest_config(body, config)
             if str((body.get("league") or {}).get("draftType") or "snake").lower() == "auction":
                 self._send_json({"error": "Snake recommendations are unavailable for auction drafts"}, 400)
@@ -591,7 +651,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             picks = _canonicalize_player_keys(picks, aliases)
             my_picks = _canonicalize_player_keys(my_picks, aliases)
             picked = set(picks)
-            available = [p for k, p in by_key.items() if k not in picked]
+            available = [
+                p for k, p in by_key.items()
+                if k not in picked and is_candidate_eligible(context, p)
+            ]
             my_roster: dict = {}
             for k in my_picks:
                 p = by_key.get(k)
@@ -624,12 +687,16 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 "goneRisk": r.gone_risk,
                 "byePenalty": r.bye_penalty,
                 "simulated": r.simulated,
+                "availability": primary_availability(context, r.player),
+                "confidence": confidence_for_player(context, r.player),
+                "signals": signal_summary(context, r.player),
             } for r in results]
             self._send_json({
                 "suggestions": rows,
                 "sims": results[0].sims if results else 0,
                 "teams": eff.teams,
                 "slot": int((eff.draft or {}).get("slot", 1)),
+                "contextAsOf": context.refreshed_at,
             })
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
@@ -653,8 +720,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             if not isinstance(picks_by_league, dict):
                 picks_by_league = {}
             top_n = _bounded_int(body.get("top", 8), "top", 1, 30)
+            week = _bounded_int(body.get("week", default_week()), "week", 1, 18)
 
             players, config = _load_players(self.profile)
+            context = load_context(season=default_season(), week=week)
             by_key, aliases = _player_indexes(players)
             response_rows = []
 
@@ -677,18 +746,33 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     if player:
                         my_roster.setdefault(player.position, []).append(player)
 
-                recs = free_agent_recommendations(eff, available, my_roster, top_n=top_n)
+                recs = free_agent_recommendations(
+                    eff, available, my_roster, top_n=None,
+                    context=context, week=week, sort_by="ros",
+                )
+                weekly_recs = rank_recommendations(recs, "weekly", top_n)
+                ros_recs = rank_recommendations(recs, "ros", top_n)
                 response_rows.append({
                     "id": league_id,
                     "name": league.get("name") or f"League {index + 1}",
                     "platform": league.get("platform") or "",
                     "rostered": len(my_keys),
                     "available": len(available),
-                    "recommendations": [_free_agent_row(rec) for rec in recs],
+                    # recommendations remains the ROS list for old clients.
+                    "recommendations": [_free_agent_row(rec, "ros") for rec in ros_recs],
+                    "weeklyRecommendations": [
+                        _free_agent_row(rec, "weekly") for rec in weekly_recs
+                    ],
+                    "rosRecommendations": [
+                        _free_agent_row(rec, "ros") for rec in ros_recs
+                    ],
                 })
 
             self._send_json({
                 "scannedLeagues": len(response_rows),
+                "week": week,
+                "contextAsOf": context.refreshed_at,
+                "contextStale": context_payload(context, include_signals=False)["stale"],
                 "leagues": response_rows,
             })
         except ValueError as exc:
@@ -1030,6 +1114,31 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": str(exc)}, 500)
 
     # ── background task polling ───────────────────────────────────────────
+
+    def _handle_context_refresh(self):
+        try:
+            body = self._read_body()
+            season = _bounded_int(
+                body.get("season", default_season()), "season", 2000, 2100)
+            week = _bounded_int(body.get("week", default_week()), "week", 1, 18)
+            force = bool(body.get("force", False))
+            task_id = f"context-{uuid.uuid4().hex}"
+
+            def _do_refresh():
+                context = load_context(season=season, week=week)
+                context = refresh_context(
+                    context, season=season, week=week, force=force)
+                save_context(context)
+                return context_payload(context, include_signals=False)
+
+            if not _run_task(task_id, _do_refresh):
+                self._send_json({"error": "Two data jobs are already running"}, 429)
+                return
+            self._send_json({"taskId": task_id})
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
 
     def _handle_task_status(self):
         task_id = self.path.split("/api/task/")[-1]

@@ -200,5 +200,29 @@ class TestMalformedBodyHandling(_ServerFixture):
         self.assertIn(b"not found", body)
 
 
+class TestContextAndUpdateEndpoints(_ServerFixture):
+    def test_context_returns_freshness_contract(self):
+        status, body = self.request("GET", "/api/context")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertIn("season", payload)
+        self.assertIn("week", payload)
+        self.assertIn("stale", payload)
+        self.assertIn("sources", payload)
+        self.assertIn("signals", payload)
+
+    def test_context_refresh_validates_week_before_background_work(self):
+        status, body = self.request("POST", "/api/context/refresh", {"week": 19})
+        self.assertEqual(status, 400)
+        self.assertIn(b"week", body)
+
+    def test_update_endpoint_is_safe_in_source_checkout(self):
+        status, body = self.request("GET", "/api/update")
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["supported"])
+        self.assertFalse(payload["updateAvailable"])
+
+
 if __name__ == "__main__":
     unittest.main()

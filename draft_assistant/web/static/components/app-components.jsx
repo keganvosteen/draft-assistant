@@ -1061,8 +1061,11 @@ function FreeAgentPosBadge({ pos }) {
 function FreeAgentFinderModal({ leagues, picks, onClose, initialLeagueId }) {
   const [topN, setTopN] = React.useState(6);
   const [filter, setFilter] = React.useState(initialLeagueId || 'ALL');
+  const [horizon, setHorizon] = React.useState('weekly');
+  const [week, setWeek] = React.useState(1);
   const [data, setData] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
+  const [refreshingContext, setRefreshingContext] = React.useState(false);
   const [error, setError] = React.useState(null);
 
   const scan = React.useCallback(() => {
@@ -1071,7 +1074,7 @@ function FreeAgentFinderModal({ leagues, picks, onClose, initialLeagueId }) {
     fetch('/api/free-agents', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leagues: leagues || [], picks: picks || {}, top: topN }),
+      body: JSON.stringify({ leagues: leagues || [], picks: picks || {}, top: topN, week }),
     })
       .then(r => r.json())
       .then(d => {
@@ -1080,9 +1083,26 @@ function FreeAgentFinderModal({ leagues, picks, onClose, initialLeagueId }) {
       })
       .catch(err => setError(String(err)))
       .finally(() => setLoading(false));
-  }, [leagues, picks, topN]);
+  }, [leagues, picks, topN, week]);
 
   React.useEffect(() => { scan(); }, [scan]);
+
+  const refreshUpdates = () => {
+    setRefreshingContext(true);
+    setError(null);
+    fetch('/api/context/refresh', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({week, force:true}),
+    }).then(r => r.json()).then(started => {
+      if (started.error) throw new Error(started.error);
+      const poll = () => fetch(`/api/task/${started.taskId}`).then(r => r.json()).then(task => {
+        if (task.status === 'done') { setRefreshingContext(false); scan(); return; }
+        if (task.status === 'error') throw new Error(task.error || 'Update refresh failed');
+        setTimeout(poll, 1000);
+      });
+      poll().catch(err => { setRefreshingContext(false); setError(String(err)); });
+    }).catch(err => { setRefreshingContext(false); setError(String(err)); });
+  };
 
   const fmt = n => {
     const v = Number(n || 0);
@@ -1101,8 +1121,10 @@ function FreeAgentFinderModal({ leagues, picks, onClose, initialLeagueId }) {
           <th style={{textAlign:'left', padding:'7px 8px'}}>ADD</th>
           <th style={{textAlign:'left', padding:'7px 8px'}}>POS</th>
           <th style={{textAlign:'left', padding:'7px 8px'}}>TEAM</th>
+          <th style={{textAlign:'right', padding:'7px 8px'}}>{horizon === 'weekly' ? 'WEEK' : 'ROS'} PTS</th>
           <th style={{textAlign:'right', padding:'7px 8px'}}>SCORE</th>
           <th style={{textAlign:'right', padding:'7px 8px'}}>GAIN</th>
+          <th style={{textAlign:'center', padding:'7px 8px'}}>TREND</th>
           <th style={{textAlign:'left', padding:'7px 8px'}}>DROP</th>
           <th style={{textAlign:'left', padding:'7px 8px'}}>WHY</th>
         </tr>
@@ -1115,9 +1137,13 @@ function FreeAgentFinderModal({ leagues, picks, onClose, initialLeagueId }) {
               <div style={{fontSize:10.5, color:T.muted, fontWeight:500}}>
                 {row.adp ? `ADP ${row.adp}` : 'No ADP'}{row.byeWeek ? ` · BYE ${row.byeWeek}` : ''}
               </div>
+              {row.availability && <div style={{fontSize:10.5, color:T.red, marginTop:2}}>{row.availability}</div>}
             </td>
             <td style={{padding:'7px 8px'}}><FreeAgentPosBadge pos={row.pos} /></td>
             <td style={{padding:'7px 8px', color:T.muted}}>{row.nflTeam}</td>
+            <td style={{padding:'7px 8px', textAlign:'right', fontWeight:700, fontFamily:'DM Mono,monospace'}}>
+              {Number(row.points || 0).toFixed(1)}
+            </td>
             <td style={{padding:'7px 8px', textAlign:'right', fontWeight:800, color:T.primary, fontFamily:'DM Mono,monospace'}}>
               {fmt(row.score)}
             </td>
@@ -1125,12 +1151,24 @@ function FreeAgentFinderModal({ leagues, picks, onClose, initialLeagueId }) {
               fontFamily:'DM Mono,monospace'}}>
               {fmt(row.rosterGain)}
             </td>
+            <td style={{padding:'7px 8px', textAlign:'center', color:row.urgency > 0 ? T.green : row.urgency < 0 ? T.red : T.muted,
+              fontFamily:'DM Mono,monospace', fontWeight:700}}>
+              {row.urgency > 0 ? `+${row.urgency}` : row.urgency || '—'}
+            </td>
             <td style={{padding:'7px 8px', color:row.drop ? T.text : T.muted}}>
               {row.drop ? (
                 <span>{row.drop.name} <span style={{color:T.muted}}>({row.drop.pos})</span></span>
               ) : 'Open slot'}
             </td>
-            <td style={{padding:'7px 8px', color:T.muted, lineHeight:1.35}}>{row.reason}</td>
+            <td style={{padding:'7px 8px', color:T.muted, lineHeight:1.35}}>
+              <div>{row.reason}</div>
+              {(row.signals || []).slice(0,2).map((s,i) => (
+                <div key={i} title={`${s.source} · ${s.observed_at}`} style={{fontSize:10, marginTop:2}}>
+                  {s.attribution || s.source}: {s.kind.replace('_',' ')} {s.value}
+                </div>
+              ))}
+              {horizon === 'weekly' && <div style={{fontSize:10, marginTop:2}}>{row.weeklyProjectionOrigin}</div>}
+            </td>
           </tr>
         ))}
       </tbody>
@@ -1139,6 +1177,15 @@ function FreeAgentFinderModal({ leagues, picks, onClose, initialLeagueId }) {
 
   return (
     <Modal title="League-Synced Free Agent Finder" onClose={onClose} width={960}>
+      <div style={{display:'inline-flex', border:`1px solid ${T.border}`, borderRadius:T.rsm, overflow:'hidden', marginBottom:14}}>
+        {[['weekly','This Week'],['ros','Rest of Season']].map(([value,label]) => (
+          <button key={value} onClick={() => setHorizon(value)} style={{
+            border:'none', padding:'7px 12px', cursor:'pointer', fontFamily:'inherit', fontSize:12, fontWeight:700,
+            background:horizon === value ? T.primary : T.surface,
+            color:horizon === value ? '#fff' : T.muted,
+          }}>{label}</button>
+        ))}
+      </div>
       <div style={{display:'flex', alignItems:'flex-end', gap:12, marginBottom:16, flexWrap:'wrap'}}>
         <Field label="League">
           <Select value={filter} onChange={e => setFilter(e.target.value)}
@@ -1150,11 +1197,25 @@ function FreeAgentFinderModal({ leagues, picks, onClose, initialLeagueId }) {
             onChange={e => setTopN(Math.max(1, Math.min(parseInt(e.target.value) || 1, 30)))}
             style={{width:84}} />
         </Field>
+        <Field label="NFL Week">
+          <Input type="number" value={week} min={1} max={18}
+            onChange={e => setWeek(Math.max(1, Math.min(parseInt(e.target.value) || 1, 18)))}
+            style={{width:72}} />
+        </Field>
         <Btn onClick={scan} disabled={loading} style={{marginBottom:18}}>Refresh</Btn>
+        <Btn variant="ghost" onClick={refreshUpdates} disabled={refreshingContext}
+          style={{marginBottom:18}}>{refreshingContext ? 'Updating...' : 'Refresh Updates'}</Btn>
         <div style={{marginBottom:24, marginLeft:'auto', fontSize:12, color:T.muted}}>
-          {data ? `${data.scannedLeagues} league${data.scannedLeagues === 1 ? '' : 's'}` : ''}
+          {data ? `${data.scannedLeagues} league${data.scannedLeagues === 1 ? '' : 's'} · Week ${data.week}` : ''}
         </div>
       </div>
+
+      {data && (
+        <div style={{fontSize:11, color:data.contextStale ? T.amber : T.muted, margin:'-8px 0 12px'}}>
+          Player updates {data.contextAsOf ? `as of ${new Date(data.contextAsOf).toLocaleString()}` : 'have not been refreshed yet'}
+          {data.contextStale ? ' · cached data may be stale' : ''}
+        </div>
+      )}
 
       {loading && <div style={{textAlign:'center', padding:24, color:T.muted}}>Scanning...</div>}
       {error && <div style={{padding:12, color:T.red, background:T.redLight, borderRadius:T.rsm, marginBottom:12}}>{error}</div>}
@@ -1175,8 +1236,8 @@ function FreeAgentFinderModal({ leagues, picks, onClose, initialLeagueId }) {
               </div>
             </div>
           </div>
-          {league.recommendations.length > 0
-            ? renderTable(league.recommendations)
+          {((horizon === 'weekly' ? league.weeklyRecommendations : league.rosRecommendations) || league.recommendations || []).length > 0
+            ? renderTable((horizon === 'weekly' ? league.weeklyRecommendations : league.rosRecommendations) || league.recommendations)
             : <div style={{padding:18, color:T.muted, background:T.surfaceAlt, borderRadius:T.rsm}}>No positive upgrades found.</div>
           }
         </div>
@@ -1257,8 +1318,43 @@ function SetupGuide({ playerCount, leagues, picks, onPullData, onAddLeague, onEd
   );
 }
 
+// ─── APP UPDATE NOTICE ───────────────────────────────────────────────────────
+function UpdateBanner({ update, onDismiss }) {
+  if (!update || !update.updateAvailable) return null;
+  const openDownload = () => {
+    const url = update.downloadUrl || update.releaseUrl;
+    if (!url) return;
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.open_external_url) {
+      window.pywebview.api.open_external_url(url);
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  };
+  return (
+    <div style={{
+      margin:'0 0 22px', padding:'13px 15px', borderRadius:T.rsm,
+      background:T.primaryLight, border:`1px solid ${T.primary}33`,
+      display:'flex', alignItems:'center', gap:12, flexWrap:'wrap',
+    }}>
+      <div style={{flex:1, minWidth:220}}>
+        <div style={{fontSize:13, fontWeight:800, color:T.primary}}>
+          Draft Assistant {update.latestVersion} is available
+        </div>
+        <div style={{fontSize:11.5, color:T.muted, marginTop:2}}>
+          Your leagues and player data stay in place when you install the update.
+        </div>
+      </div>
+      <Btn size="sm" onClick={openDownload}>Download update</Btn>
+      <button onClick={onDismiss} aria-label="Dismiss update" style={{
+        border:'none', background:'none', color:T.muted, fontSize:18,
+        cursor:'pointer', padding:'0 3px',
+      }}>×</button>
+    </div>
+  );
+}
+
 // ─── HOME SCREEN ─────────────────────────────────────────────────────────────
-function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague, onDeleteLeague, onSyncLeague, playerCount, onRefreshPlayers }) {
+function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague, onDeleteLeague, onSyncLeague, playerCount, onRefreshPlayers, updateInfo, onDismissUpdate }) {
   const platformColors = { ESPN:'#cc0000', Yahoo:'#6001d2', Sleeper:'#1e1e1e', 'NFL.com':'#013369', Other: T.muted };
   const [showPull, setShowPull]       = React.useState(false);
   const [auctionFor, setAuctionFor]   = React.useState(null); // league whose $ values to show
@@ -1321,6 +1417,7 @@ function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague,
       </div>
 
       <div style={{flex:1, padding:'40px 32px', maxWidth:960, margin:'0 auto', width:'100%', boxSizing:'border-box'}}>
+        <UpdateBanner update={updateInfo} onDismiss={onDismissUpdate} />
         <h2 style={{fontSize:22, fontWeight:700, color:T.text, margin:'0 0 8px'}}>Your Leagues</h2>
         <p style={{fontSize:14, color:T.muted, margin:'0 0 28px'}}>
           Select a league to enter draft mode, or add a new one.
@@ -1441,6 +1538,7 @@ function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague,
 function App() {
   const [players, setPlayers] = React.useState(null);
   const [loadError, setLoadError] = React.useState(null);
+  const [updateInfo, setUpdateInfo] = React.useState(null);
 
   const [leagues, setLeagues] = React.useState(() => {
     try { return JSON.parse(localStorage.getItem('fda_leagues') || '[]'); } catch { return []; }
@@ -1488,6 +1586,36 @@ function App() {
       return prev;
     });
   }, []);
+
+  React.useEffect(() => {
+    // Update checks never block startup and are only supported by packaged apps.
+    fetch('/api/update').then(r => r.json()).then(info => {
+      if (!info || !info.updateAvailable) return;
+      let skipped = null;
+      try { skipped = localStorage.getItem('fda_skipped_update'); } catch {}
+      if (skipped !== info.latestVersion) setUpdateInfo(info);
+    }).catch(() => {});
+
+    // Render cached context immediately; refresh stale signals in the background.
+    fetch('/api/context').then(r => r.json()).then(ctx => {
+      if (!ctx || ctx.error || !ctx.stale) return;
+      return fetch('/api/context/refresh', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({season:ctx.season, week:ctx.week}),
+      }).then(r => r.json()).then(started => {
+        if (!started.taskId) return;
+        let attempts = 0;
+        const poll = () => {
+          fetch(`/api/task/${started.taskId}`).then(r => r.json()).then(task => {
+            if (task.status === 'done') { refreshPlayers(); return; }
+            if (task.status === 'error' || attempts++ >= 90) return;
+            setTimeout(poll, 1000);
+          }).catch(() => {});
+        };
+        poll();
+      });
+    }).catch(() => {});
+  }, [refreshPlayers]);
 
   React.useEffect(() => { localStorage.setItem('fda_leagues', JSON.stringify(leagues)); }, [leagues]);
   React.useEffect(() => { localStorage.setItem('fda_picks',   JSON.stringify(picks));   }, [picks]);
@@ -1594,6 +1722,13 @@ function App() {
         onSyncLeague={syncLeague}
         playerCount={players ? players.length : null}
         onRefreshPlayers={refreshPlayers}
+        updateInfo={updateInfo}
+        onDismissUpdate={() => {
+          if (updateInfo) {
+            try { localStorage.setItem('fda_skipped_update', updateInfo.latestVersion); } catch {}
+          }
+          setUpdateInfo(null);
+        }}
       />
       {showSetup && (
         <LeagueSetupModal

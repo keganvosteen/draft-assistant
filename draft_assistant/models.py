@@ -32,6 +32,40 @@ class Player:
         return f"{self.name}|{self.position}"
 
 
+@dataclass(frozen=True)
+class PlayerSignal:
+    """One timestamped, attributable piece of player context.
+
+    Signals deliberately live outside ``Player.projections``.  Refreshing news
+    must never compound a multiplier into the persisted baseline projection.
+    ``player_id`` is a provider-qualified alias such as ``sleeper:1234`` or
+    ``gsis:00-0031234`` and is joined to the board through provider metadata.
+    """
+
+    player_id: str
+    kind: str
+    value: str
+    source: str
+    observed_at: str
+    effective_week: Optional[int] = None
+    expires_at: Optional[str] = None
+    attribution: Optional[str] = None
+    details: Dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
+class PlayerContext:
+    """Cached dynamic inputs used to derive weekly and ROS point views."""
+
+    season: int
+    selected_week: int
+    refreshed_at: Optional[str] = None
+    signals: List[PlayerSignal] = field(default_factory=list)
+    weekly_projections: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    actual_stats: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    source_health: Dict[str, Dict[str, object]] = field(default_factory=dict)
+
+
 @dataclass
 class LeagueConfig:
     teams: int

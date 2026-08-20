@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fantasy-draft-assistant"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Local-first fantasy football draft and roster assistant"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,6 +27,9 @@ draft-assistant-app = "draft_assistant.desktop:run_desktop"
 
 [tool.setuptools.packages.find]
 include = ["draft_assistant*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "draft_assistant.__version__"}
 
 [tool.setuptools.package-data]
 draft_assistant = [

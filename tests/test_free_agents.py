@@ -1,7 +1,7 @@
 import unittest
 
-from draft_assistant.free_agents import free_agent_recommendations
-from draft_assistant.models import LeagueConfig, Player
+from draft_assistant.free_agents import free_agent_recommendations, rank_recommendations
+from draft_assistant.models import LeagueConfig, Player, PlayerContext, PlayerSignal
 
 
 def _p(name, pos, pts, adp=None):
@@ -86,6 +86,79 @@ class TestFreeAgentRecommendations(unittest.TestCase):
 
         self.assertEqual(standard_rows[0].player, yardage)
         self.assertEqual(ppr_rows[0].player, volume)
+
+    def test_weekly_and_ros_points_are_derived_independently(self):
+        add = Player(
+            id="source:add", name="Free WR", position="WR",
+            projections={"rec_yd": 180}, metadata={"sleeper_id": "1"},
+        )
+        context = PlayerContext(
+            season=2026, selected_week=5,
+            weekly_projections={"sleeper:1": {"rec_yd": 20}},
+            actual_stats={"sleeper:1": {"rec_yd": 40}},
+        )
+        rows = free_agent_recommendations(
+            _config({"WR": 1}), [add], {}, context=context, week=5,
+        )
+        self.assertEqual(rows[0].weekly_points, 20)
+        self.assertEqual(rows[0].ros_points, 140)
+        self.assertEqual(rows[0].weekly_projection_origin, "Sleeper weekly projection")
+
+    def test_out_player_is_zero_this_week_but_not_ros(self):
+        add = Player(
+            id="source:add", name="Free WR", position="WR",
+            projections={"rec_yd": 180}, metadata={"sleeper_id": "1"},
+        )
+        context = PlayerContext(
+            season=2026, selected_week=1,
+            weekly_projections={"sleeper:1": {"rec_yd": 20}},
+            signals=[PlayerSignal(
+                player_id="sleeper:1", kind="injury", value="Out",
+                source="Sleeper", observed_at="2098-01-01T00:00:00+00:00",
+                effective_week=1, expires_at="2099-01-01T00:00:00+00:00",
+            )],
+        )
+        row = free_agent_recommendations(
+            _config({"WR": 1}), [add], {}, context=context, week=1,
+        )[0]
+        self.assertEqual(row.weekly_points, 0)
+        self.assertEqual(row.ros_points, 180)
+
+    def test_weekly_and_ros_sorting_can_disagree(self):
+        now = Player(
+            id="source:now", name="Weekly Star", position="WR",
+            projections={"rec_yd": 100}, metadata={"sleeper_id": "1"},
+        )
+        later = Player(
+            id="source:later", name="ROS Star", position="WR",
+            projections={"rec_yd": 200}, metadata={"sleeper_id": "2"},
+        )
+        context = PlayerContext(2026, 1, weekly_projections={
+            "sleeper:1": {"rec_yd": 30}, "sleeper:2": {"rec_yd": 10},
+        })
+        rows = free_agent_recommendations(
+            _config({"WR": 2}), [now, later], {}, top_n=None, context=context,
+        )
+        self.assertEqual(rank_recommendations(rows, "weekly", 1)[0].player, now)
+        self.assertEqual(rank_recommendations(rows, "ros", 1)[0].player, later)
+
+    def test_soft_context_does_not_change_weekly_projection(self):
+        add = Player(
+            id="source:add", name="Trending WR", position="WR",
+            projections={"rec_yd": 180}, metadata={"sleeper_id": "1"},
+        )
+        context = PlayerContext(
+            2026, 1, weekly_projections={"sleeper:1": {"rec_yd": 12}},
+            signals=[
+                PlayerSignal("sleeper:1", "depth_chart", "WR1", "nflverse", "2098-01-01T00:00:00+00:00"),
+                PlayerSignal("sleeper:1", "trend_add", "50", "Sleeper", "2098-01-01T00:00:00+00:00"),
+            ],
+        )
+        row = free_agent_recommendations(
+            _config({"WR": 1}), [add], {}, context=context,
+        )[0]
+        self.assertEqual(row.weekly_points, 12)
+        self.assertEqual(row.urgency, 50)
 
 
 if __name__ == "__main__":
