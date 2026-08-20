@@ -31,7 +31,13 @@ python -m draft_assistant --profile home draft
 
 The terminal UI walks you through league setup on first run (teams, scoring format, roster, draft position), seeds sample player data, and drops you into a live draft board with commands like `pick <name>`, `my <name>`, `undo`, `log`, `auction`.
 
-The web UI starts a loopback-only HTTP server (default `http://127.0.0.1:8080`) and opens your browser. It provides a live impact/VORP board, server-backed rollout recommendations, player availability and opportunity signals, opponent-run and value-at-risk alerts, auction values, and weekly/ROS Free Agent Finder views. Add `--port N` or `--no-open` to customize.
+The web UI starts a loopback-only HTTP server (default `http://127.0.0.1:8080`) and opens your browser. Add `--port N` or `--no-open` to customize. It is organised around the league:
+
+- **Leagues** — every league you have set up, with a card each.
+- **League hub** — one league's home. From here you choose a destination and edit settings, sync rosters, or pull data.
+- **Draft room** — draft day: the impact/VORP board, server-backed rollout recommendations, player availability and opportunity signals, opponent-run and value-at-risk alerts, the pick ticker, live Sleeper draft sync, and auction values.
+- **Waiver wire** — the in-season screen: free agents ranked by what they add to your actual starting lineup, with the drop each add implies, on either a **this-week** or **rest-of-season** horizon. News signals (injury, depth-chart, snap-share, trending adds) feed both. Completely separate from the draft room.
+
 
 The desktop UI opens a Tkinter window with a draft board, roster panel, and a league switcher.
 
@@ -247,6 +253,7 @@ draft_assistant/
 ├── ui.py                  # Terminal UI (readline + ANSI + setup wizard)
 ├── ui_desktop.py          # Tkinter desktop UI
 ├── web/                   # Browser web UI (HTTP server + React frontend)
+│   └── static/            # ui-kit, app shell, league hub, draft room, waiver wire
 │   ├── server.py          # Stdlib HTTP server + JSON API
 │   └── static/            # index.html, scoring engine, React components
 ├── profiles.py            # Multi-league profile management

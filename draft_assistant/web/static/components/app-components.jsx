@@ -1,29 +1,3 @@
-// ─── THEME ────────────────────────────────────────────────────────────────────
-const T = {
-  bg: '#f3f5fb',
-  surface: '#ffffff',
-  surfaceAlt: '#f8f9fd',
-  border: '#e0e4ef',
-  borderLight: '#eef0f7',
-  primary: '#3a5bef',
-  primaryHover: '#2d4ad4',
-  primaryLight: '#eef1fd',
-  green: '#16a34a',
-  greenLight: '#dcfce7',
-  amber: '#d97706',
-  amberLight: '#fef3c7',
-  red: '#dc2626',
-  redLight: '#fee2e2',
-  blue: '#0369a1',
-  blueLight: '#e0f2fe',
-  text: '#1a1d2e',
-  muted: '#6b7280',
-  mutedLight: '#9ca3af',
-  r: '10px',
-  rsm: '6px',
-  rxs: '4px',
-};
-
 // ─── DEFAULT DATA ─────────────────────────────────────────────────────────────
 const DEFAULT_SLOTS   = { QB:1, RB:2, WR:2, TE:1, FLEX:1, K:1, DST:1, BN:6 };
 // Neutral starting template for a new custom league — NOT any one league's
@@ -33,7 +7,6 @@ const DEFAULT_SLOTS   = { QB:1, RB:2, WR:2, TE:1, FLEX:1, K:1, DST:1, BN:6 };
 const DEFAULT_CUSTOM  = { passTD:4, passYds:25, passInt:-2, sackTaken:0, rushTD:6, rushYds:10, recTD:6, recYds:10, reception:0.5, twoPt:2, fumbleLost:-2, fumble:0, fumRetTD:6 };
 const SCORING_LABELS  = { standard:'Standard', ppr:'PPR', 'half-ppr':'Half PPR', custom:'Custom' };
 const PLATFORMS       = ['ESPN','Yahoo','Sleeper','NFL.com','Other'];
-const POSITIONS       = ['QB','RB','WR','TE','K','DST'];
 
 function makeLeague(o = {}) {
   return {
@@ -94,114 +67,7 @@ function migratePickIds(picksByLeague, players) {
   return changed ? migrated : picksByLeague;
 }
 
-// ─── SMALL SHARED UI ─────────────────────────────────────────────────────────
-function Btn({ children, onClick, variant='primary', size='md', disabled, style={} }) {
-  const base = {
-    border: 'none', borderRadius: T.rsm, cursor: disabled ? 'not-allowed' : 'pointer',
-    fontFamily: 'inherit', fontWeight: 600, transition: 'all .15s', display:'inline-flex',
-    alignItems:'center', gap:6, opacity: disabled ? 0.5 : 1,
-    padding: size === 'sm' ? '5px 10px' : '8px 16px',
-    fontSize: size === 'sm' ? 12 : 14,
-  };
-  const variants = {
-    primary:  { background: T.primary, color:'#fff' },
-    ghost:    { background: 'transparent', color: T.muted, border: `1px solid ${T.border}` },
-    danger:   { background: T.redLight, color: T.red },
-    green:    { background: T.greenLight, color: T.green },
-  };
-  return (
-    <button style={{...base,...variants[variant],...style}} onClick={onClick} disabled={disabled}>
-      {children}
-    </button>
-  );
-}
-
-function Badge({ label, color='blue' }) {
-  const colors = {
-    blue:  { bg: T.blueLight,  fg: T.blue },
-    green: { bg: T.greenLight, fg: T.green },
-    amber: { bg: T.amberLight, fg: T.amber },
-    red:   { bg: T.redLight,   fg: T.red },
-    gray:  { bg: T.borderLight,fg: T.muted },
-  };
-  const c = colors[color] || colors.gray;
-  return (
-    <span style={{
-      background: c.bg, color: c.fg, borderRadius: 99, padding:'2px 8px',
-      fontSize:11, fontWeight:700, letterSpacing:.3, whiteSpace:'nowrap',
-    }}>{label}</span>
-  );
-}
-
-function Modal({ title, onClose, children, width=560 }) {
-  return (
-    <div style={{
-      position:'fixed', inset:0, background:'rgba(0,0,0,.35)', zIndex:1000,
-      display:'flex', alignItems:'center', justifyContent:'center', padding:24,
-    }} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={{
-        background: T.surface, borderRadius:14, width:'100%', maxWidth:width,
-        maxHeight:'90vh', overflowY:'auto', boxShadow:'0 20px 60px rgba(0,0,0,.18)',
-      }}>
-        <div style={{
-          padding:'20px 24px', borderBottom:`1px solid ${T.border}`,
-          display:'flex', alignItems:'center', justifyContent:'space-between',
-        }}>
-          <span style={{fontSize:16, fontWeight:700, color:T.text}}>{title}</span>
-          <button onClick={onClose} style={{
-            background:'none', border:'none', fontSize:20, cursor:'pointer',
-            color:T.muted, lineHeight:1, padding:'0 4px',
-          }}>×</button>
-        </div>
-        <div style={{padding:24}}>{children}</div>
-      </div>
-    </div>
-  );
-}
-
-function Field({ label, hint, children }) {
-  return (
-    <div style={{marginBottom:18}}>
-      <label style={{display:'block', fontSize:13, fontWeight:600, color:T.text, marginBottom:5}}>
-        {label}
-        {hint && <span style={{fontWeight:400, color:T.muted, marginLeft:6}}>{hint}</span>}
-      </label>
-      {children}
-    </div>
-  );
-}
-
-function Input({ value, onChange, type='text', style={}, ...rest }) {
-  return (
-    <input type={type} value={value} onChange={onChange}
-      style={{
-        width:'100%', boxSizing:'border-box', padding:'8px 12px',
-        border:`1.5px solid ${T.border}`, borderRadius:T.rsm, fontSize:14,
-        color:T.text, background:T.surface, fontFamily:'inherit', outline:'none',
-        ...style,
-      }} {...rest}
-    />
-  );
-}
-
-function Select({ value, onChange, options, style={} }) {
-  return (
-    <select value={value} onChange={onChange}
-      style={{
-        width:'100%', boxSizing:'border-box', padding:'8px 12px',
-        border:`1.5px solid ${T.border}`, borderRadius:T.rsm, fontSize:14,
-        color:T.text, background:T.surface, fontFamily:'inherit', outline:'none',
-        ...style,
-      }}>
-      {options.map(o => (
-        <option key={o.value !== undefined ? o.value : o} value={o.value !== undefined ? o.value : o}>
-          {o.label !== undefined ? o.label : o}
-        </option>
-      ))}
-    </select>
-  );
-}
-
+// ─── DRAFT ORDER EDITOR ──────────────────────────────────────────────────────
 // Draft-order + "which team is mine" editor. teamNames is stored in DRAFT-SLOT
 // order (index i == slot i+1 == snake seat), and draftPosition points at the
 // owner's slot. Imports (ESPN/Yahoo) arrive in the platform's own order, which
@@ -228,28 +94,31 @@ function DraftOrderEditor({ numTeams, teamNames, draftPosition, onChange }) {
       : draftPosition;
     onChange({ teamNames: order.map(idx => names[idx]), draftPosition: dp });
   };
-  const swap = (i, j) => move(i, j);
   const bulkPaste = text =>
     onChange({ teamNames: text.split('\n').map(s => s.trim()).slice(0, numTeams) });
 
   const arrow = disabled => ({
-    width:24, height:24, lineHeight:'20px', textAlign:'center', padding:0,
+    width:26, height:26, textAlign:'center', padding:0, flexShrink:0,
     border:`1.5px solid ${T.border}`, borderRadius:T.rxs, background:T.surface,
     color: disabled ? T.borderLight : T.muted, cursor: disabled ? 'default' : 'pointer',
-    fontFamily:'inherit', fontSize:12,
+    fontSize:12,
   });
 
   return (
     <div>
-      <div style={{display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:8}}>
-        <div style={{fontSize:12, fontWeight:700, color:T.muted, letterSpacing:.5}}>
-          DRAFT ORDER · MY TEAM
-        </div>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:10}}>
+        <SectionLabel>Draft order · my team</SectionLabel>
         <button type="button" onClick={() => setPasteOpen(o => !o)} style={{
           border:'none', background:'none', color:T.primary, cursor:'pointer',
-          fontFamily:'inherit', fontSize:12, fontWeight:600, padding:0,
-        }}>{pasteOpen ? 'Close paste' : 'Paste list'}</button>
+          fontSize:12, fontWeight:600, padding:0,
+        }}>{pasteOpen ? 'Close paste' : 'Paste a list'}</button>
       </div>
+
+      <Note style={{marginBottom:10}}>
+        Order the rows to match your draft's seat 1…{numTeams}, then mark your own team with{' '}
+        <b style={{color:T.text}}>Me</b>. ESPN and Yahoo imports arrive in platform order, not draft
+        order — drag them into place. Sleeper imports already know the seating.
+      </Note>
 
       <div style={{display:'flex', flexDirection:'column', gap:6}}>
         {names.map((nm, i) => {
@@ -271,7 +140,7 @@ function DraftOrderEditor({ numTeams, teamNames, draftPosition, onChange }) {
               }}
               style={{
                 display:'flex', alignItems:'center', gap:8, padding:'6px 8px', borderRadius:T.rsm,
-                border:`1.5px ${isDropTarget ? 'dashed' : 'solid'} ${isDropTarget ? T.primary : isMe ? T.primary : T.border}`,
+                border:`1.5px ${isDropTarget ? 'dashed' : 'solid'} ${isDropTarget || isMe ? T.primary : T.border}`,
                 background: isMe ? T.primaryLight : T.surface,
                 opacity: isDragged ? .45 : 1,
               }}>
@@ -285,62 +154,48 @@ function DraftOrderEditor({ numTeams, teamNames, draftPosition, onChange }) {
                   setDragFrom(i);
                 }}
                 onDragEnd={() => { setDragFrom(null); setDragOver(null); }}
-                style={{cursor:'grab', color:T.muted, fontSize:13, lineHeight:1, padding:'4px 2px', userSelect:'none'}}
+                style={{cursor:'grab', color:T.mutedLight, fontSize:14, lineHeight:1, padding:'4px 2px', userSelect:'none'}}
               >⠿</span>
               <span style={{width:20, textAlign:'center', fontSize:12, fontWeight:700, color:T.muted}}>{i + 1}</span>
-              <input value={nm} onChange={e => setName(i, e.target.value)} placeholder={`Team ${i + 1}`}
-                style={{
-                  flex:1, minWidth:0, padding:'6px 10px', border:`1.5px solid ${T.border}`,
-                  borderRadius:T.rxs, fontSize:13, color:T.text, background:T.surface,
-                  fontFamily:'inherit', outline:'none',
-                }} />
-              <button type="button" title="Move up" onClick={() => swap(i, i - 1)} disabled={i === 0} style={arrow(i === 0)}>↑</button>
-              <button type="button" title="Move down" onClick={() => swap(i, i + 1)} disabled={i === numTeams - 1} style={arrow(i === numTeams - 1)}>↓</button>
-              <button type="button" onClick={() => onChange({ draftPosition: i + 1 })} style={{
-                padding:'5px 11px', borderRadius:T.rxs, cursor:'pointer', fontFamily:'inherit',
-                fontSize:12, fontWeight:700, whiteSpace:'nowrap',
+              <Input value={nm} onChange={e => setName(i, e.target.value)} placeholder={`Team ${i + 1}`}
+                aria-label={`Team in draft slot ${i + 1}`}
+                style={{flex:1, minWidth:0, padding:'6px 10px', fontSize:13}} />
+              <button type="button" aria-label={`Move slot ${i + 1} up`} onClick={() => move(i, i - 1)}
+                disabled={i === 0} style={arrow(i === 0)}>↑</button>
+              <button type="button" aria-label={`Move slot ${i + 1} down`} onClick={() => move(i, i + 1)}
+                disabled={i === numTeams - 1} style={arrow(i === numTeams - 1)}>↓</button>
+              <button type="button" aria-pressed={isMe} onClick={() => onChange({ draftPosition: i + 1 })} style={{
+                padding:'5px 11px', borderRadius:T.rxs, cursor:'pointer',
+                fontSize:12, fontWeight:700, whiteSpace:'nowrap', flexShrink:0,
                 border:`1.5px solid ${isMe ? T.primary : T.border}`,
                 background: isMe ? T.primary : T.surface,
                 color: isMe ? '#fff' : T.muted,
-              }}>{isMe ? '● ME' : 'Me'}</button>
+              }}>{isMe ? '● Me' : 'Me'}</button>
             </div>
           );
         })}
       </div>
 
       {pasteOpen && (
-        <textarea
+        <Textarea
           defaultValue={(teamNames || []).join('\n')}
           onChange={e => bulkPaste(e.target.value)}
           placeholder={'One team name per line — fills the slots above top-to-bottom.'}
           rows={Math.min(numTeams, 6)}
-          style={{
-            width:'100%', boxSizing:'border-box', marginTop:8, padding:'8px 12px',
-            border:`1.5px solid ${T.border}`, borderRadius:T.rsm, fontSize:13, color:T.text,
-            background:T.surface, fontFamily:'inherit', outline:'none', resize:'vertical',
-          }}
-        />
+          style={{marginTop:10, fontSize:13}} />
       )}
-
-      <div style={{fontSize:11, color:T.muted, marginTop:6, lineHeight:1.45}}>
-        Order = draft slot 1…N (snake seats). Reorder to match your draft, then mark your own
-        team with <b style={{color:T.text}}>Me</b>. ESPN/Yahoo imports auto-fill names in platform
-        order — drag them into draft order here. Sleeper imports arrive already in draft order.
-      </div>
     </div>
   );
 }
 
-// ─── LEAGUE SETUP MODAL ──────────────────────────────────────────────────────
-function LeagueSetupModal({ league, onSave, onClose }) {
-  const [form, setForm] = React.useState(league
-    ? {...league, rosterSlots:{...league.rosterSlots}, customScoring:{...DEFAULT_CUSTOM, ...league.customScoring}}
-    : makeLeague());
-  const set = (k, v) => setForm(f => ({...f, [k]: v}));
-  const setSlot = (k, v) => setForm(f => ({...f, rosterSlots:{...f.rosterSlots, [k]: parseInt(v)||0}}));
-  const setCustom = (k, v) => setForm(f => ({...f, customScoring:{...f.customScoring, [k]: parseFloat(v)||0}}));
+// ─── LEAGUE IMPORT PANELS ────────────────────────────────────────────────────
+// One platform at a time. All three used to be stacked open at once, which made
+// the setup modal a wall of credentials for services you weren't using.
+function ImportPanel({ form, setForm }) {
+  const [provider, setProvider] = React.useState(
+    form.sleeperLeagueId ? 'sleeper' : form.yahooLeagueKey ? 'yahoo' : 'espn');
 
-  // Auto-fill the form from a public ESPN league (teams, roster, scoring, names).
+  // ── ESPN (public leagues only — nothing to authorize) ──
   const [espnId, setEspnId] = React.useState(form.espnLeagueId || '');
   const [importing, setImporting] = React.useState(false);
   const [importMsg, setImportMsg] = React.useState(null);
@@ -367,16 +222,15 @@ function LeagueSetupModal({ league, onSave, onClose }) {
           espnLeagueId: d.espnLeagueId || id,
         }));
         setImportMsg({ ok: true,
-          text: `Imported "${d.name}" — ${d.numTeams} teams, ${(d.teamNames || []).length} names, ${d.scoringType}` });
+          text: `Imported “${d.name}” — ${d.numTeams} teams, ${(d.teamNames || []).length} names, ${d.scoringType}` });
       })
       .catch(() => setImportMsg({ ok: false, text: 'Import failed — is the league public?' }))
       .finally(() => setImporting(false));
   };
 
-  // ── Sleeper import (public API — a username or a league id is all it takes) ──
+  // ── Sleeper (public API — a username or a league id is all it takes) ──
   const [sl, setSl] = React.useState({
-    username: '', leagueId: form.sleeperLeagueId || '', leagues: null,
-    busy: false, msg: null,
+    username: '', leagueId: form.sleeperLeagueId || '', leagues: null, busy: false, msg: null,
   });
   const slSet = patch => setSl(s => ({ ...s, ...patch }));
   const slPost = (url, body, onOk) => {
@@ -419,11 +273,11 @@ function LeagueSetupModal({ league, onSave, onClose }) {
       }));
       const seat = d.draftPosition ? `, your seat #${d.draftPosition}` : '';
       slSet({ leagueId: d.sleeperLeagueId || id, msg: { ok: true,
-        text: `Imported "${d.name}" — ${d.numTeams} teams${seat}, ${d.scoringType}${d.sleeperDraftId ? ' · draft linked' : ''}` } });
+        text: `Imported “${d.name}” — ${d.numTeams} teams${seat}, ${d.scoringType}${d.sleeperDraftId ? ' · draft linked' : ''}` } });
     });
   };
 
-  // ── Yahoo OAuth import (multi-step: credentials -> authorize -> pick league) ──
+  // ── Yahoo OAuth (multi-step: credentials → authorize → pick league) ──
   const [yh, setYh] = React.useState({
     clientId: '', clientSecret: '', redirectUri: 'https://localhost/',
     authUrl: '', code: '', leagues: null, leagueKey: '', busy: false, msg: null,
@@ -446,12 +300,16 @@ function LeagueSetupModal({ league, onSave, onClose }) {
   };
   const yahooConnect = () => {
     const useStored = yh.credsSaved && !yh.showCredForm;
-    if (!useStored && (!yh.clientId.trim() || !yh.clientSecret.trim())) { yhSet({ msg: { ok: false, text: 'Enter Client ID and Secret' } }); return; }
+    if (!useStored && (!yh.clientId.trim() || !yh.clientSecret.trim())) {
+      yhSet({ msg: { ok: false, text: 'Enter Client ID and Secret' } }); return;
+    }
     const body = useStored
       ? { redirectUri: yh.redirectUri.trim() }
       : { clientId: yh.clientId.trim(), clientSecret: yh.clientSecret.trim(), redirectUri: yh.redirectUri.trim() };
-    yhPost('/api/yahoo/connect', body,
-      d => { yhSet({ authUrl: d.authUrl, msg: { ok: true, text: 'Authorize in the opened tab, then paste the code below.' } }); window.open(d.authUrl, '_blank'); });
+    yhPost('/api/yahoo/connect', body, d => {
+      yhSet({ authUrl: d.authUrl, msg: { ok: true, text: 'Authorize in the opened tab, then paste the code below.' } });
+      window.open(d.authUrl, '_blank');
+    });
   };
   const yahooExchange = () => {
     if (!yh.code.trim()) { yhSet({ msg: { ok: false, text: 'Paste the authorization code' } }); return; }
@@ -469,9 +327,153 @@ function LeagueSetupModal({ league, onSave, onClose }) {
         importedScoring: d.scoring || null,
         teamNames: d.teamNames || [], yahooLeagueKey: d.yahooLeagueKey,
       }));
-      yhSet({ msg: { ok: true, text: `Imported "${d.name}" — ${d.numTeams} teams, ${(d.teamNames || []).length} names, ${d.scoringType}` } });
+      yhSet({ msg: { ok: true, text: `Imported “${d.name}” — ${d.numTeams} teams, ${(d.teamNames || []).length} names, ${d.scoringType}` } });
     });
   };
+
+  const status = msg => msg && (
+    <Note tone={msg.ok ? 'ok' : 'error'} style={{marginTop:10}}>{msg.text}</Note>
+  );
+
+  return (
+    <div>
+      <Note tone="info" style={{marginBottom:16}}>
+        Importing fills in teams, roster slots, scoring, and your league-mates' names, so you can
+        skip the rest of this form. Setting a league up by hand works too — use the tabs above.
+      </Note>
+
+      <Field label="Where is your league?">
+        <SegmentedControl name="provider" value={provider} onChange={setProvider} options={[
+          { value: 'espn',    label: 'ESPN',    hint: 'Public leagues' },
+          { value: 'sleeper', label: 'Sleeper', hint: 'No login' },
+          { value: 'yahoo',   label: 'Yahoo',   hint: 'OAuth' },
+        ]} />
+      </Field>
+
+      {provider === 'espn' && (
+        <div>
+          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+            <Input value={espnId} onChange={e=>setEspnId(e.target.value)}
+              aria-label="ESPN league ID"
+              placeholder="ESPN League ID (e.g. 75034031)" style={{flex:1}} />
+            <Btn onClick={importEspn} disabled={importing || !espnId.trim()}>
+              {importing ? 'Importing…' : 'Import'}
+            </Btn>
+          </div>
+          {status(importMsg)}
+          <div style={{marginTop:8, fontSize:11.5, color:T.muted, lineHeight:1.5}}>
+            Find the ID in your ESPN league URL: <code>…/leagues/<b>THIS</b></code>. Private leagues
+            can't be read without credentials — set those up by hand on the other tabs.
+          </div>
+        </div>
+      )}
+
+      {provider === 'sleeper' && (
+        <div>
+          <div style={{display:'flex', gap:8, alignItems:'center'}}>
+            <Input value={sl.username} onChange={e=>slSet({username:e.target.value})}
+              aria-label="Sleeper username" placeholder="Sleeper username" style={{flex:1}} />
+            <Btn variant="secondary" onClick={sleeperFindLeagues} disabled={sl.busy || !sl.username.trim()}>
+              {sl.busy ? '…' : 'Find leagues'}
+            </Btn>
+          </div>
+          <div style={{display:'flex', gap:8, alignItems:'center', marginTop:8}}>
+            <div style={{flex:1}}>
+              {sl.leagues && sl.leagues.length ? (
+                <Select value={sl.leagueId} onChange={e=>slSet({leagueId:e.target.value})}
+                  aria-label="Sleeper league"
+                  options={sl.leagues.map(l=>({value:l.leagueId, label:`${l.name} (${l.season}, ${l.totalRosters} teams)`}))} />
+              ) : (
+                <Input value={sl.leagueId} onChange={e=>slSet({leagueId:e.target.value})}
+                  aria-label="Sleeper league ID" placeholder="…or paste a Sleeper League ID" />
+              )}
+            </div>
+            <Btn onClick={sleeperImport} disabled={sl.busy || !(sl.leagueId||'').trim()}>Import</Btn>
+          </div>
+          {status(sl.msg)}
+          <div style={{marginTop:8, fontSize:11.5, color:T.muted, lineHeight:1.5}}>
+            The most complete import: names arrive already in <b>draft-slot order</b> with your own
+            seat set, and the draft is linked so the board can follow picks live.
+          </div>
+        </div>
+      )}
+
+      {provider === 'yahoo' && (
+        <div>
+          {!yh.leagues ? (
+            <>
+              {yh.credsSaved && !yh.showCredForm ? (
+                <div style={{fontSize:12.5, color:T.text, marginBottom:8}}>
+                  ✓ Yahoo credentials saved on this machine.{' '}
+                  <button onClick={()=>yhSet({showCredForm:true})} style={{
+                    background:'none', border:'none', padding:0, color:T.primary,
+                    cursor:'pointer', textDecoration:'underline', fontSize:12.5,
+                  }}>Use different credentials</button>
+                </div>
+              ) : (
+                <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
+                  <Input value={yh.clientId} onChange={e=>yhSet({clientId:e.target.value})}
+                    aria-label="Yahoo client ID" placeholder="Client ID (Consumer Key)" />
+                  <Input value={yh.clientSecret} onChange={e=>yhSet({clientSecret:e.target.value})}
+                    aria-label="Yahoo client secret" placeholder="Client Secret" type="password" />
+                </div>
+              )}
+              <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
+                <Input value={yh.redirectUri} onChange={e=>yhSet({redirectUri:e.target.value})}
+                  aria-label="Redirect URI" placeholder="Redirect URI" style={{flex:1}} />
+                <Btn variant="secondary" onClick={yahooConnect} disabled={yh.busy}>
+                  {yh.busy ? '…' : 'Get authorize link'}
+                </Btn>
+              </div>
+              {yh.authUrl && (
+                <div style={{marginTop:10}}>
+                  <a href={yh.authUrl} target="_blank" rel="noreferrer"
+                    style={{fontSize:12.5, color:T.primary, fontWeight:600}}>
+                    Open Yahoo authorize page ↗
+                  </a>
+                  <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
+                    <Input value={yh.code} onChange={e=>yhSet({code:e.target.value})}
+                      aria-label="Yahoo authorization code"
+                      placeholder="Paste authorization code" style={{flex:1}} />
+                    <Btn onClick={yahooExchange} disabled={yh.busy}>Connect</Btn>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{display:'flex', gap:8, alignItems:'center'}}>
+              <div style={{flex:1}}>
+                <Select value={yh.leagueKey} onChange={e=>yhSet({leagueKey:e.target.value})}
+                  aria-label="Yahoo league"
+                  options={yh.leagues.map(l=>({value:l.league_key, label:`${l.name}${l.season?` (${l.season})`:''}`}))} />
+              </div>
+              <Btn onClick={yahooImport} disabled={yh.busy || !yh.leagueKey}>Import</Btn>
+            </div>
+          )}
+          {status(yh.msg)}
+          <div style={{marginTop:8, fontSize:11.5, color:T.muted, lineHeight:1.5}}>
+            Register a free app at developer.yahoo.com (Installed App · Fantasy → Read · redirect{' '}
+            <b>https://localhost/</b>). After authorizing, copy the <b>code</b> from the address bar.
+            Yahoo has no projections, so those stay from the consensus. Your secret is stored only
+            on this machine.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── LEAGUE SETUP MODAL ──────────────────────────────────────────────────────
+// Four tabs instead of one long scroll: import, the handful of settings that
+// actually change rankings, roster slots, and the draft seating.
+function LeagueSetupModal({ league, onSave, onClose }) {
+  const [form, setForm] = React.useState(league
+    ? {...league, rosterSlots:{...league.rosterSlots}, customScoring:{...DEFAULT_CUSTOM, ...league.customScoring}}
+    : makeLeague());
+  const [tab, setTab] = React.useState(league ? 'basics' : 'import');
+  const set = (k, v) => setForm(f => ({...f, [k]: v}));
+  const setSlot = (k, v) => setForm(f => ({...f, rosterSlots:{...f.rosterSlots, [k]: parseInt(v)||0}}));
+  const setCustom = (k, v) => setForm(f => ({...f, customScoring:{...f.customScoring, [k]: parseFloat(v)||0}}));
 
   const FLEX_SLOT_LABELS = { WRTE:'W/T flex', RBWR:'R/W flex', SUPERFLEX:'Superflex', OP:'Superflex' };
   const slotFields = [
@@ -483,245 +485,151 @@ function LeagueSetupModal({ league, onSave, onClose }) {
       .map(fk => ({ k: fk, label: FLEX_SLOT_LABELS[fk] })),
     {k:'K',label:'K'},{k:'DST',label:'DST'},{k:'BN',label:'Bench'},
   ];
+  const totalSlots = rosterTotal(form.rosterSlots);
+
+  const TABS = [
+    { id:'import', label:'Import' },
+    { id:'basics', label:'Basics' },
+    { id:'roster', label:'Roster & scoring' },
+    { id:'order',  label:'Draft order' },
+  ];
 
   return (
-    <Modal title={league ? 'Edit League' : 'Add New League'} onClose={onClose} width={600}>
-      <div style={{marginBottom:16, padding:12, background:T.surfaceAlt, borderRadius:T.r, border:`1px solid ${T.border}`}}>
-        <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:8, letterSpacing:.5}}>
-          IMPORT FROM ESPN (public league)
-        </div>
-        <div style={{display:'flex', gap:8, alignItems:'center'}}>
-          <Input value={espnId} onChange={e=>setEspnId(e.target.value)}
-            placeholder="ESPN League ID (e.g. 75034031)" style={{flex:1}} />
-          <Btn variant="ghost" onClick={importEspn} disabled={importing || !espnId.trim()}>
-            {importing ? 'Importing…' : 'Import'}
-          </Btn>
-        </div>
-        {importMsg && (
-          <div style={{marginTop:8, fontSize:12, color: importMsg.ok ? T.primary : '#c0392b'}}>
-            {(importMsg.ok ? '✓ ' : '⚠ ') + importMsg.text}
-          </div>
-        )}
-        <div style={{marginTop:6, fontSize:11, color:T.muted}}>
-          Auto-fills teams, roster, scoring, and your league-mates' names. Find the ID in your
-          ESPN league URL (…/leagues/<b>THIS</b>).
-        </div>
+    <Modal
+      title={league ? `Edit ${league.name}` : 'Add a league'}
+      subtitle="Everything here feeds the projections and the draft board."
+      onClose={onClose} width={640}
+      footer={
+        <>
+          <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={() => onSave(form)}>{league ? 'Save changes' : 'Add league'}</Btn>
+        </>
+      }>
+      <div className="da-no-scrollbar" role="tablist" style={{
+        display:'flex', gap:4, marginBottom:20, borderBottom:`1px solid ${T.border}`,
+        overflowX:'auto',
+      }}>
+        {TABS.map(t => (
+          <button key={t.id} role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}
+            style={{
+              background:'none', border:'none', cursor:'pointer', padding:'8px 12px',
+              fontSize:13, fontWeight: tab === t.id ? 700 : 600, whiteSpace:'nowrap',
+              color: tab === t.id ? T.primary : T.muted,
+              borderBottom:`2px solid ${tab === t.id ? T.primary : 'transparent'}`,
+              marginBottom:-1,
+            }}>{t.label}</button>
+        ))}
       </div>
 
-      <div style={{marginBottom:16, padding:12, background:T.surfaceAlt, borderRadius:T.r, border:`1px solid ${T.border}`}}>
-        <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:8, letterSpacing:.5}}>
-          IMPORT FROM SLEEPER (no login needed)
-        </div>
-        <div style={{display:'flex', gap:8, alignItems:'center'}}>
-          <Input value={sl.username} onChange={e=>slSet({username:e.target.value})}
-            placeholder="Sleeper username" style={{flex:1}} />
-          <Btn variant="ghost" onClick={sleeperFindLeagues} disabled={sl.busy || !sl.username.trim()}>
-            {sl.busy ? '…' : 'Find leagues'}
-          </Btn>
-        </div>
-        <div style={{display:'flex', gap:8, alignItems:'center', marginTop:8}}>
-          <div style={{flex:1}}>
-            {sl.leagues && sl.leagues.length ? (
-              <Select value={sl.leagueId} onChange={e=>slSet({leagueId:e.target.value})}
-                options={sl.leagues.map(l=>({value:l.leagueId, label:`${l.name} (${l.season}, ${l.totalRosters} teams)`}))} />
-            ) : (
-              <Input value={sl.leagueId} onChange={e=>slSet({leagueId:e.target.value})}
-                placeholder="…or paste a Sleeper League ID" />
-            )}
-          </div>
-          <Btn variant="ghost" onClick={sleeperImport} disabled={sl.busy || !(sl.leagueId||'').trim()}>Import</Btn>
-        </div>
-        {sl.msg && (
-          <div style={{marginTop:8, fontSize:12, color: sl.msg.ok ? T.primary : '#c0392b'}}>
-            {(sl.msg.ok ? '✓ ' : '⚠ ') + sl.msg.text}
-          </div>
-        )}
-        <div style={{marginTop:6, fontSize:11, color:T.muted, lineHeight:1.45}}>
-          Imports teams, roster, scoring, and league-mates — with names already in <b>draft-slot
-          order</b> and your own seat set for you. Links the draft too, so the board can follow
-          picks live from the draft screen.
-        </div>
-      </div>
+      {tab === 'import' && <ImportPanel form={form} setForm={setForm} />}
 
-      <div style={{marginBottom:16, padding:12, background:T.surfaceAlt, borderRadius:T.r, border:`1px solid ${T.border}`}}>
-        <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:8, letterSpacing:.5}}>
-          IMPORT FROM YAHOO (OAuth)
-        </div>
-        {!yh.leagues ? (
-          <>
-            {yh.credsSaved && !yh.showCredForm ? (
-              <div style={{fontSize:12, color:T.text, marginBottom:4}}>
-                ✓ Yahoo credentials saved on this machine.{' '}
-                <a onClick={()=>yhSet({showCredForm:true})} style={{color:T.muted, cursor:'pointer', textDecoration:'underline'}}>use different</a>
-              </div>
-            ) : (
-              <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
-                <Input value={yh.clientId} onChange={e=>yhSet({clientId:e.target.value})} placeholder="Client ID (Consumer Key)" />
-                <Input value={yh.clientSecret} onChange={e=>yhSet({clientSecret:e.target.value})} placeholder="Client Secret" type="password" />
-              </div>
-            )}
-            <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
-              <Input value={yh.redirectUri} onChange={e=>yhSet({redirectUri:e.target.value})} placeholder="Redirect URI" style={{flex:1}} />
-              <Btn variant="ghost" onClick={yahooConnect} disabled={yh.busy}>{yh.busy?'…':(yh.credsSaved && !yh.showCredForm ?'Get authorize link':'Get link')}</Btn>
-            </div>
-            {yh.authUrl && (
-              <div style={{marginTop:8}}>
-                <a href={yh.authUrl} target="_blank" rel="noreferrer" style={{fontSize:12, color:T.primary, fontWeight:600}}>
-                  Open Yahoo authorize page ↗
-                </a>
-                <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
-                  <Input value={yh.code} onChange={e=>yhSet({code:e.target.value})} placeholder="Paste authorization code" style={{flex:1}} />
-                  <Btn variant="ghost" onClick={yahooExchange} disabled={yh.busy}>Connect</Btn>
-                </div>
-              </div>
-            )}
-          </>
-        ) : (
-          <div style={{display:'flex', gap:8, alignItems:'center'}}>
-            <div style={{flex:1}}>
-              <Select value={yh.leagueKey} onChange={e=>yhSet({leagueKey:e.target.value})}
-                options={yh.leagues.map(l=>({value:l.league_key, label:`${l.name}${l.season?` (${l.season})`:''}`}))} />
-            </div>
-            <Btn variant="ghost" onClick={yahooImport} disabled={yh.busy || !yh.leagueKey}>Import</Btn>
+      {tab === 'basics' && (
+        <div>
+          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:14}}>
+            <Field label="League name">
+              <Input value={form.name} onChange={e=>set('name',e.target.value)} />
+            </Field>
+            <Field label="Platform">
+              <Select value={form.platform} onChange={e=>set('platform',e.target.value)}
+                options={PLATFORMS.map(p=>({value:p,label:p}))} />
+            </Field>
+            <Field label="Teams">
+              <Select value={form.numTeams} onChange={e=>set('numTeams',parseInt(e.target.value))}
+                options={[8,10,12,14,16,18,20].map(n=>({value:n,label:`${n} teams`}))} />
+            </Field>
+            <Field label="My team" hint="draft slot">
+              {(form.teamNames || []).some(Boolean) ? (
+                <Select value={form.draftPosition}
+                  onChange={e=>set('draftPosition',parseInt(e.target.value)||1)}
+                  options={Array.from({length: form.numTeams}, (_, i) => {
+                    const nm = (form.teamNames || [])[i];
+                    return { value: i+1, label: nm ? `${i+1} — ${nm}` : `${i+1} — (slot ${i+1})` };
+                  })} />
+              ) : (
+                <Input type="number" value={form.draftPosition}
+                  onChange={e=>set('draftPosition',parseInt(e.target.value)||1)}
+                  min={1} max={form.numTeams} />
+              )}
+            </Field>
           </div>
-        )}
-        {yh.msg && (
-          <div style={{marginTop:8, fontSize:12, color: yh.msg.ok ? T.primary : '#c0392b'}}>
-            {(yh.msg.ok ? '✓ ' : '⚠ ') + yh.msg.text}
-          </div>
-        )}
-        <div style={{marginTop:6, fontSize:11, color:T.muted, lineHeight:1.45}}>
-          Register a free app at developer.yahoo.com (Installed App · Fantasy → Read · redirect
-          <b> https://localhost/</b>). After authorizing, copy the <b>code</b> from the address bar.
-          Imports settings + names (Yahoo has no projections — those stay from the consensus). Your
-          secret is stored only on this machine.
-        </div>
-      </div>
 
-      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
-        <Field label="League Name">
-          <Input value={form.name} onChange={e=>set('name',e.target.value)} />
-        </Field>
-        <Field label="Platform">
-          <Select value={form.platform} onChange={e=>set('platform',e.target.value)}
-            options={PLATFORMS.map(p=>({value:p,label:p}))} />
-        </Field>
-        <Field label="Teams">
-          <Select value={form.numTeams} onChange={e=>set('numTeams',parseInt(e.target.value))}
-            options={[8,10,12,14,16,18,20].map(n=>({value:n,label:`${n} teams`}))} />
-        </Field>
-        <Field label="My Team">
-          {(form.teamNames || []).some(Boolean) ? (
-            <Select value={form.draftPosition}
-              onChange={e=>set('draftPosition',parseInt(e.target.value)||1)}
-              options={Array.from({length: form.numTeams}, (_, i) => {
-                const nm = (form.teamNames || [])[i];
-                return { value: i+1, label: nm ? `${i+1} — ${nm}` : `${i+1} — (slot ${i+1})` };
-              })} />
-          ) : (
-            <Input type="number" value={form.draftPosition}
-              onChange={e=>set('draftPosition',parseInt(e.target.value)||1)}
-              min={1} max={form.numTeams} />
-          )}
-        </Field>
-      </div>
-
-      <Field label="Scoring Format">
-        <div style={{display:'flex', gap:8}}>
-          {Object.entries(SCORING_LABELS).map(([v,l]) => (
-            <label key={v} style={{
-              flex:1, border:`1.5px solid ${form.scoringType===v ? T.primary : T.border}`,
-              borderRadius:T.rsm, padding:'8px 12px', cursor:'pointer', textAlign:'center',
-              background: form.scoringType===v ? T.primaryLight : T.surface,
-              color: form.scoringType===v ? T.primary : T.text,
-              fontSize:13, fontWeight:600,
-            }}>
-              <input type="radio" name="scoring" value={v} checked={form.scoringType===v}
-                onChange={()=>set('scoringType',v)} style={{display:'none'}} />
-              {l}
-            </label>
-          ))}
-        </div>
-      </Field>
-
-      <Field label="Draft Type">
-        <div style={{display:'flex', gap:8, alignItems:'center'}}>
-          {[['snake','Snake'],['auction','Auction']].map(([v,l]) => (
-            <label key={v} style={{
-              flex:1, border:`1.5px solid ${(form.draftType||'snake')===v ? T.primary : T.border}`,
-              borderRadius:T.rsm, padding:'8px 12px', cursor:'pointer', textAlign:'center',
-              background: (form.draftType||'snake')===v ? T.primaryLight : T.surface,
-              color: (form.draftType||'snake')===v ? T.primary : T.text,
-              fontSize:13, fontWeight:600,
-            }}>
-              <input type="radio" name="draftType" value={v} checked={(form.draftType||'snake')===v}
-                onChange={()=>set('draftType',v)} style={{display:'none'}} />
-              {l}
-            </label>
-          ))}
+          <Field label="Draft type">
+            <SegmentedControl name="draftType" value={form.draftType || 'snake'}
+              onChange={v => set('draftType', v)}
+              options={[{value:'snake', label:'Snake'}, {value:'auction', label:'Auction'}]} />
+          </Field>
           {(form.draftType||'snake') === 'auction' && (
-            <div style={{flex:1, display:'flex', alignItems:'center', gap:6}}>
-              <span style={{fontSize:12, fontWeight:600, color:T.muted, whiteSpace:'nowrap'}}>Budget $</span>
+            <Field label="Auction budget per team">
               <Input type="number" value={form.auctionBudget || 200} min={1}
-                onChange={e=>set('auctionBudget', Math.max(1, parseInt(e.target.value)||200))} />
-            </div>
+                onChange={e=>set('auctionBudget', Math.max(1, parseInt(e.target.value)||200))}
+                style={{width:140}} />
+            </Field>
           )}
-        </div>
-      </Field>
-
-      {form.scoringType === 'custom' && (
-        <div style={{marginTop:16, padding:16, background:T.surfaceAlt, borderRadius:T.r, border:`1px solid ${T.border}`}}>
-          <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:12, letterSpacing:.5}}>CUSTOM SCORING</div>
-          <div style={{display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12}}>
-            {[
-              {k:'passTD', l:'Pass TD'},
-              {k:'passYds', l:'Yds/Pass Pt', hint:'yds per 1 pt'},
-              {k:'passInt', l:'Interception'},
-              {k:'sackTaken', l:'Sack (off)', hint:'per QB sack'},
-              {k:'rushTD', l:'Rush TD'},
-              {k:'rushYds', l:'Yds/Rush Pt', hint:'yds per 1 pt'},
-              {k:'recTD', l:'Rec TD'},
-              {k:'recYds', l:'Yds/Rec Pt', hint:'yds per 1 pt'},
-              {k:'reception', l:'Reception (PPR)', step:0.05, hint:'e.g. 0.25'},
-              {k:'twoPt', l:'2-PT Conv'},
-              {k:'fumbleLost', l:'Fumble Lost'},
-              {k:'fumble', l:'Fumble', hint:'any fumble'},
-              {k:'fumRetTD', l:'Off Fum Ret TD'},
-            ].map(({k,l,hint,step}) => (
-              <Field key={k} label={l} hint={hint}>
-                <Input type="number" value={form.customScoring[k]}
-                  onChange={e=>setCustom(k,e.target.value)} step={step||0.5} />
-              </Field>
-            ))}
-          </div>
         </div>
       )}
 
-      <div style={{marginTop:20}}>
-        <div style={{fontSize:12, fontWeight:700, color:T.muted, marginBottom:12, letterSpacing:.5}}>ROSTER SLOTS</div>
-        <div style={{display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12}}>
-          {slotFields.map(({k,label}) => (
-            <Field key={k} label={label}>
-              <Input type="number" value={form.rosterSlots[k]||0}
-                onChange={e=>setSlot(k,e.target.value)} min={0} max={10} />
-            </Field>
-          ))}
-        </div>
-      </div>
+      {tab === 'roster' && (
+        <div>
+          <Field label="Scoring format">
+            <SegmentedControl name="scoring" value={form.scoringType}
+              onChange={v => set('scoringType', v)}
+              options={Object.entries(SCORING_LABELS).map(([v,l]) => ({value:v, label:l}))} />
+          </Field>
 
-      <div style={{marginTop:20}}>
+          {form.scoringType === 'custom' && (
+            <div style={{marginTop:4, marginBottom:20, padding:16, background:T.surfaceAlt, borderRadius:T.r, border:`1px solid ${T.border}`}}>
+              <SectionLabel style={{marginBottom:12}}>Custom scoring</SectionLabel>
+              <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(128px,1fr))', gap:12}}>
+                {[
+                  {k:'passTD', l:'Pass TD'},
+                  {k:'passYds', l:'Yds / pass pt', hint:'yds per 1 pt'},
+                  {k:'passInt', l:'Interception'},
+                  {k:'sackTaken', l:'Sack taken', hint:'per QB sack'},
+                  {k:'rushTD', l:'Rush TD'},
+                  {k:'rushYds', l:'Yds / rush pt', hint:'yds per 1 pt'},
+                  {k:'recTD', l:'Rec TD'},
+                  {k:'recYds', l:'Yds / rec pt', hint:'yds per 1 pt'},
+                  {k:'reception', l:'Per reception', step:0.05, hint:'e.g. 0.25'},
+                  {k:'twoPt', l:'2-pt conversion'},
+                  {k:'fumbleLost', l:'Fumble lost'},
+                  {k:'fumble', l:'Any fumble'},
+                  {k:'fumRetTD', l:'Off. fum. ret. TD'},
+                ].map(({k,l,hint,step}) => (
+                  <Field key={k} label={l} hint={hint} style={{marginBottom:0}}>
+                    <Input type="number" value={form.customScoring[k]}
+                      onChange={e=>setCustom(k,e.target.value)} step={step||0.5} />
+                  </Field>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', margin:'22px 0 12px'}}>
+            <SectionLabel>Roster slots</SectionLabel>
+            <span style={{fontSize:12, color:T.muted}}>{totalSlots} total · {totalSlots} rounds</span>
+          </div>
+          <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(128px,1fr))', gap:12}}>
+            {slotFields.map(({k,label}) => (
+              <Field key={k} label={label} style={{marginBottom:0}}>
+                <Input type="number" value={form.rosterSlots[k]||0}
+                  onChange={e=>setSlot(k,e.target.value)} min={0} max={10} />
+              </Field>
+            ))}
+          </div>
+          <Note style={{marginTop:18}}>
+            Projections are stored as raw stats, so changing scoring here re-ranks the whole board
+            immediately — no re-pull needed.
+          </Note>
+        </div>
+      )}
+
+      {tab === 'order' && (
         <DraftOrderEditor
           numTeams={form.numTeams}
           teamNames={form.teamNames}
           draftPosition={form.draftPosition}
-          onChange={patch => setForm(f => ({ ...f, ...patch }))}
-        />
-      </div>
-
-      <div style={{display:'flex', justifyContent:'flex-end', gap:10, marginTop:24, paddingTop:20, borderTop:`1px solid ${T.border}`}}>
-        <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn onClick={() => onSave(form)}>Save League</Btn>
-      </div>
+          onChange={patch => setForm(f => ({ ...f, ...patch }))} />
+      )}
     </Modal>
   );
 }
@@ -786,6 +694,7 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
   const [statsSeason, setStats] = React.useState(currentYear - 1);
   const [skipFf, setSkipFf]     = React.useState(false);
   const [history, setHistory]   = React.useState(3);
+  const [advanced, setAdvanced] = React.useState(false);
   const task = useTask();
 
   // ADP board + league size derived from league settings — not user-facing.
@@ -806,147 +715,124 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
     })
       .then(r => r.json())
       .then(data => {
-        if (data.error) { alert(data.error); return; }
+        if (data.error) { toast(data.error, 'error', 6000); return; }
         task.start(data.taskId);
       })
-      .catch(err => alert(String(err)));
+      .catch(err => toast(String(err), 'error', 6000));
   };
 
   const handleDone = () => {
+    const n = task.result && task.result.players;
     task.reset();
     onComplete();
     onClose();
+    if (n) toast(`${n} players loaded.`, 'ok');
   };
 
+  const busy = task.status === 'running';
+
   return (
-    <Modal title="Pull Player Data" onClose={onClose} width={520}>
-      {task.status === 'running' && (
-        <div style={{textAlign:'center', padding:'40px 0'}}>
-          <div className="loading-spinner" style={{margin:'0 auto 16px'}} />
-          <div style={{fontSize:14, fontWeight:600, color:T.text}}>Pulling data...</div>
-          <div style={{fontSize:12, color:T.muted, marginTop:4}}>This may take 30-60 seconds.</div>
+    <Modal title="Pull player data" onClose={onClose} width={540} dismissible={!busy}
+      subtitle={busy ? null : 'Projections, ADP, and recent stats from the free consensus sources.'}
+      footer={task.status ? null : (
+        <>
+          <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={handlePull}>Pull data</Btn>
+        </>
+      )}>
+      {busy && (
+        <div className="loading-screen" style={{height:200}}>
+          <Spinner />
+          <div style={{textAlign:'center'}}>
+            <div style={{fontSize:14, fontWeight:600, color:T.text}}>Pulling data…</div>
+            <div style={{fontSize:12.5, color:T.muted, marginTop:4}}>Usually 30–60 seconds. You can leave this open.</div>
+          </div>
         </div>
       )}
 
       {task.status === 'done' && (
-        <div style={{textAlign:'center', padding:'30px 0'}}>
-          <div style={{fontSize:28, marginBottom:12, color:T.green}}>&#10003;</div>
-          <div style={{fontSize:16, fontWeight:700, color:T.text, marginBottom:8}}>Data Pulled Successfully</div>
-          <div style={{fontSize:14, color:T.muted, marginBottom:6}}>
+        <div style={{textAlign:'center', padding:'12px 0'}}>
+          <div style={{fontSize:15.5, fontWeight:700, color:T.text, marginBottom:6}}>
             {task.result?.players} players loaded
           </div>
-          {task.result?.consensusPlayers > 0 && (
-            <div style={{fontSize:12, color:T.muted, marginBottom:6}}>
-              Consensus projections: {task.result.consensusPlayers} players
-            </div>
-          )}
-          {task.result?.historySeasons?.length > 0 && (
-            <div style={{fontSize:12, color:T.muted, marginBottom:6}}>
-              History seasons kept: {task.result.historySeasons.join(', ')}
-            </div>
-          )}
+          <div style={{fontSize:12.5, color:T.muted}}>
+            {task.result?.consensusPlayers > 0 && `${task.result.consensusPlayers} with consensus projections`}
+            {task.result?.historySeasons?.length > 0 && ` · history ${task.result.historySeasons.join(', ')}`}
+          </div>
+
           {task.result?.warnings?.length > 0 && (
-            <div style={{textAlign:'left', margin:'14px auto 0', maxWidth:400, background:T.amberLight,
-              border:`1.5px solid ${T.amber}`, borderRadius:T.rsm, padding:'10px 14px'}}>
-              <div style={{fontSize:13, fontWeight:700, color:T.amber, marginBottom:4}}>
-                &#9888; Single-source projections
-              </div>
-              {task.result.warnings.map((w, i) => (
-                <div key={i} style={{fontSize:12, color:T.text, lineHeight:1.5}}>{w}</div>
-              ))}
-            </div>
+            <Note tone="warn" style={{textAlign:'left', marginTop:16}}>
+              <b>Single-source projections</b>
+              {task.result.warnings.map((w, i) => <div key={i} style={{marginTop:3}}>{w}</div>)}
+            </Note>
           )}
+
           {task.result?.reports && (
-            <div style={{textAlign:'left', margin:'16px auto', maxWidth:400, background:T.surfaceAlt,
-              borderRadius:T.rsm, padding:12, fontSize:12}}>
+            <div style={{textAlign:'left', marginTop:16, background:T.surfaceAlt,
+              borderRadius:T.rsm, padding:'10px 14px', fontSize:12.5}}>
               {task.result.reports.map((r, i) => (
                 <div key={i} style={{display:'flex', justifyContent:'space-between', padding:'3px 0',
-                  color: r.ok ? T.text : T.muted}}>
+                  color: r.ok ? T.text : T.mutedLight}}>
                   <span>{r.source}</span>
-                  <span>{r.ok ? `${r.records} records` : 'skipped'}</span>
+                  <span className="da-num">{r.ok ? `${r.records} records` : 'skipped'}</span>
                 </div>
               ))}
             </div>
           )}
-          <Btn onClick={handleDone}>Done</Btn>
+          <Btn onClick={handleDone} style={{marginTop:18}}>Done</Btn>
         </div>
       )}
 
       {task.status === 'error' && (
-        <div style={{textAlign:'center', padding:'30px 0'}}>
-          <div style={{fontSize:28, marginBottom:12, color:T.red}}>!</div>
-          <div style={{fontSize:14, fontWeight:600, color:T.red, marginBottom:8}}>Pull Failed</div>
-          <div style={{fontSize:12, color:T.muted, marginBottom:16, maxWidth:400, margin:'0 auto 16px',
-            wordBreak:'break-word'}}>{task.error}</div>
+        <div style={{textAlign:'center', padding:'12px 0'}}>
+          <div style={{fontSize:14, fontWeight:700, color:T.red, marginBottom:8}}>Pull failed</div>
+          <div style={{fontSize:12.5, color:T.muted, marginBottom:18, wordBreak:'break-word'}}>{task.error}</div>
           <div style={{display:'flex', gap:8, justifyContent:'center'}}>
-            <Btn variant="ghost" onClick={() => task.reset()}>Try Again</Btn>
-            <Btn variant="ghost" onClick={onClose}>Close</Btn>
+            <Btn onClick={() => task.reset()}>Try again</Btn>
+            <Btn variant="secondary" onClick={onClose}>Close</Btn>
           </div>
         </div>
       )}
 
       {!task.status && (
         <>
-          <Field label="Data Source">
-            <div style={{display:'flex', gap:8}}>
-              {[
-                {v:'free', l:'Free Sources', hint:'No dependencies'},
-                {v:'full', l:'Full Collect', hint:'Free sources + nfl_data_py'},
-              ].map(({v, l, hint}) => (
-                <label key={v} style={{
-                  flex:1, border:`1.5px solid ${mode===v ? T.primary : T.border}`,
-                  borderRadius:T.rsm, padding:'10px 14px', cursor:'pointer',
-                  background: mode===v ? T.primaryLight : T.surface,
-                }}>
-                  <input type="radio" name="pullMode" value={v} checked={mode===v}
-                    onChange={() => setMode(v)} style={{display:'none'}} />
-                  <div style={{fontSize:13, fontWeight:600, color: mode===v ? T.primary : T.text}}>{l}</div>
-                  <div style={{fontSize:11, color:T.muted, marginTop:2}}>{hint}</div>
-                </label>
-              ))}
-            </div>
+          <Field label="Source">
+            <SegmentedControl name="pullMode" value={mode} onChange={setMode} options={[
+              { value:'free', label:'Free sources', hint:'No extra packages' },
+              { value:'full', label:'Full collect', hint:'Adds nfl_data_py' },
+            ]} />
           </Field>
 
-          <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
-            <Field label="Projection Season">
-              <Input type="number" value={season} onChange={e => setSeason(parseInt(e.target.value) || currentYear)} />
-            </Field>
-            <Field label="Stats Season" hint="most recent">
-              <Input type="number" value={statsSeason} onChange={e => setStats(parseInt(e.target.value) || currentYear-1)} />
-            </Field>
-            <Field label="History Seasons" hint="years of stats">
-              <Input type="number" value={history} onChange={e => setHistory(parseInt(e.target.value) || 3)}
-                min={1} max={5} />
-            </Field>
-          </div>
+          <Note style={{marginBottom:16}}>
+            Full collect is a superset: it pulls the same free sources, then enriches them. ADP is
+            matched to this league automatically — <b style={{color:T.text}}>
+            {adpFormat === 'ppr' ? 'PPR' : adpFormat === 'half-ppr' ? 'Half PPR' : 'Standard'}, {Math.min(teams,14)} teams</b>.
+          </Note>
 
-          <div style={{marginTop:8}}>
-            <label style={{display:'flex', alignItems:'center', gap:8, fontSize:13, color:T.text, cursor:'pointer'}}>
-              <input type="checkbox" checked={skipFf} onChange={e => setSkipFf(e.target.checked)} />
-              Skip FFToday scraping
-            </label>
-            <div style={{fontSize:11, color:T.muted, marginTop:4, marginLeft:24, lineHeight:1.4}}>
-              FFToday is the only source pulled by scraping web pages — the rest are fast
-              JSON/CSV feeds — so it's the slowest, most fragile step. Skip it for a quicker
-              pull; leave it on to add another projection source that fills gaps. Either way,
-              if it fails the pull still completes.
+          <button onClick={() => setAdvanced(a => !a)} style={{
+            background:'none', border:'none', padding:0, cursor:'pointer',
+            color:T.primary, fontSize:12.5, fontWeight:600,
+          }}>{advanced ? 'Hide' : 'Show'} season options</button>
+
+          {advanced && (
+            <div style={{marginTop:14}}>
+              <div style={{display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:12}}>
+                <Field label="Projections" hint="season">
+                  <Input type="number" value={season} onChange={e => setSeason(parseInt(e.target.value) || currentYear)} />
+                </Field>
+                <Field label="Stats" hint="most recent">
+                  <Input type="number" value={statsSeason} onChange={e => setStats(parseInt(e.target.value) || currentYear-1)} />
+                </Field>
+                <Field label="History" hint="years">
+                  <Input type="number" value={history} min={1} max={5}
+                    onChange={e => setHistory(parseInt(e.target.value) || 3)} />
+                </Field>
+              </div>
+              <Checkbox checked={skipFf} onChange={e => setSkipFf(e.target.checked)}
+                label="Skip FFToday scraping"
+                hint="FFToday is the only source pulled by scraping pages, so it's the slowest and most fragile step. Skipping makes the pull quicker; leaving it on adds another projection source. Either way the pull completes if it fails." />
             </div>
-          </div>
-
-          <div style={{
-            marginTop:16, padding:'10px 14px', background:T.surfaceAlt,
-            border:`1px solid ${T.border}`, borderRadius:T.rsm, fontSize:12, color:T.muted, lineHeight:1.5,
-          }}>
-            Projections are pulled as raw stats — your league's scoring is applied
-            automatically and updates in real time when you change league settings.
-            ADP board matched to your league: <b style={{color:T.text}}>
-            {adpFormat === 'ppr' ? 'PPR' : adpFormat === 'half-ppr' ? 'Half PPR' : 'Standard'} · {Math.min(teams,14)} teams</b>
-          </div>
-
-          <div style={{display:'flex', justifyContent:'flex-end', gap:10, marginTop:24, paddingTop:20, borderTop:`1px solid ${T.border}`}}>
-            <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
-            <Btn onClick={handlePull}>Pull Data</Btn>
-          </div>
+          )}
         </>
       )}
     </Modal>
@@ -955,12 +841,12 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
 
 // ─── AUCTION MODAL ───────────────────────────────────────────────────────────
 function AuctionModal({ league, onClose }) {
-  const [budget, setBudget] = React.useState((league && league.auctionBudget) || 200);
-  const [topN, setTopN]     = React.useState(50);
-  const [data, setData]     = React.useState(null);
+  const [budget, setBudget]   = React.useState((league && league.auctionBudget) || 200);
+  const [topN, setTopN]       = React.useState(50);
+  const [data, setData]       = React.useState(null);
   const [loading, setLoading] = React.useState(false);
 
-  const handleFetch = () => {
+  const handleFetch = React.useCallback(() => {
     setLoading(true);
     // Send the league's settings so values reflect ITS teams/roster/scoring,
     // not the server profile defaults (same override shape as /api/suggest).
@@ -980,268 +866,57 @@ function AuctionModal({ league, onClose }) {
     })
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false); })
-      .catch(err => { alert(String(err)); setLoading(false); });
-  };
+      .catch(err => { toast(String(err), 'error'); setLoading(false); });
+  }, [budget, topN, league]);
 
-  React.useEffect(() => { handleFetch(); }, []);
-
-  const posColors = {
-    QB: T.amberLight, RB: '#dcfce7', WR: '#dbeafe', TE: '#ede9fe', K: '#f3f4f6', DST: '#fce7f3',
-  };
+  React.useEffect(() => { handleFetch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <Modal title={league ? `Auction Values — ${league.name}` : 'Auction Values'} onClose={onClose} width={560}>
-      <div style={{display:'flex', gap:12, marginBottom:16, alignItems:'flex-end'}}>
-        <Field label="Budget per Team">
+    <Modal title="Auction values" onClose={onClose} width={580}
+      subtitle={league ? `${league.name} · ${league.numTeams} teams · ${SCORING_LABELS[league.scoringType]}` : null}>
+      <div style={{display:'flex', gap:12, marginBottom:16, alignItems:'flex-end', flexWrap:'wrap'}}>
+        <Field label="Budget per team" style={{marginBottom:0}}>
           <Input type="number" value={budget} onChange={e => setBudget(parseInt(e.target.value) || 200)}
-            style={{width:100}} />
+            style={{width:110}} />
         </Field>
-        <Field label="Show Top">
+        <Field label="Show top" style={{marginBottom:0}}>
           <Input type="number" value={topN} onChange={e => setTopN(parseInt(e.target.value) || 50)}
-            style={{width:80}} />
+            style={{width:90}} />
         </Field>
-        <Btn onClick={handleFetch} disabled={loading} style={{marginBottom:18}}>Refresh</Btn>
+        <Btn variant="secondary" onClick={handleFetch} disabled={loading}>
+          {loading ? 'Loading…' : 'Recalculate'}
+        </Btn>
       </div>
 
-      {loading && <div style={{textAlign:'center', padding:20, color:T.muted}}>Loading...</div>}
+      {loading && !data && (
+        <div className="loading-screen" style={{height:180}}><Spinner /><span>Valuing the pool…</span></div>
+      )}
 
       {data && data.values && (
-        <div style={{maxHeight:400, overflowY:'auto'}}>
-          <table style={{width:'100%', borderCollapse:'collapse', fontSize:13}}>
-            <thead>
-              <tr style={{borderBottom:`2px solid ${T.border}`, fontSize:11, fontWeight:700, color:T.muted}}>
-                <th style={{textAlign:'left', padding:'6px 8px'}}>#</th>
-                <th style={{textAlign:'left', padding:'6px 8px'}}>Player</th>
-                <th style={{textAlign:'left', padding:'6px 8px'}}>Pos</th>
-                <th style={{textAlign:'left', padding:'6px 8px'}}>Team</th>
-                <th style={{textAlign:'right', padding:'6px 8px'}}>Value</th>
+        <table className="da-table">
+          <thead>
+            <tr>
+              <th style={{width:30}}>#</th>
+              <th>Player</th>
+              <th style={{width:52}}>Pos</th>
+              <th style={{width:60}}>Team</th>
+              <th style={{textAlign:'right', width:70}}>Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.values.map((v, i) => (
+              <tr key={i}>
+                <td className="da-num" style={{color:T.mutedLight, fontSize:12}}>{i+1}</td>
+                <td style={{fontWeight:600}}>{v.name}</td>
+                <td><PosBadge pos={v.pos} /></td>
+                <td style={{color:T.muted}}>{v.team}</td>
+                <td className="da-num" style={{textAlign:'right', fontWeight:700,
+                  color: v.value >= 20 ? T.green : T.text}}>${v.value}</td>
               </tr>
-            </thead>
-            <tbody>
-              {data.values.map((v, i) => (
-                <tr key={i} style={{borderBottom:`1px solid ${T.borderLight}`}}>
-                  <td style={{padding:'5px 8px', color:T.mutedLight, fontSize:12}}>{i+1}</td>
-                  <td style={{padding:'5px 8px', fontWeight:600}}>{v.name}</td>
-                  <td style={{padding:'5px 8px'}}>
-                    <span style={{background:posColors[v.pos]||T.borderLight, borderRadius:4,
-                      padding:'1px 6px', fontSize:11, fontWeight:700}}>{v.pos}</span>
-                  </td>
-                  <td style={{padding:'5px 8px', color:T.muted}}>{v.team}</td>
-                  <td style={{padding:'5px 8px', textAlign:'right', fontWeight:700, fontFamily:'DM Mono,monospace',
-                    color:v.value >= 20 ? T.green : T.text}}>${v.value}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
       )}
-    </Modal>
-  );
-}
-
-// ─── FREE AGENT FINDER ───────────────────────────────────────────────────────
-function FreeAgentPosBadge({ pos }) {
-  const colors = {
-    QB:  { bg:'#fef3c7', fg:'#92400e' },
-    RB:  { bg:'#dcfce7', fg:'#14532d' },
-    WR:  { bg:'#dbeafe', fg:'#1e3a8a' },
-    TE:  { bg:'#ede9fe', fg:'#4c1d95' },
-    K:   { bg:'#f3f4f6', fg:'#374151' },
-    DST: { bg:'#fce7f3', fg:'#831843' },
-  };
-  const c = colors[pos] || { bg: T.borderLight, fg: T.muted };
-  return (
-    <span style={{
-      background:c.bg, color:c.fg, borderRadius:T.rxs, padding:'2px 7px',
-      fontSize:11, fontWeight:800, display:'inline-block', minWidth:32, textAlign:'center',
-    }}>{pos}</span>
-  );
-}
-
-function FreeAgentFinderModal({ leagues, picks, onClose, initialLeagueId }) {
-  const [topN, setTopN] = React.useState(6);
-  const [filter, setFilter] = React.useState(initialLeagueId || 'ALL');
-  const [horizon, setHorizon] = React.useState('weekly');
-  const [week, setWeek] = React.useState(1);
-  const [data, setData] = React.useState(null);
-  const [loading, setLoading] = React.useState(false);
-  const [refreshingContext, setRefreshingContext] = React.useState(false);
-  const [error, setError] = React.useState(null);
-
-  const scan = React.useCallback(() => {
-    setLoading(true);
-    setError(null);
-    fetch('/api/free-agents', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leagues: leagues || [], picks: picks || {}, top: topN, week }),
-    })
-      .then(r => r.json())
-      .then(d => {
-        if (d.error) { setError(d.error); setData(null); return; }
-        setData(d);
-      })
-      .catch(err => setError(String(err)))
-      .finally(() => setLoading(false));
-  }, [leagues, picks, topN, week]);
-
-  React.useEffect(() => { scan(); }, [scan]);
-
-  const refreshUpdates = () => {
-    setRefreshingContext(true);
-    setError(null);
-    fetch('/api/context/refresh', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({week, force:true}),
-    }).then(r => r.json()).then(started => {
-      if (started.error) throw new Error(started.error);
-      const poll = () => fetch(`/api/task/${started.taskId}`).then(r => r.json()).then(task => {
-        if (task.status === 'done') { setRefreshingContext(false); scan(); return; }
-        if (task.status === 'error') throw new Error(task.error || 'Update refresh failed');
-        setTimeout(poll, 1000);
-      });
-      poll().catch(err => { setRefreshingContext(false); setError(String(err)); });
-    }).catch(err => { setRefreshingContext(false); setError(String(err)); });
-  };
-
-  const fmt = n => {
-    const v = Number(n || 0);
-    return `${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
-  };
-
-  const leagueRows = (data && data.leagues) || [];
-  const visibleLeagues = filter === 'ALL'
-    ? leagueRows
-    : leagueRows.filter(l => l.id === filter);
-
-  const renderTable = rows => (
-    <table style={{width:'100%', borderCollapse:'collapse', fontSize:12.5}}>
-      <thead>
-        <tr style={{borderBottom:`2px solid ${T.border}`, color:T.muted, fontSize:10, fontWeight:800, letterSpacing:.5}}>
-          <th style={{textAlign:'left', padding:'7px 8px'}}>ADD</th>
-          <th style={{textAlign:'left', padding:'7px 8px'}}>POS</th>
-          <th style={{textAlign:'left', padding:'7px 8px'}}>TEAM</th>
-          <th style={{textAlign:'right', padding:'7px 8px'}}>{horizon === 'weekly' ? 'WEEK' : 'ROS'} PTS</th>
-          <th style={{textAlign:'right', padding:'7px 8px'}}>SCORE</th>
-          <th style={{textAlign:'right', padding:'7px 8px'}}>GAIN</th>
-          <th style={{textAlign:'center', padding:'7px 8px'}}>TREND</th>
-          <th style={{textAlign:'left', padding:'7px 8px'}}>DROP</th>
-          <th style={{textAlign:'left', padding:'7px 8px'}}>WHY</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map(row => (
-          <tr key={row.id} style={{borderBottom:`1px solid ${T.borderLight}`}}>
-            <td style={{padding:'7px 8px', fontWeight:700, color:T.text}}>
-              <div>{row.name}</div>
-              <div style={{fontSize:10.5, color:T.muted, fontWeight:500}}>
-                {row.adp ? `ADP ${row.adp}` : 'No ADP'}{row.byeWeek ? ` · BYE ${row.byeWeek}` : ''}
-              </div>
-              {row.availability && <div style={{fontSize:10.5, color:T.red, marginTop:2}}>{row.availability}</div>}
-            </td>
-            <td style={{padding:'7px 8px'}}><FreeAgentPosBadge pos={row.pos} /></td>
-            <td style={{padding:'7px 8px', color:T.muted}}>{row.nflTeam}</td>
-            <td style={{padding:'7px 8px', textAlign:'right', fontWeight:700, fontFamily:'DM Mono,monospace'}}>
-              {Number(row.points || 0).toFixed(1)}
-            </td>
-            <td style={{padding:'7px 8px', textAlign:'right', fontWeight:800, color:T.primary, fontFamily:'DM Mono,monospace'}}>
-              {fmt(row.score)}
-            </td>
-            <td style={{padding:'7px 8px', textAlign:'right', fontWeight:700, color:row.rosterGain > 0 ? T.green : T.muted,
-              fontFamily:'DM Mono,monospace'}}>
-              {fmt(row.rosterGain)}
-            </td>
-            <td style={{padding:'7px 8px', textAlign:'center', color:row.urgency > 0 ? T.green : row.urgency < 0 ? T.red : T.muted,
-              fontFamily:'DM Mono,monospace', fontWeight:700}}>
-              {row.urgency > 0 ? `+${row.urgency}` : row.urgency || '—'}
-            </td>
-            <td style={{padding:'7px 8px', color:row.drop ? T.text : T.muted}}>
-              {row.drop ? (
-                <span>{row.drop.name} <span style={{color:T.muted}}>({row.drop.pos})</span></span>
-              ) : 'Open slot'}
-            </td>
-            <td style={{padding:'7px 8px', color:T.muted, lineHeight:1.35}}>
-              <div>{row.reason}</div>
-              {(row.signals || []).slice(0,2).map((s,i) => (
-                <div key={i} title={`${s.source} · ${s.observed_at}`} style={{fontSize:10, marginTop:2}}>
-                  {s.attribution || s.source}: {s.kind.replace('_',' ')} {s.value}
-                </div>
-              ))}
-              {horizon === 'weekly' && <div style={{fontSize:10, marginTop:2}}>{row.weeklyProjectionOrigin}</div>}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-
-  return (
-    <Modal title="League-Synced Free Agent Finder" onClose={onClose} width={960}>
-      <div style={{display:'inline-flex', border:`1px solid ${T.border}`, borderRadius:T.rsm, overflow:'hidden', marginBottom:14}}>
-        {[['weekly','This Week'],['ros','Rest of Season']].map(([value,label]) => (
-          <button key={value} onClick={() => setHorizon(value)} style={{
-            border:'none', padding:'7px 12px', cursor:'pointer', fontFamily:'inherit', fontSize:12, fontWeight:700,
-            background:horizon === value ? T.primary : T.surface,
-            color:horizon === value ? '#fff' : T.muted,
-          }}>{label}</button>
-        ))}
-      </div>
-      <div style={{display:'flex', alignItems:'flex-end', gap:12, marginBottom:16, flexWrap:'wrap'}}>
-        <Field label="League">
-          <Select value={filter} onChange={e => setFilter(e.target.value)}
-            options={[{value:'ALL', label:'All leagues'}, ...leagueRows.map(l => ({value:l.id, label:l.name}))]}
-            style={{width:220}} />
-        </Field>
-        <Field label="Top per League">
-          <Input type="number" value={topN} min={1} max={30}
-            onChange={e => setTopN(Math.max(1, Math.min(parseInt(e.target.value) || 1, 30)))}
-            style={{width:84}} />
-        </Field>
-        <Field label="NFL Week">
-          <Input type="number" value={week} min={1} max={18}
-            onChange={e => setWeek(Math.max(1, Math.min(parseInt(e.target.value) || 1, 18)))}
-            style={{width:72}} />
-        </Field>
-        <Btn onClick={scan} disabled={loading} style={{marginBottom:18}}>Refresh</Btn>
-        <Btn variant="ghost" onClick={refreshUpdates} disabled={refreshingContext}
-          style={{marginBottom:18}}>{refreshingContext ? 'Updating...' : 'Refresh Updates'}</Btn>
-        <div style={{marginBottom:24, marginLeft:'auto', fontSize:12, color:T.muted}}>
-          {data ? `${data.scannedLeagues} league${data.scannedLeagues === 1 ? '' : 's'} · Week ${data.week}` : ''}
-        </div>
-      </div>
-
-      {data && (
-        <div style={{fontSize:11, color:data.contextStale ? T.amber : T.muted, margin:'-8px 0 12px'}}>
-          Player updates {data.contextAsOf ? `as of ${new Date(data.contextAsOf).toLocaleString()}` : 'have not been refreshed yet'}
-          {data.contextStale ? ' · cached data may be stale' : ''}
-        </div>
-      )}
-
-      {loading && <div style={{textAlign:'center', padding:24, color:T.muted}}>Scanning...</div>}
-      {error && <div style={{padding:12, color:T.red, background:T.redLight, borderRadius:T.rsm, marginBottom:12}}>{error}</div>}
-
-      {!loading && data && leagueRows.length === 0 && (
-        <div style={{padding:32, textAlign:'center', color:T.muted, border:`1px dashed ${T.border}`, borderRadius:T.rsm}}>
-          Add a league first.
-        </div>
-      )}
-
-      {!loading && visibleLeagues.map(league => (
-        <div key={league.id} style={{marginTop:18}}>
-          <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8}}>
-            <div>
-              <div style={{fontSize:14, fontWeight:800, color:T.text}}>{league.name}</div>
-              <div style={{fontSize:11, color:T.muted, marginTop:2}}>
-                {league.platform || 'League'} · {league.rostered} rostered · {league.available} available
-              </div>
-            </div>
-          </div>
-          {((horizon === 'weekly' ? league.weeklyRecommendations : league.rosRecommendations) || league.recommendations || []).length > 0
-            ? renderTable((horizon === 'weekly' ? league.weeklyRecommendations : league.rosRecommendations) || league.recommendations)
-            : <div style={{padding:18, color:T.muted, background:T.surfaceAlt, borderRadius:T.rsm}}>No positive upgrades found.</div>
-          }
-        </div>
-      ))}
     </Modal>
   );
 }
@@ -1257,62 +932,59 @@ function SetupGuide({ playerCount, leagues, picks, onPullData, onAddLeague, onEd
   const steps = [
     {
       done: (playerCount || 0) > 0,
-      title: 'Player data',
+      title: 'Load player data',
       body: (playerCount || 0) > 0
-        ? `${playerCount} players with projections and ADP are loaded. Pull fresh data any time before your draft.`
-        : 'No player data found — pull the free consensus sources to load projections and ADP.',
-      action: { label: 'Pull Data', onClick: onPullData },
+        ? `${playerCount} players with projections and ADP are loaded. Pull again any time before your draft.`
+        : 'Nothing is loaded yet — pull the free consensus sources to get projections and ADP.',
+      action: { label: 'Pull data', onClick: onPullData },
     },
     {
       done: leagues.length > 0,
-      title: 'Set up your league',
-      body: 'Teams, scoring, roster slots, and draft type (snake or auction). Importing from ESPN, Yahoo, or Sleeper auto-fills everything, including your league-mates’ names.',
+      title: 'Add your league',
+      body: 'Teams, scoring, roster slots, and draft type. Importing from ESPN, Yahoo, or Sleeper fills all of it in, league-mates included.',
       action: first
-        ? { label: `Edit “${first.name}”`, onClick: () => onEditLeague(first.id) }
-        : { label: '+ Add League', onClick: onAddLeague },
+        ? { label: 'Edit league', onClick: () => onEditLeague(first.id) }
+        : { label: 'Add league', onClick: onAddLeague },
     },
     {
       done: hasNames,
-      title: 'Draft order & your team',
-      body: 'In the league editor, drag the teams into draft-slot order (ESPN and Yahoo imports arrive in platform order, not draft order) and mark your own team with “Me”. Sleeper imports already know the seating, so they arrive in order with your seat set.',
-      action: first ? { label: 'Open editor', onClick: () => onEditLeague(first.id) } : null,
+      title: 'Set the draft order',
+      body: 'Drag the teams into seat order and mark your own with “Me”. Sleeper imports arrive already seated; ESPN and Yahoo do not.',
+      action: first ? { label: 'Draft order', onClick: () => onEditLeague(first.id) } : null,
     },
     {
       done: hasPicks,
-      title: 'Draft day',
-      body: '“Draft →” on a league card opens the draft room: live pick recommendations, a pick ticker, and opponent predictions. In-season, “Free Agents” scans your waiver wire for upgrades.',
+      title: 'Record your first pick',
+      body: 'Open a league to reach its hub, where the draft room and the in-season waiver wire sit side by side. This step ticks itself off once picks start landing on a board.',
       action: null,
     },
   ];
   return (
-    <Modal title="Getting Started" onClose={onClose} width={620}>
+    <Modal title="Getting started" onClose={onClose} width={580}
+      footer={<Btn onClick={onClose}>Got it</Btn>}>
       <div style={{display:'flex', flexDirection:'column', gap:16}}>
         {steps.map((s, i) => (
           <div key={i} style={{display:'flex', gap:12, alignItems:'flex-start'}}>
             <div style={{
-              width:26, height:26, borderRadius:'50%', flexShrink:0, display:'flex',
-              alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:800,
+              width:24, height:24, borderRadius:'50%', flexShrink:0, display:'flex',
+              alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:800,
               background: s.done ? T.greenLight : T.borderLight,
               color: s.done ? T.green : T.muted,
             }}>{s.done ? '✓' : i + 1}</div>
             <div style={{flex:1, minWidth:0}}>
-              <div style={{fontSize:14, fontWeight:700, color:T.text}}>{s.title}</div>
-              <div style={{fontSize:12.5, color:T.muted, lineHeight:1.5, marginTop:2}}>{s.body}</div>
+              <div style={{fontSize:13.5, fontWeight:700, color:T.text}}>{s.title}</div>
+              <div style={{fontSize:12.5, color:T.muted, lineHeight:1.55, marginTop:2}}>{s.body}</div>
             </div>
             {s.action && (
-              <Btn variant="ghost" size="sm" onClick={s.action.onClick} style={{flexShrink:0}}>
+              <Btn variant="secondary" size="sm" onClick={s.action.onClick} style={{flexShrink:0}}>
                 {s.action.label}
               </Btn>
             )}
           </div>
         ))}
       </div>
-      <div style={{
-        display:'flex', justifyContent:'space-between', alignItems:'center',
-        marginTop:22, paddingTop:16, borderTop:`1px solid ${T.border}`,
-      }}>
-        <span style={{fontSize:11.5, color:T.muted}}>Reopen any time via “Setup Guide” in the header.</span>
-        <Btn onClick={onClose}>Got it</Btn>
+      <div style={{marginTop:20, paddingTop:14, borderTop:`1px solid ${T.borderLight}`, fontSize:11.5, color:T.mutedLight}}>
+        Reopen any time from “Setup guide” in the header.
       </div>
     </Modal>
   );
@@ -1354,10 +1026,49 @@ function UpdateBanner({ update, onDismiss }) {
 }
 
 // ─── HOME SCREEN ─────────────────────────────────────────────────────────────
-function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague, onDeleteLeague, onSyncLeague, playerCount, onRefreshPlayers, updateInfo, onDismissUpdate }) {
-  const platformColors = { ESPN:'#cc0000', Yahoo:'#6001d2', Sleeper:'#1e1e1e', 'NFL.com':'#013369', Other: T.muted };
-  const [showPull, setShowPull]       = React.useState(false);
-  const [auctionFor, setAuctionFor]   = React.useState(null); // league whose $ values to show
+function LeagueCard({ league, picks, onOpen, onEdit }) {
+  const accent = PLATFORM_COLORS[league.platform] || T.muted;
+  const totalSlots = rosterTotal(league.rosterSlots);
+  const myPicks = picks.filter(p => p.teamNum === league.draftPosition).length;
+
+  return (
+    <div className="da-card" style={{position:'relative', overflow:'hidden', display:'flex', flexDirection:'column'}}>
+      <div style={{position:'absolute', top:0, left:0, right:0, height:3, background:accent}} />
+      <button onClick={onOpen} className="da-card-link" aria-label={`Open ${league.name}`} style={{
+        border:'none', background:'none', boxShadow:'none', padding:'20px 20px 16px', flex:1,
+        borderRadius:0,
+      }}>
+        <div style={{fontSize:16, fontWeight:700, color:T.text, marginBottom:2}}>{league.name}</div>
+        <div style={{fontSize:12, color:T.muted, marginBottom:14}}>
+          {league.platform} · {league.numTeams} teams
+        </div>
+        <div style={{display:'flex', gap:6, flexWrap:'wrap', marginBottom:14}}>
+          <Badge label={SCORING_LABELS[league.scoringType]} color="blue" />
+          {league.draftType === 'auction'
+            ? <Badge label={`Auction $${league.auctionBudget || 200}`} color="amber" />
+            : <Badge label={`Pick #${league.draftPosition}`} />}
+          <Badge label={`${totalSlots} slots`} />
+        </div>
+        <div style={{fontSize:12, color:T.muted}}>
+          {picks.length > 0
+            ? `${picks.length} picks recorded · ${myPicks} on your roster`
+            : 'No picks yet'}
+        </div>
+      </button>
+      <div style={{
+        display:'flex', alignItems:'center', justifyContent:'space-between',
+        padding:'10px 16px', borderTop:`1px solid ${T.borderLight}`, background:T.surfaceAlt,
+      }}>
+        <Btn variant="subtle" size="sm" onClick={onEdit}>Settings</Btn>
+        <Btn size="sm" onClick={onOpen}>Open league →</Btn>
+      </div>
+    </div>
+  );
+}
+
+function HomeScreen({ leagues, picks, onOpenLeague, onAddLeague, onEditLeague, playerCount,
+                      onRefreshPlayers, updateInfo, onDismissUpdate }) {
+  const [showPull, setShowPull] = React.useState(false);
   // First-run setup guide: auto-open until dismissed once, reopenable from the header.
   const [showGuide, setShowGuide] = React.useState(() => {
     try { return !localStorage.getItem('fda_setup_seen'); } catch { return false; }
@@ -1366,175 +1077,83 @@ function HomeScreen({ leagues, picks, onSelectLeague, onAddLeague, onEditLeague,
     setShowGuide(false);
     try { localStorage.setItem('fda_setup_seen', '1'); } catch {}
   };
-  // null = closed, 'ALL' = every league, or a league id to open scoped to that league
-  const [freeAgentsFor, setFreeAgentsFor] = React.useState(null);
-  const [syncingId, setSyncingId] = React.useState(null);
-  const [syncMsg, setSyncMsg] = React.useState(null);
-
-  const syncLeague = (e, lg) => {
-    e.stopPropagation();
-    setSyncingId(lg.id);
-    setSyncMsg(null);
-    onSyncLeague(lg)
-      .then(msg => {
-        setSyncMsg({ ok: true, text: msg });
-        setTimeout(() => setSyncMsg(null), 3500);
-      })
-      .catch(err => {
-        setSyncMsg({ ok: false, text: String(err && err.message ? err.message : err) });
-        setTimeout(() => setSyncMsg(null), 6000);
-      })
-      .finally(() => setSyncingId(null));
-  };
+  const { isMobile } = useLayout();
 
   return (
     <div style={{minHeight:'100vh', background:T.bg, display:'flex', flexDirection:'column'}}>
-      <div style={{
-        background:T.surface, borderBottom:`1px solid ${T.border}`,
-        padding:'0 32px', height:60, display:'flex', alignItems:'center', justifyContent:'space-between',
-      }}>
-        <div style={{display:'flex', alignItems:'center', gap:10}}>
-          <div style={{
-            width:32, height:32, borderRadius:8, background:T.primary,
-            display:'flex', alignItems:'center', justifyContent:'center',
-          }}>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5">
-              <ellipse cx="12" cy="12" rx="10" ry="6" />
-              <path d="M2 12h20M12 6c0 0-4 3-4 6s4 6 4 6M12 6c0 0 4 3 4 6s-4 6-4 6" />
-            </svg>
-          </div>
-          <span style={{fontSize:18, fontWeight:700, color:T.text}}>Draft Assistant</span>
-          {playerCount != null && (
-            <Badge label={`${playerCount} players`} color="gray" />
-          )}
-        </div>
-        <div style={{display:'flex', alignItems:'center', gap:8}}>
-          <Btn variant="ghost" size="sm" onClick={() => setShowGuide(true)}>Setup Guide</Btn>
-          <Btn variant="green" size="sm" onClick={() => setShowPull(true)}>Pull Data</Btn>
-          <Btn variant="ghost" size="sm" onClick={() => setFreeAgentsFor('ALL')}>Free Agents</Btn>
-          <Btn onClick={onAddLeague}>+ Add League</Btn>
-        </div>
-      </div>
+      <AppBar
+        title={
+          <span style={{display:'inline-flex', alignItems:'center', gap:10}}>
+            <span style={{
+              width:28, height:28, borderRadius:8, background:T.primary,
+              display:'inline-flex', alignItems:'center', justifyContent:'center',
+            }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" aria-hidden="true">
+                <ellipse cx="12" cy="12" rx="10" ry="6" />
+                <path d="M2 12h20M12 6c0 0-4 3-4 6s4 6 4 6M12 6c0 0 4 3 4 6s-4 6-4 6" />
+              </svg>
+            </span>
+            Draft Assistant
+          </span>
+        }
+        badges={playerCount != null
+          ? <Badge label={`${playerCount} players`} color={playerCount ? 'gray' : 'amber'} />
+          : null}>
+        <Btn variant="subtle" size="sm" onClick={() => setShowGuide(true)}>Setup guide</Btn>
+        <Btn variant="secondary" size="sm" onClick={() => setShowPull(true)}>Pull data</Btn>
+        <Btn onClick={onAddLeague}>Add league</Btn>
+      </AppBar>
 
-      <div style={{flex:1, padding:'40px 32px', maxWidth:960, margin:'0 auto', width:'100%', boxSizing:'border-box'}}>
+      <div style={{flex:1, padding: isMobile ? '24px 16px' : '36px 24px', maxWidth:960, margin:'0 auto', width:'100%'}}>
         <UpdateBanner update={updateInfo} onDismiss={onDismissUpdate} />
-        <h2 style={{fontSize:22, fontWeight:700, color:T.text, margin:'0 0 8px'}}>Your Leagues</h2>
-        <p style={{fontSize:14, color:T.muted, margin:'0 0 28px'}}>
-          Select a league to enter draft mode, or add a new one.
+        <h2 style={{fontSize:21, fontWeight:700, color:T.text, margin:'0 0 4px'}}>Your leagues</h2>
+        <p style={{fontSize:13.5, color:T.muted, margin:'0 0 24px'}}>
+          Open a league to reach its draft room and waiver wire.
         </p>
-        {syncMsg && (
-          <div style={{
-            margin:'0 0 16px', padding:'9px 12px', borderRadius:T.rsm,
-            background: syncMsg.ok ? T.greenLight : T.redLight,
-            color: syncMsg.ok ? T.green : T.red, fontSize:12, fontWeight:600,
-          }}>
-            {syncMsg.text}
-          </div>
+
+        {(playerCount || 0) === 0 && leagues.length > 0 && (
+          <Note tone="warn" style={{marginBottom:20}}>
+            No player data loaded — rankings will be empty until you{' '}
+            <button onClick={() => setShowPull(true)} style={{
+              background:'none', border:'none', padding:0, color:T.primary,
+              fontWeight:700, cursor:'pointer', textDecoration:'underline',
+            }}>pull player data</button>.
+          </Note>
         )}
 
-        {leagues.length === 0 && (
-          <div style={{
-            background:T.surface, border:`2px dashed ${T.border}`, borderRadius:T.r,
-            padding:'60px 32px', textAlign:'center',
-          }}>
-            <div style={{fontSize:36, marginBottom:12}}>·</div>
-            <div style={{fontSize:16, fontWeight:600, color:T.text, marginBottom:6}}>No leagues yet</div>
-            <div style={{fontSize:14, color:T.muted, marginBottom:20}}>Add your first league to get started.</div>
-            <Btn onClick={onAddLeague}>+ Add League</Btn>
+        {leagues.length === 0 ? (
+          <EmptyState
+            title="No leagues yet"
+            body="Add your league to get a draft board tuned to its scoring and roster — or import it from ESPN, Yahoo, or Sleeper and skip the typing."
+            action={<Btn size="lg" onClick={onAddLeague}>Add your first league</Btn>} />
+        ) : (
+          <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(288px,1fr))', gap:16}}>
+            {leagues.map(lg => (
+              <LeagueCard key={lg.id} league={lg} picks={picks[lg.id] || []}
+                onOpen={() => onOpenLeague(lg.id)}
+                onEdit={() => onEditLeague(lg.id)} />
+            ))}
           </div>
         )}
-
-        <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:16}}>
-          {leagues.map(lg => {
-            const pc = platformColors[lg.platform] || T.muted;
-            const totalSlots = Object.values(lg.rosterSlots).reduce((s,v) => s+v, 0);
-            const canSync = Boolean(lg.espnLeagueId || lg.yahooLeagueKey || lg.sleeperLeagueId);
-            return (
-              <div key={lg.id} style={{
-                background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.r,
-                padding:20, position:'relative', overflow:'hidden',
-              }}>
-                <div style={{position:'absolute', top:0, left:0, right:0, height:3, background:pc}} />
-
-                <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:12, marginTop:4}}>
-                  <div>
-                    <div style={{fontSize:16, fontWeight:700, color:T.text}}>{lg.name}</div>
-                    <div style={{fontSize:12, color:T.muted, marginTop:2}}>{lg.platform}</div>
-                  </div>
-                  <div style={{display:'flex', gap:6}}>
-                    {canSync && (
-                      <button onClick={e=>syncLeague(e, lg)} disabled={syncingId === lg.id} style={{
-                        background:'none', border:`1px solid ${T.border}`, borderRadius:T.rxs,
-                        padding:'4px 8px', cursor: syncingId === lg.id ? 'default' : 'pointer',
-                        fontSize:12, color: syncingId === lg.id ? T.mutedLight : T.primary,
-                      }}>{syncingId === lg.id ? 'Syncing...' : 'Sync'}</button>
-                    )}
-                    <button onClick={e=>{e.stopPropagation();onEditLeague(lg.id);}} style={{
-                      background:'none', border:`1px solid ${T.border}`, borderRadius:T.rxs,
-                      padding:'4px 8px', cursor:'pointer', fontSize:12, color:T.muted,
-                    }}>Edit</button>
-                    <button onClick={e=>{e.stopPropagation();onDeleteLeague(lg.id);}} style={{
-                      background:'none', border:`1px solid ${T.border}`, borderRadius:T.rxs,
-                      padding:'4px 8px', cursor:'pointer', fontSize:12, color:T.red,
-                    }}>×</button>
-                  </div>
-                </div>
-
-                <div style={{display:'flex', gap:8, flexWrap:'wrap'}}>
-                  <Badge label={SCORING_LABELS[lg.scoringType]} color="blue" />
-                  <Badge label={`${lg.numTeams} teams`} color="gray" />
-                  {lg.draftType === 'auction'
-                    ? <Badge label={`Auction $${lg.auctionBudget || 200}`} color="amber" />
-                    : <Badge label={`Pick #${lg.draftPosition}`} color="gray" />}
-                  <Badge label={`${totalSlots} slots`} color="gray" />
-                </div>
-
-                <div style={{marginTop:16, paddingTop:12, borderTop:`1px solid ${T.borderLight}`}}>
-                  <div style={{fontSize:12, color:T.muted, marginBottom:10}}>
-                    QB{lg.rosterSlots.QB} · RB{lg.rosterSlots.RB} · WR{lg.rosterSlots.WR} · TE{lg.rosterSlots.TE} · K{lg.rosterSlots.K} · DST{lg.rosterSlots.DST}
-                  </div>
-                  <div style={{display:'flex', gap:8}}>
-                    <Btn variant="ghost" size="sm" onClick={() => setFreeAgentsFor(lg.id)}
-                      style={{flex:1, justifyContent:'center', color:T.green, borderColor:T.green}}>
-                      Free Agents
-                    </Btn>
-                    {lg.draftType === 'auction' ? (
-                      <Btn size="sm" onClick={() => setAuctionFor(lg)}
-                        style={{flex:1, justifyContent:'center'}}>
-                        Auction Values →
-                      </Btn>
-                    ) : (
-                      <Btn size="sm" onClick={() => onSelectLeague(lg.id)}
-                        style={{flex:1, justifyContent:'center'}}>
-                        Draft →
-                      </Btn>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
       </div>
 
       {showGuide && <SetupGuide
         playerCount={playerCount} leagues={leagues} picks={picks}
-        onPullData={() => setShowPull(true)}
-        onAddLeague={onAddLeague}
-        onEditLeague={onEditLeague}
+        onPullData={() => { closeGuide(); setShowPull(true); }}
+        onAddLeague={() => { closeGuide(); onAddLeague(); }}
+        onEditLeague={id => { closeGuide(); onEditLeague(id); }}
         onClose={closeGuide} />}
       {showPull && <PullDataModal league={leagues[0]}
         espnLeagueId={(leagues.find(l => l.espnLeagueId) || {}).espnLeagueId}
         onClose={() => setShowPull(false)} onComplete={onRefreshPlayers} />}
-      {freeAgentsFor && <FreeAgentFinderModal leagues={leagues} picks={picks}
-        initialLeagueId={freeAgentsFor === 'ALL' ? null : freeAgentsFor}
-        onClose={() => setFreeAgentsFor(null)} />}
-      {auctionFor && <AuctionModal league={auctionFor} onClose={() => setAuctionFor(null)} />}
     </div>
   );
 }
 
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
+// Navigation is a flat route: leagues → one league's hub → draft room or waiver
+// wire. The draft and the waiver wire never contain each other; the hub is the
+// only place both are reachable from.
 function App() {
   const [players, setPlayers] = React.useState(null);
   const [loadError, setLoadError] = React.useState(null);
@@ -1546,9 +1165,11 @@ function App() {
   const [picks, setPicks] = React.useState(() => {
     try { return JSON.parse(localStorage.getItem('fda_picks') || '{}'); } catch { return {}; }
   });
-  const [selectedId, setSelectedId] = React.useState(null);
+  // { screen: 'home' | 'league' | 'draft' | 'waivers', leagueId }
+  const [route, setRoute] = React.useState({ screen: 'home', leagueId: null });
   const [showSetup, setShowSetup] = React.useState(false);
   const [editingId, setEditingId] = React.useState(null);
+  const [showPull, setShowPull] = React.useState(false);
 
   const refreshPlayers = React.useCallback(() => {
     return fetch('/api/players')
@@ -1627,17 +1248,16 @@ function App() {
     });
     setShowSetup(false);
     setEditingId(null);
+    toast(`${lg.name} saved.`, 'ok');
   };
 
   const deleteLeague = id => {
-    if (!window.confirm('Remove this league and all its picks?')) return;
     setLeagues(prev => prev.filter(l => l.id !== id));
-    setPicks(prev => { const n={...prev}; delete n[id]; return n; });
-    if (selectedId === id) setSelectedId(null);
+    setPicks(prev => { const n = {...prev}; delete n[id]; return n; });
   };
 
   const updateLeague = (id, patch) => {
-    setLeagues(prev => prev.map(l => l.id === id ? {...l,...patch} : l));
+    setLeagues(prev => prev.map(l => l.id === id ? {...l, ...patch} : l));
   };
 
   const addPick = (leagueId, pick) => {
@@ -1658,26 +1278,38 @@ function App() {
       .then(d => {
         if (d.error) throw new Error(d.error);
         setPicks(prev => ({ ...prev, [lg.id]: d.picks || [] }));
-        return `Synced ${d.matched || 0}/${d.rostered || 0} rostered players from ${d.source || lg.platform}.`;
+        return `Synced ${d.matched || 0} of ${d.rostered || 0} rostered players from ${d.source || lg.platform}.`;
       });
   }, []);
 
   const undoPick = leagueId => {
-    setPicks(prev => ({ ...prev, [leagueId]: (prev[leagueId] || []).slice(0,-1) }));
+    setPicks(prev => ({ ...prev, [leagueId]: (prev[leagueId] || []).slice(0, -1) }));
   };
 
   const resetPicks = leagueId => {
-    if (!window.confirm('Reset all picks for this league?')) return;
-    setPicks(prev => ({ ...prev, [leagueId]: [] }));
+    confirmDialog({
+      title: 'Clear every pick?',
+      body: 'All picks recorded for this league are removed. The league itself and your player data stay.',
+      confirmLabel: 'Clear picks', tone: 'danger',
+    }).then(ok => {
+      if (!ok) return;
+      setPicks(prev => ({ ...prev, [leagueId]: [] }));
+      toast('Picks cleared.', 'ok');
+    });
   };
 
   const editingLeague = editingId ? leagues.find(l => l.id === editingId) : null;
-  const selectedLeague = selectedId ? leagues.find(l => l.id === selectedId) : null;
+  const routeLeague = route.leagueId ? leagues.find(l => l.id === route.leagueId) : null;
+  const goHome = () => setRoute({ screen: 'home', leagueId: null });
+  const openEditor = id => { setEditingId(id); setShowSetup(true); };
 
   if (loadError) {
     return (
-      <div style={{padding:40, textAlign:'center', color:T.red, fontSize:14}}>
-        Failed to load player data: {loadError}
+      <div style={{padding:40, textAlign:'center'}}>
+        <div style={{color:T.red, fontSize:14, fontWeight:600, marginBottom:8}}>
+          Couldn't load player data
+        </div>
+        <div style={{color:T.muted, fontSize:13}}>{loadError}</div>
       </div>
     );
   }
@@ -1685,42 +1317,66 @@ function App() {
   if (!players) {
     return (
       <div className="loading-screen">
-        <div className="loading-spinner"></div>
-        <div style={{fontSize:14, color:T.muted}}>Loading player data…</div>
+        <Spinner />
+        <span>Loading player data…</span>
       </div>
     );
   }
 
-  if (selectedLeague) {
-    return (
+  // A league can be deleted while its screens are open; fall back to home.
+  const screen = routeLeague ? route.screen : 'home';
+
+  let body;
+  if (screen === 'draft') {
+    body = (
       <DraftScreen
-        league={selectedLeague}
-        picks={picks[selectedLeague.id] || []}
+        league={routeLeague}
+        picks={picks[routeLeague.id] || []}
         allPlayers={players}
-        allLeagues={leagues}
-        allPicks={picks}
-        onBack={() => setSelectedId(null)}
-        onAddPick={pick => addPick(selectedLeague.id, pick)}
-        onUndoPick={() => undoPick(selectedLeague.id)}
-        onResetPicks={() => resetPicks(selectedLeague.id)}
-        onReplacePicks={newPicks => replacePicks(selectedLeague.id, newPicks)}
-        onUpdateLeague={patch => updateLeague(selectedLeague.id, patch)}
+        onBack={() => setRoute({ screen: 'league', leagueId: routeLeague.id })}
+        onAddPick={pick => addPick(routeLeague.id, pick)}
+        onUndoPick={() => undoPick(routeLeague.id)}
+        onResetPicks={() => resetPicks(routeLeague.id)}
+        onReplacePicks={newPicks => replacePicks(routeLeague.id, newPicks)}
+        onUpdateLeague={patch => updateLeague(routeLeague.id, patch)}
         onRefreshPlayers={refreshPlayers}
       />
     );
-  }
-
-  return (
-    <>
+  } else if (screen === 'waivers') {
+    body = (
+      <WaiverScreen
+        league={routeLeague}
+        picks={picks[routeLeague.id] || []}
+        allPlayers={players}
+        onBack={() => setRoute({ screen: 'league', leagueId: routeLeague.id })}
+        onSyncLeague={syncLeague}
+        onEditLeague={openEditor}
+      />
+    );
+  } else if (screen === 'league') {
+    body = (
+      <LeagueHub
+        league={routeLeague}
+        picks={picks[routeLeague.id] || []}
+        playerCount={players.length}
+        onBack={goHome}
+        onOpenDraft={() => setRoute({ screen: 'draft', leagueId: routeLeague.id })}
+        onOpenWaivers={() => setRoute({ screen: 'waivers', leagueId: routeLeague.id })}
+        onEditLeague={openEditor}
+        onDeleteLeague={deleteLeague}
+        onSyncLeague={syncLeague}
+        onPullData={() => setShowPull(true)}
+      />
+    );
+  } else {
+    body = (
       <HomeScreen
         leagues={leagues}
         picks={picks}
-        onSelectLeague={setSelectedId}
+        onOpenLeague={id => setRoute({ screen: 'league', leagueId: id })}
         onAddLeague={() => { setEditingId(null); setShowSetup(true); }}
-        onEditLeague={id => { setEditingId(id); setShowSetup(true); }}
-        onDeleteLeague={deleteLeague}
-        onSyncLeague={syncLeague}
-        playerCount={players ? players.length : null}
+        onEditLeague={openEditor}
+        playerCount={players.length}
         onRefreshPlayers={refreshPlayers}
         updateInfo={updateInfo}
         onDismissUpdate={() => {
@@ -1730,6 +1386,12 @@ function App() {
           setUpdateInfo(null);
         }}
       />
+    );
+  }
+
+  return (
+    <>
+      {body}
       {showSetup && (
         <LeagueSetupModal
           league={editingLeague}
@@ -1737,16 +1399,25 @@ function App() {
           onClose={() => { setShowSetup(false); setEditingId(null); }}
         />
       )}
+      {showPull && (
+        <PullDataModal
+          league={routeLeague || leagues[0]}
+          espnLeagueId={(routeLeague || {}).espnLeagueId
+            || (leagues.find(l => l.espnLeagueId) || {}).espnLeagueId}
+          onClose={() => setShowPull(false)}
+          onComplete={refreshPlayers}
+        />
+      )}
+      <Toaster />
+      <ConfirmHost />
     </>
   );
 }
 
 Object.assign(window, {
-  T, calcProjection, withProjections, withVORP,
+  calcProjection, withProjections, withVORP,
   getSnakeTeam, getCurrentRoundPick, getRosterNeeds,
-  makeLeague, leagueFromBackendConfig, SCORING_LABELS, POSITIONS,
-  Btn, Badge, Modal, Field, Input, Select,
+  makeLeague, leagueFromBackendConfig, SCORING_LABELS,
   useTask, PullDataModal, AuctionModal,
-  FreeAgentFinderModal,
-  LeagueSetupModal, HomeScreen, App,
+  DraftOrderEditor, LeagueSetupModal, HomeScreen, SetupGuide, App,
 });

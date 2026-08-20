@@ -3,43 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light" />
   <title>Draft Assistant</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body, #root { height: 100%; }
-    body {
-      font-family: 'DM Sans', sans-serif;
-      background: #f3f5fb;
-      color: #1a1d2e;
-      -webkit-font-smoothing: antialiased;
-    }
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 99px; }
-    ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
-    input[type=number]::-webkit-inner-spin-button { opacity: 0.5; }
-    input[type=range] { accent-color: #3a5bef; }
-    .loading-screen {
-      height: 100vh; display: flex; flex-direction: column;
-      align-items: center; justify-content: center; gap: 16px;
-    }
-    .loading-spinner {
-      width: 36px; height: 36px; border: 3px solid #e0e4ef;
-      border-top-color: #3a5bef; border-radius: 50%;
-      animation: spin .8s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-  </style>
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div id="root">
     <div class="loading-screen">
       <div class="loading-spinner"></div>
-      <div style="font-size:14px;color:#6b7280">Loading Draft Assistant…</div>
+      <div>Loading Draft Assistant…</div>
     </div>
   </div>
 
-  <!-- Tweak defaults -->
+  <!-- Engine tunable defaults -->
   <script>
   const TWEAK_DEFAULTS = {
     "sims": 24,
@@ -53,15 +29,21 @@
   <script src="vendor/react-dom.production.min.js"></script>
   <script src="vendor/babel.min.js"></script>
 
-  <!-- Recommendation scoring comes from the Python rest-of-draft rollout engine
-       via POST /api/suggest (see draft-screen.jsx) — the single source of truth.
-       opponent-model.js is kept: it powers the Opponents panel only. -->
+  <!-- Plain scripts: scoring/roster helpers and the opponent model.
+       Recommendation scoring itself comes from the Python rest-of-draft
+       rollout via POST /api/suggest (see draft-screen.jsx) — the single
+       source of truth. opponent-model.js powers the Opponents panel only. -->
   <script src="components/shared-utils.js"></script>
   <script src="components/opponent-model.js"></script>
+  <script src="components/use-tweaks.js"></script>
 
-  <!-- React components (transpiled in-browser by Babel) -->
-  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <!-- React components, transpiled in-browser by Babel and executed in this
+       order. Each Babel script has its own scope, so every file publishes what
+       later files need via Object.assign(window, …) — ui-kit first. -->
+  <script type="text/babel" src="components/ui-kit.jsx"></script>
   <script type="text/babel" src="components/app-components.jsx"></script>
+  <script type="text/babel" src="components/league-hub.jsx"></script>
+  <script type="text/babel" src="components/waiver-screen.jsx"></script>
   <script type="text/babel" src="components/draft-screen.jsx"></script>
 
   <!-- Mount -->
