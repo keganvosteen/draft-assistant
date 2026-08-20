@@ -9,7 +9,7 @@ You do **not** need Python or anything else installed.
 
 ## Windows
 
-1. Download **`DraftAssistant-Setup-0.3.0.exe`**.
+1. Download **`DraftAssistant-Setup-0.4.0.exe`**.
 2. Run it. Windows will show a blue **"Windows protected your PC"** box —
    that's because the app isn't signed with a (fairly expensive) certificate,
    not because anything is wrong with it.
@@ -24,7 +24,7 @@ To remove it: Settings → Apps → Draft Assistant → Uninstall.
 
 ## Mac
 
-1. Download **`DraftAssistant-0.3.0-universal2.dmg`**. The one file works on
+1. Download **`DraftAssistant-0.4.0-universal2.dmg`**. The one file works on
    both Apple Silicon (M1/M2/M3/M4) and older Intel Macs — you don't need to
    know which you have.
 

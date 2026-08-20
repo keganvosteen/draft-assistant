@@ -57,7 +57,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ./packaging/macos/build.sh
 ```
 
-Or push a tag and let CI build both: `git tag v0.3.0 && git push origin v0.3.0`.
+Or push a tag and let CI build both: `git tag v0.4.0 && git push origin v0.4.0`.
 
 Both builds run the projection-quality release gate first, so a degraded
 single-source or position-incomplete board cannot be shipped accidentally, and

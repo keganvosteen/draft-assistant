@@ -81,7 +81,7 @@ tests, then builds the Windows installer and universal macOS DMG.
 - **Tag push**: also publishes a GitHub Release with both files attached.
 
 ```bash
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.4.0 && git push origin v0.4.0
 ```
 
 Bump `__version__` in [`draft_assistant/__init__.py`](../draft_assistant/__init__.py)
