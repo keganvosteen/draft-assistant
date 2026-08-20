@@ -1005,14 +1005,22 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
             : isMedium
               ? [teamText, byeText, `ADP ${p.adp}`].filter(Boolean).join(' · ')
               : `ADP ${p.adp}`;
+          const updateDetails = (p.signals || []).map(s =>
+            `${s.attribution || s.source}: ${s.kind.replace('_',' ')} ${s.value}`
+          );
+          const rowTitle = [
+            p.draftScore != null
+              ? `Draft impact: ${Math.round(p.draftScore)} | Immediate lineup gain: ${p.lineupGain} | Available next pick: ${p.availPct}%`
+              : null,
+            p.availability ? `Availability: ${p.availability}` : null,
+            ...updateDetails,
+          ].filter(Boolean).join('\n');
 
           return (
             <div key={p.id}
               onMouseEnter={() => setHoverId(p.id)}
               onMouseLeave={() => setHoverId(null)}
-              title={p.draftScore != null
-                ? `Draft impact: ${Math.round(p.draftScore)} | Immediate lineup gain: ${p.lineupGain} | Available next pick: ${p.availPct}%`
-                : undefined}
+              title={rowTitle || undefined}
               style={{
                 display:'grid', gridTemplateColumns:GRID,
                 padding:'7px 14px', gap:6, alignItems:'center',
@@ -1029,11 +1037,18 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
                     width:7, height:7, borderRadius:'50%', background:tierDot, flexShrink:0,
                   }} title={`Tier ${p.tier}`} />
                   <span style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{p.name}</span>
+                  {p.availability && (
+                    <span style={{
+                      fontSize:9, fontWeight:800, color:T.red, background:T.redLight,
+                      borderRadius:3, padding:'1px 4px', flexShrink:0,
+                    }}>{p.availability}</span>
+                  )}
                 </div>
                 {isHov && p.draftScore != null ? (
                   <div style={{fontSize:10, color:T.muted, marginTop:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
                     avail {p.availPct}%
                     {p.byePen > 0 && <span style={{color:T.amber}}> · bye −{p.byePen}</span>}
+                    {updateDetails.length > 0 && <span style={{color:T.primary}}> · why changed: {updateDetails[0]}</span>}
                   </div>
                 ) : (
                   <div style={{fontSize:10, color:T.mutedLight, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>

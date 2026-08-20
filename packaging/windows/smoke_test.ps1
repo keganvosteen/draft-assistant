@@ -61,7 +61,16 @@ try {
     $players = (Get-Content $board -Raw | ConvertFrom-Json).players.Count
     if ($players -lt 1) { throw "Seeded player board is empty" }
 
-    Write-Host "  smoke test OK - served UI, seeded $players players" -ForegroundColor Green
+    $context = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/context" -TimeoutSec 5
+    if ($null -eq $context.stale -or $null -eq $context.sources) {
+        throw "/api/context did not return the freshness contract"
+    }
+    $update = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/update" -TimeoutSec 10
+    if ($null -eq $update.currentVersion -or $null -eq $update.updateAvailable) {
+        throw "/api/update did not return the version contract"
+    }
+
+    Write-Host "  smoke test OK - served UI, context/update APIs, seeded $players players" -ForegroundColor Green
 }
 finally {
     if ($proc -and -not $proc.HasExited) {

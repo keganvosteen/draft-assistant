@@ -20,7 +20,7 @@ all mutable state:
 
 | | Source checkout | Installed build |
 | --- | --- | --- |
-| Config, draft state, player board | current directory | `%LOCALAPPDATA%\DraftAssistant` (Windows) <br> `~/Library/Application Support/DraftAssistant` (macOS) |
+| Config, draft state, player board, player context | current directory | `%LOCALAPPDATA%\DraftAssistant` (Windows) <br> `~/Library/Application Support/DraftAssistant` (macOS) |
 
 On first run the app copies the bundled `data/projections.json` and
 `league.config.yaml` into that directory. Upgrades never overwrite them, so a
@@ -74,18 +74,25 @@ Homebrew and `actions/setup-python` are not.
 ## Building both via CI
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) runs the
-tests, then builds the Windows installer and both macOS DMGs.
+tests, then builds the Windows installer and universal macOS DMG.
 
 - **Manual run** (Actions tab → Build installers → Run workflow): artifacts are
   attached to the run. This is how to get a Mac build without owning a Mac.
-- **Tag push**: also publishes a GitHub Release with all three files attached.
+- **Tag push**: also publishes a GitHub Release with both files attached.
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 Bump `__version__` in [`draft_assistant/__init__.py`](../draft_assistant/__init__.py)
-first — the spec, the installer and the bundle all read it from there.
+first — package metadata, the spec, the installer and the bundle all read it
+from there.
+
+Packaged apps check GitHub's latest stable release in the background every six
+hours. A newer version appears as a dismissible banner that opens the matching
+`.exe` or universal `.dmg` in the system browser. The app never downloads or
+executes an unsigned installer on its own. Builds older than v0.3.0 do not have
+the checker, so those testers need the v0.3.0 link sent to them once manually.
 
 ---
 

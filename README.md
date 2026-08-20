@@ -1,6 +1,6 @@
 # Fantasy Football Draft Assistant
 
-A local-first Python draft assistant with terminal, Tkinter, browser, and pywebview interfaces; multi-league profiles; rest-of-draft simulation; free-agent scanning; auction values; and public-data ingestion.
+A local-first Python draft assistant with terminal, Tkinter, browser, and pywebview interfaces; multi-league profiles; rest-of-draft simulation; news-aware weekly/ROS waiver scanning; auction values; and public-data ingestion.
 
 ---
 
@@ -31,7 +31,7 @@ python -m draft_assistant --profile home draft
 
 The terminal UI walks you through league setup on first run (teams, scoring format, roster, draft position), seeds sample player data, and drops you into a live draft board with commands like `pick <name>`, `my <name>`, `undo`, `log`, `auction`.
 
-The web UI starts a loopback-only HTTP server (default `http://127.0.0.1:8080`) and opens your browser. It provides a live impact/VORP board, server-backed rollout recommendations, opponent-run and value-at-risk alerts, auction values, and a Free Agent Finder. Add `--port N` or `--no-open` to customize.
+The web UI starts a loopback-only HTTP server (default `http://127.0.0.1:8080`) and opens your browser. It provides a live impact/VORP board, server-backed rollout recommendations, player availability and opportunity signals, opponent-run and value-at-risk alerts, auction values, and weekly/ROS Free Agent Finder views. Add `--port N` or `--no-open` to customize.
 
 The desktop UI opens a Tkinter window with a draft board, roster panel, and a league switcher.
 
@@ -51,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ./packaging/macos/build.sh
 ```
 
-Or push a tag and let CI build both: `git tag v0.1.0 && git push origin v0.1.0`.
+Or push a tag and let CI build both: `git tag v0.3.0 && git push origin v0.3.0`.
 
 Both builds run the projection-quality release gate first, so a degraded
 single-source or position-incomplete board cannot be shipped accidentally, and
@@ -159,6 +159,13 @@ The league editor can import a real league instead of typing one in — teams, r
 
 Outside of a draft, **Sync** on a league card pulls current rosters (all three platforms) — useful in-season for the free-agent scan.
 
+The Free Agent Finder ranks the same available pool two ways: **This Week**
+uses weekly projections plus hard availability statuses, while **Rest of Season**
+subtracts current-season production from the season baseline. Sleeper trends,
+depth charts, and snap context explain movement and break ties; they never apply
+opaque projection multipliers. Dynamic context is cached separately from the
+projection board, so repeated refreshes cannot compound an adjustment.
+
 ---
 
 ## Data Sources
@@ -253,7 +260,9 @@ draft_assistant/
 ├── scoring.py             # Fantasy points from stat projections
 ├── historical.py          # Age curves, trend blending, confidence scoring
 ├── auction.py             # Auction dollar values + budget tracker
-├── free_agents.py         # All-league waiver/free-agent recommendations
+├── free_agents.py         # Weekly + ROS waiver/free-agent recommendations
+├── context.py             # Cached Sleeper/nflverse player update signals
+├── update_checker.py      # Packaged-app GitHub Release notice
 ├── consensus.py           # Multi-source projection merging
 ├── fuzzy.py               # Levenshtein name matching
 ├── storage.py             # JSON persistence
@@ -288,6 +297,8 @@ tests/                     # Unit and local HTTP integration tests
 ├── test_fuzzy.py
 ├── test_auction.py
 ├── test_free_agents.py    # Free-agent add/drop recommendations
+├── test_context.py        # Signal persistence, joins, expiry + adjustments
+├── test_update_checker.py # Platform release selection + version checks
 ├── test_config.py         # Config robustness + round trip
 ├── test_storage.py        # Atomic persistence
 ├── test_free_sources.py   # Free-data collector field mapping
@@ -305,7 +316,7 @@ tests/                     # Unit and local HTTP integration tests
 python -m unittest discover tests -v
 ```
 
-The 240+ tests cover scoring, VOR/replacement levels, typed flex, bye-week penalties, snake-pick math, rollout timing and roster completion, stable-id migration, imported scoring, free-agent add/drop recommendations, historical adjustments, platform sync, auction validation, collectors, atomic persistence, and the local API's origin/input controls.
+The test suite covers scoring, VOR/replacement levels, typed flex, bye-week penalties, snake-pick math, rollout timing and roster completion, stable-id migration, imported scoring, dual-horizon free-agent add/drop recommendations, conservative availability rules, update checks, historical adjustments, platform sync, auction validation, collectors, atomic persistence, and the local API's origin/input controls.
 
 ---
 

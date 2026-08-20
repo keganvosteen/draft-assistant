@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import socket
 import threading
+import webbrowser
 from functools import partial
 from http.server import ThreadingHTTPServer
+from urllib.parse import urlsplit
 
 from .profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from .providers.base import build_provider
@@ -44,6 +46,17 @@ class DesktopAPI:
         if result and len(result) > 0:
             return str(result[0])
         return None
+
+    def open_external_url(self, url: str) -> bool:
+        """Open only this project's HTTPS release links outside pywebview."""
+        parsed = urlsplit(str(url or ""))
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "github.com"
+            or not parsed.path.startswith("/keganvosteen/draft-assistant/releases/")
+        ):
+            return False
+        return bool(webbrowser.open(url))
 
 
 def run_desktop(profile: str = DEFAULT_PROFILE, debug: bool = False) -> None:
