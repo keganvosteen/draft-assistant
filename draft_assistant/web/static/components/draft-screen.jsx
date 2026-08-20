@@ -1310,7 +1310,10 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       },
     };
     const ctrl = new AbortController();
-    setSuggest(s => ({ ...s, loading: true, err: null }));
+    // `stale` has to clear here as well: RecommendationBar tests it before
+    // `loading`, so leaving it set makes the bar read "ON DECK — 0 picks until
+    // you're up" for the whole rollout instead of showing the spinner.
+    setSuggest(s => ({ ...s, loading: true, err: null, stale: false }));
     const timer = setTimeout(() => {
       fetch('/api/suggest', {
         method: 'POST',
@@ -1442,7 +1445,15 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   // mirror the draft while it happens instead of being typed in.
   const canLiveSync = Boolean(league.sleeperDraftId || league.sleeperLeagueId);
   const [live, setLive] = React.useState({ on:false, busy:false, ok:null, msg:null, status:'', unmatched:0 });
-  const liveRef = React.useRef({ inFlight:false, sig:'' });
+  const liveRef = React.useRef({ inFlight:false });
+  // The apply guard compares Sleeper against the board as it stands *now*, not
+  // against the last payload we applied. Caching the payload signature instead
+  // meant an Undo (or any local edit) could never be re-synced: Sleeper would
+  // report the same picks, the signature would match, and the board stayed
+  // desynced until Sleeper's own pick count moved.
+  const picksRef = React.useRef(picks);
+  picksRef.current = picks;
+  const picksSig = list => (list || []).map(pk => `${pk.pickNum}:${pk.playerId || ''}`).join(',');
 
   const syncSleeperDraft = ({ manual = false } = {}) => {
     if (liveRef.current.inFlight) return;
@@ -1457,12 +1468,9 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       .then(d => {
         if (d.error) { setLive(s => ({ ...s, busy:false, ok:false, msg:d.error })); return; }
         const synced = d.picks || [];
-        const last = synced[synced.length - 1] || {};
-        const sig = `${synced.length}|${last.playerId || ''}`;
-        // Only push when the draft actually moved — replacing picks re-runs the
-        // rollout, which is the expensive part.
-        if (sig !== liveRef.current.sig) {
-          liveRef.current.sig = sig;
+        // Only push when Sleeper and the board actually differ — replacing
+        // picks re-runs the rollout, which is the expensive part.
+        if (picksSig(synced) !== picksSig(picksRef.current)) {
           onReplacePicks(synced);
         }
         const unknown = (d.unmatched || []).length;

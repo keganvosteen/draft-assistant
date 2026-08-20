@@ -59,6 +59,22 @@ class TestFreeAgentRecommendations(unittest.TestCase):
         self.assertIsNone(rows[0].drop_player)
         self.assertGreater(rows[0].starter_gain, 0)
 
+    def test_starter_upgrade_without_drop_is_not_called_an_open_slot(self):
+        # A positive starter gain with no drop does not mean an empty slot: the
+        # roster has room, and the add is simply better than an incumbent.
+        rb1 = _p("Roster RB", "RB", 60)
+        wr1 = _p("Roster WR", "WR", 90)
+        better = _p("Free RB", "RB", 100)
+        cfg = _config({"RB": 1, "WR": 1, "BN": 1})
+
+        rows = free_agent_recommendations(cfg, [better], {"RB": [rb1], "WR": [wr1]}, top_n=1)
+
+        self.assertEqual(rows[0].player, better)
+        self.assertIsNone(rows[0].drop_player)
+        self.assertGreater(rows[0].starter_gain, 0)
+        self.assertNotIn("open starting slot", rows[0].reason)
+        self.assertIn("Improves your starting lineup", rows[0].reason)
+
     def test_full_roster_candidate_not_kept_is_suppressed(self):
         rostered = _p("Roster RB", "RB", 100)
         no_upgrade = _p("Free RB", "RB", 90, adp=1)

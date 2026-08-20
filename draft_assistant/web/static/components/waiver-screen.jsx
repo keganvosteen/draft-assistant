@@ -107,7 +107,14 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
 
   // Ask for the full window (the API caps at 30) and filter by position in the
   // browser, so switching position tabs is instant instead of a round trip.
+  //
+  // `week` stays the *user's* choice and is never written back from the
+  // response: a scan that adopted the server's week re-armed this effect and
+  // ran the whole free-agent ranking (top_n=None over the full pool) a second
+  // time on every open. The resolved week is read off `data` instead.
+  const scanSeq = React.useRef(0);
   const scan = React.useCallback(() => {
+    const seq = ++scanSeq.current;
     setLoading(true);
     setError(null);
     fetch('/api/free-agents', {
@@ -120,17 +127,45 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
     })
       .then(r => r.json())
       .then(d => {
+        // A slower earlier scan must not overwrite a newer one's answer.
+        if (seq !== scanSeq.current) return;
         if (d.error) { setError(d.error); setData(null); return; }
         // contextAsOf / contextStale / week are response-level, not per-league.
         const row = (d.leagues || [])[0] || null;
         setData(row ? { ...row, week: d.week, contextAsOf: d.contextAsOf, contextStale: d.contextStale } : null);
-        if (week == null && d.week) setWeek(d.week);
       })
-      .catch(err => setError(String(err)))
-      .finally(() => setLoading(false));
+      .catch(err => { if (seq === scanSeq.current) setError(String(err)); })
+      .finally(() => { if (seq === scanSeq.current) setLoading(false); });
   }, [league, picks, week]);
 
-  React.useEffect(() => { scan(); }, [scan]);
+  // Typing "1" then "2" in the week box shouldn't cost two full rankings.
+  React.useEffect(() => {
+    const timer = setTimeout(scan, 150);
+    return () => clearTimeout(timer);
+  }, [scan]);
+
+  // What the week box shows and what "Refresh news" asks for: the user's pick
+  // if they made one, otherwise whatever week the server said it ranked.
+  const effectiveWeek = week != null ? week : (data && data.week) || null;
+
+  // Poll one refresh task to completion. Every wait is *inside* the returned
+  // promise chain — a `setTimeout(poll, …)` that drops the next promise on the
+  // floor means only the first iteration can ever report a failure, and the
+  // button sits on "Updating…" forever when a later one throws.
+  const pollRefreshTask = (taskId, attempts = 0) =>
+    fetch(`/api/task/${taskId}`)
+      .then(r => r.json())
+      .then(task => {
+        if (task.status === 'done') return;
+        // A pruned or unknown task id answers 404 with an error and no status;
+        // that is terminal, not something to keep polling for two minutes.
+        if (!task.status || task.status === 'error') {
+          throw new Error(task.error || 'Update refresh failed');
+        }
+        if (attempts >= 120) throw new Error('Update refresh timed out');
+        return new Promise(resolve => setTimeout(resolve, 1000))
+          .then(() => pollRefreshTask(taskId, attempts + 1));
+      });
 
   // Pull fresh injury / depth-chart / snap / trending signals, then re-rank.
   const refreshUpdates = () => {
@@ -138,24 +173,19 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
     setError(null);
     fetch('/api/context/refresh', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ week, force: true }),
+      // Omitting the key lets the server pick the current week; sending an
+      // explicit null is a 400.
+      body: JSON.stringify({ force: true, ...(effectiveWeek ? { week: effectiveWeek } : {}) }),
     })
       .then(r => r.json())
       .then(started => {
         if (started.error) throw new Error(started.error);
         if (!started.taskId) throw new Error('Update refresh did not start');
-        let attempts = 0;
-        const poll = () => fetch(`/api/task/${started.taskId}`)
-          .then(r => r.json())
-          .then(task => {
-            if (task.status === 'done') { setUpdating(false); toast('Player updates refreshed.', 'ok'); scan(); return; }
-            if (task.status === 'error') throw new Error(task.error || 'Update refresh failed');
-            if (attempts++ > 120) throw new Error('Update refresh timed out');
-            setTimeout(poll, 1000);
-          });
-        poll().catch(err => { setUpdating(false); toast(String(err.message || err), 'error', 6000); });
+        return pollRefreshTask(started.taskId);
       })
-      .catch(err => { setUpdating(false); toast(String(err.message || err), 'error', 6000); });
+      .then(() => { toast('Player updates refreshed.', 'ok'); scan(); })
+      .catch(err => toast(String(err.message || err), 'error', 6000))
+      .finally(() => setUpdating(false));
   };
 
   const sync = () => {
@@ -249,7 +279,7 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
             {horizon === 'weekly' && (
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: T.muted }}>
                 Week
-                <Input type="number" min={1} max={18} value={week || ''}
+                <Input type="number" min={1} max={18} value={effectiveWeek || ''}
                   aria-label="NFL week"
                   onChange={e => setWeek(Math.max(1, Math.min(parseInt(e.target.value, 10) || 1, 18)))}
                   style={{ width: 64, padding: '5px 8px', fontSize: 12 }} />

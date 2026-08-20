@@ -280,8 +280,11 @@ def _reason(
             else "Better bench stash than your weakest current player"
         )
     else:
+        # Nothing has to be dropped, but a positive starter gain does not imply
+        # an *empty* slot: on a roster with room, the add can just as easily be
+        # beating an incumbent starter. Word it so both readings are true.
         note = (
-            "Fills an open starting slot" if starter_gain > 0
+            "Improves your starting lineup" if starter_gain > 0
             else f"{player.position} depth for an open bench spot"
         )
     if vor > 0:
