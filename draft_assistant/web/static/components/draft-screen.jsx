@@ -1,65 +1,6 @@
-// ─── WINDOW SIZE HOOK ────────────────────────────────────────────────────────
-function useWindowWidth() {
-  const [width, setWidth] = React.useState(
-    typeof window !== 'undefined' ? window.innerWidth : 1200
-  );
-  React.useEffect(() => {
-    const handleResize = () => setWidth(window.innerWidth);
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-  return width;
-}
-
-// ─── DRAWER OVERLAY ──────────────────────────────────────────────────────────
-function Drawer({ title, onClose, children }) {
-  return (
-    <div style={{
-      position:'fixed', inset:0, background:'rgba(0,0,0,.45)', zIndex:990,
-      display:'flex', justifyContent:'flex-end',
-    }} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={{
-        background: T.surface, width:'100%', maxWidth:360, height:'100%',
-        display:'flex', flexDirection:'column', boxShadow:'-4px 0 24px rgba(0,0,0,.2)',
-        overflow:'hidden',
-      }}>
-        <div style={{
-          padding:'14px 16px', borderBottom:`1px solid ${T.border}`,
-          display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0,
-        }}>
-          <span style={{fontSize:14, fontWeight:700, color:T.text}}>{title}</span>
-          <button onClick={onClose} style={{
-            background:'none', border:'none', fontSize:20, cursor:'pointer', color:T.muted, padding:'0 4px',
-          }}>×</button>
-        </div>
-        <div style={{flex:1, overflowY:'auto', display:'flex', flexDirection:'column'}}>
-          {children}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── POSITION COLORS ─────────────────────────────────────────────────────────
-const POS_COLORS = {
-  QB:  { bg:'#fef3c7', fg:'#92400e' },
-  RB:  { bg:'#dcfce7', fg:'#14532d' },
-  WR:  { bg:'#dbeafe', fg:'#1e3a8a' },
-  TE:  { bg:'#ede9fe', fg:'#4c1d95' },
-  K:   { bg:'#f3f4f6', fg:'#374151' },
-  DST: { bg:'#fce7f3', fg:'#831843' },
-};
-
-function PosBadge({ pos }) {
-  const c = POS_COLORS[pos] || { bg: T.borderLight, fg: T.muted };
-  return (
-    <span style={{
-      background: c.bg, color: c.fg, borderRadius: 4, padding: '2px 7px',
-      fontSize: 11, fontWeight: 800, letterSpacing: .4, display:'inline-block',
-      minWidth: 32, textAlign:'center',
-    }}>{pos}</span>
-  );
-}
+// ─── DRAFT ROOM ───────────────────────────────────────────────────────────────
+// Draft day only. The in-season waiver wire is a separate screen reached from
+// the league hub — nothing here knows about it.
 
 function VORPBadge({ vorp }) {
   const isPos = vorp > 0;
@@ -67,10 +8,9 @@ function VORPBadge({ vorp }) {
   const color = isPos ? T.green : isNeg ? T.red : T.muted;
   const bg    = isPos ? T.greenLight : isNeg ? T.redLight : T.borderLight;
   return (
-    <span style={{
-      background: bg, color, borderRadius: 4, padding: '2px 8px',
-      fontSize: 12, fontWeight: 700, fontFamily: 'DM Mono, monospace',
-      display:'inline-block', textAlign:'right', minWidth:48,
+    <span className="da-num" style={{
+      background: bg, color, borderRadius: T.rxs, padding: '2px 8px',
+      fontSize: 12, fontWeight: 700, display:'inline-block', textAlign:'right', minWidth:48,
     }}>
       {vorp > 0 ? '+' : ''}{vorp}
     </span>
@@ -79,16 +19,21 @@ function VORPBadge({ vorp }) {
 
 // Only rows the engine fully simulated carry a draft score; the rest come back
 // with impact null and render as "—" instead of this badge.
-function ScoreBadge({ score }) {
-  const high = score >= 250;
-  const mid  = score >= 180;
-  const bg   = high ? '#eef1fd' : mid ? T.greenLight : T.borderLight;
+//
+// Impact is a rest-of-draft differential, so its absolute size shifts hugely
+// between round 1 (everything is nearly equivalent) and the late rounds. Fixed
+// thresholds made the colour meaningless, so shade against the best impact
+// currently on the board instead.
+function ScoreBadge({ score, best }) {
+  const ratio = best > 0 ? score / best : 0;
+  const high = ratio >= 0.9;
+  const mid  = ratio >= 0.6;
+  const bg   = high ? T.primaryLight : mid ? T.greenLight : T.borderLight;
   const fg   = high ? T.primary : mid ? T.green : T.muted;
   return (
-    <span style={{
-      background: bg, color: fg, borderRadius: 4, padding: '2px 8px',
-      fontSize: 12, fontWeight: 800, fontFamily: 'DM Mono, monospace',
-      display:'inline-block', textAlign:'right', minWidth:54,
+    <span className="da-num" style={{
+      background: bg, color: fg, borderRadius: T.rxs, padding: '2px 8px',
+      fontSize: 12, fontWeight: 800, display:'inline-block', textAlign:'right', minWidth:54,
     }}>
       {Math.round(score)}
     </span>
@@ -111,124 +56,94 @@ function generateRoundHint(round, myPlayers, topAvailable, league) {
     const rb = counts.RB || 0, wr = counts.WR || 0;
     if (rb < 1) return `Round ${round}: you have 0 RBs. RB scarcity is real — strongly consider locking one.`;
     if (wr < 1) return `Round ${round}: you have 0 WRs. Grab a WR1 before the tier breaks.`;
-    return `Round ${round}: continue building RB/WR core. Elite TE (Kelce-tier) is also a defensible reach now.`;
+    return `Round ${round}: continue building the RB/WR core. An elite TE is also a defensible reach now.`;
   }
   if (round <= 7) {
     if (!counts.QB && (slots.QB || 0) > 0) {
       const topQB  = topAvailable.find(p => p.pos === 'QB');
       const qbRank = topQB ? topAvailable.indexOf(topQB) + 1 : 0;
       if (topQB && qbRank <= 3)
-        return `Round ${round}: ${topQB.name} is the #${qbRank} score on the board — QB window is open, take it.`;
-      return `Round ${round}: no QB yet — okay for now${topQB ? ` (${topQB.name} ranks #${qbRank})` : ''}, but your open starter slots score higher. Fill those first, grab a QB by round 7-8.`;
+        return `Round ${round}: ${topQB.name} is the #${qbRank} score on the board — the QB window is open, take it.`;
+      return `Round ${round}: no QB yet — fine for now${topQB ? ` (${topQB.name} ranks #${qbRank})` : ''}, but your open starter slots score higher. Fill those first, grab a QB by round 7–8.`;
     }
-    return `Round ${round}: depth time. RB handcuffs and WR3/4 with target share matter; avoid kicker/DST.`;
+    return `Round ${round}: depth time. RB handcuffs and WR3/4 with target share matter; avoid K/DST.`;
   }
   if (round <= 10) {
     if (!counts.TE && (slots.TE || 0) > 0)
-      return `Round ${round}: TE streamers are fine but a startable TE solves a slot. Look at usage trends.`;
-    return `Round ${round}: bench upside picks. Rookies, late breakouts, and high-target shares.`;
+      return `Round ${round}: TE streamers are fine, but a startable TE solves a slot. Look at usage trends.`;
+    return `Round ${round}: bench upside picks. Rookies, late breakouts, and high target shares.`;
   }
-  if (round <= 12) return `Round ${round}: backups & lottery tickets. Avoid drafting K/DST until last 2 rounds.`;
-  return `Round ${round}: kicker + DST — pick the highest-projected ones with favorable byes.`;
+  if (round <= 12) return `Round ${round}: backups and lottery tickets. Avoid K/DST until the last two rounds.`;
+  return `Round ${round}: kicker and DST — take the highest-projected ones with favourable byes.`;
 }
 
 // ─── MY TEAM PANEL ────────────────────────────────────────────────────────────
-function MyTeamPanel({ league, myPlayers, round, hint, onGetHint, fullWidth=false }) {
-  const slots = league.rosterSlots;
-  const slotDefs = [];
-  for (let i=0;i<(slots.QB||0);i++)   slotDefs.push({label:'QB',  pos:'QB'});
-  for (let i=0;i<(slots.RB||0);i++)   slotDefs.push({label:'RB',  pos:'RB'});
-  for (let i=0;i<(slots.WR||0);i++)   slotDefs.push({label:'WR',  pos:'WR'});
-  for (let i=0;i<(slots.TE||0);i++)   slotDefs.push({label:'TE',  pos:'TE'});
-  const flexMap = (typeof FLEX_TYPES_JS !== 'undefined') ? FLEX_TYPES_JS
-    : { FLEX: { label:'FLX', elig:['RB','WR','TE'] } };
-  Object.keys(flexMap)
-    .filter(fk => (slots[fk]||0) > 0)
-    .sort((a,b) => flexMap[a].elig.length - flexMap[b].elig.length)
-    .forEach(fk => {
-      for (let i=0;i<(slots[fk]||0);i++)
-        slotDefs.push({label:flexMap[fk].label, pos:'FLEX', elig:flexMap[fk].elig});
-    });
-  for (let i=0;i<(slots.K||0);i++)    slotDefs.push({label:'K',   pos:'K'});
-  for (let i=0;i<(slots.DST||0);i++)  slotDefs.push({label:'DST', pos:'DST'});
-  for (let i=0;i<(slots.BN||0);i++)   slotDefs.push({label:'BN',  pos:null});
-
-  const filled = [];
-  const remaining = [...myPlayers];
-
-  slotDefs.forEach(slot => {
-    if (!slot.pos) { filled.push({slot, player: remaining.shift()||null}); return; }
-    if (slot.pos === 'FLEX') {
-      const elig = new Set(slot.elig || ['RB','WR','TE']);
-      const idx = remaining.findIndex(p => elig.has(p.pos));
-      filled.push({slot, player: idx>=0 ? remaining.splice(idx,1)[0] : null});
-      return;
-    }
-    const idx = remaining.findIndex(p => p.pos === slot.pos);
-    filled.push({slot, player: idx>=0 ? remaining.splice(idx,1)[0] : null});
-  });
-
-  const needs = getRosterNeeds(myPlayers, slots);
+function MyTeamPanel({ league, myPlayers, round, hint, onGetHint, fullWidth = false }) {
+  const lineup = buildLineup(myPlayers, league.rosterSlots);
+  const needs = getRosterNeeds(myPlayers, league.rosterSlots);
 
   return (
-    <div style={{
-      width: fullWidth ? '100%' : 240, flexShrink:0, background:T.surface,
-      borderRight: fullWidth ? 'none' : `1px solid ${T.border}`, display:'flex', flexDirection:'column', overflowY:'auto',
+    <aside style={{
+      width: fullWidth ? '100%' : 236, flexShrink:0, background:T.surface,
+      borderRight: fullWidth ? 'none' : `1px solid ${T.border}`,
+      display:'flex', flexDirection:'column', overflowY:'auto',
     }}>
-      <div style={{padding:'14px 16px', borderBottom:`1px solid ${T.border}`}}>
-        <div style={{fontSize:11, fontWeight:700, color:T.muted, letterSpacing:.5}}>MY TEAM</div>
-        <div style={{fontSize:12, color:T.muted, marginTop:2}}>
-          {myPlayers.length} / {slotDefs.length} picked
+      <div style={{padding:'12px 14px', borderBottom:`1px solid ${T.border}`}}>
+        {!fullWidth && <SectionLabel>My team</SectionLabel>}
+        <div style={{fontSize:12, color:T.muted, marginTop: fullWidth ? 0 : 2}}>
+          {myPlayers.length} of {lineup.length} slots filled
         </div>
       </div>
 
-      <div style={{padding:'8px 12px', flex:1}}>
-        {filled.map(({slot, player}, i) => (
+      <div style={{padding:'6px 12px', flex:1}}>
+        {lineup.map(({slot, player}, i) => (
           <div key={i} style={{
-            display:'flex', alignItems:'center', gap:8, padding:'5px 4px',
-            borderBottom: i<filled.length-1 ? `1px solid ${T.borderLight}` : 'none', minHeight:34,
+            display:'flex', alignItems:'center', gap:8, padding:'5px 2px',
+            borderBottom: i < lineup.length - 1 ? `1px solid ${T.borderLight}` : 'none', minHeight:34,
           }}>
-            <span style={{fontSize:10, fontWeight:700, color:T.muted, width:28, flexShrink:0}}>{slot.label}</span>
+            <span style={{
+              fontSize:10, fontWeight:800, letterSpacing:.3, width:28, flexShrink:0,
+              color: slot.bench ? T.mutedLight : T.muted,
+            }}>{slot.label}</span>
             {player ? (
               <div style={{minWidth:0, flex:1}}>
-                <div style={{fontSize:12, fontWeight:600, color:T.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
+                <div className="da-ellipsis" style={{fontSize:12, fontWeight:600, color:T.text}}>
                   {player.name}
                 </div>
                 <div style={{fontSize:10, color:T.muted, display:'flex', gap:5}}>
-                  <span>{player.nflTeam}</span>
+                  <span>{player.pos} · {player.nflTeam}</span>
                   {player.byeWeek && <span style={{color:T.mutedLight}}>BYE {player.byeWeek}</span>}
                 </div>
               </div>
             ) : (
-              <span style={{fontSize:12, color:T.borderLight}}>—</span>
+              <span style={{fontSize:12, color:T.mutedLight}}>empty</span>
             )}
           </div>
         ))}
       </div>
 
       {needs.length > 0 && (
-        <div style={{padding:'10px 12px', borderTop:`1px solid ${T.border}`}}>
-          <div style={{fontSize:10, fontWeight:700, color:T.muted, letterSpacing:.5, marginBottom:6}}>NEEDS</div>
+        <div style={{padding:'10px 14px', borderTop:`1px solid ${T.border}`}}>
+          <SectionLabel style={{marginBottom:6}}>Still need</SectionLabel>
           <div style={{display:'flex', flexWrap:'wrap', gap:4}}>
             {needs.map(pos => <PosBadge key={pos} pos={pos} />)}
           </div>
         </div>
       )}
 
-      <div style={{padding:'12px', borderTop:`1px solid ${T.border}`}}>
+      <div style={{padding:'11px 14px', borderTop:`1px solid ${T.border}`}}>
         <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6}}>
-          <div style={{fontSize:10, fontWeight:700, color:T.muted, letterSpacing:.5}}>ROUND {round} HINT</div>
+          <SectionLabel>Round {round} plan</SectionLabel>
           <button onClick={onGetHint} style={{
             background:'none', border:'none', cursor:'pointer',
-            fontSize:11, color:T.primary, fontWeight:600, padding:0, fontFamily:'inherit',
-          }}>Refresh</button>
+            fontSize:11.5, color:T.primary, fontWeight:600, padding:0,
+          }}>{hint ? 'Update' : 'Show'}</button>
         </div>
         {hint
           ? <div style={{fontSize:12, color:T.text, lineHeight:1.55}}>{hint}</div>
-          : <div style={{fontSize:12, color:T.muted, fontStyle:'italic'}}>Click Refresh for a strategy tip.</div>
-        }
+          : <div style={{fontSize:12, color:T.mutedLight}}>A one-line read on what this round is for.</div>}
       </div>
-    </div>
+    </aside>
   );
 }
 
@@ -244,10 +159,11 @@ function ModeToggle({ mode, onChange }) {
   return (
     <div style={{display:'inline-flex', border:`1px solid ${T.border}`, borderRadius:T.rxs, overflow:'hidden'}}>
       {['live','auto'].map(m => (
-        <button key={m} onClick={() => onChange(m)} title={m === 'live' ? 'Drafting live — picks by need' : 'Autodrafting — follows ADP'}
+        <button key={m} onClick={() => onChange(m)} aria-pressed={mode === m}
+          title={m === 'live' ? 'Drafting live — picks by roster need' : 'Autodrafting — follows ADP'}
           style={{
-            border:'none', cursor:'pointer', fontFamily:'inherit',
-            padding:'2px 7px', fontSize:10, fontWeight:700, letterSpacing:.3,
+            border:'none', cursor:'pointer', padding:'2px 7px',
+            fontSize:10, fontWeight:700, letterSpacing:.3,
             background: mode === m ? (m === 'auto' ? T.amberLight : T.primaryLight) : T.surface,
             color:      mode === m ? (m === 'auto' ? T.amber : T.primary) : T.mutedLight,
           }}>
@@ -268,8 +184,8 @@ function OpponentTeamRow({ teamNum, teamName, mode, counts, posProbs, pickLabel,
       background: highlight ? T.surfaceAlt : 'transparent',
       border: `1px solid ${highlight ? T.border : 'transparent'}`,
     }}>
-      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:3}}>
-        <span style={{fontSize:12, fontWeight:700, color:T.text}}>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:6, marginBottom:3}}>
+        <span className="da-ellipsis" style={{fontSize:12, fontWeight:700, color:T.text}}>
           {teamName || `Team ${teamNum}`}
           {pickLabel && <span style={{fontWeight:600, color:T.muted, marginLeft:6, fontSize:10}}>{pickLabel}</span>}
         </span>
@@ -281,7 +197,7 @@ function OpponentTeamRow({ teamNum, teamName, mode, counts, posProbs, pickLabel,
           {topPos.map(([pos, p]) => (
             <span key={pos} style={{display:'inline-flex', alignItems:'center', gap:3}}>
               <PosBadge pos={pos} />
-              <span style={{fontSize:10, fontWeight:700, color:T.muted, fontFamily:'DM Mono,monospace'}}>
+              <span className="da-num" style={{fontSize:10, fontWeight:700, color:T.muted}}>
                 {Math.round(p*100)}%
               </span>
             </span>
@@ -292,7 +208,7 @@ function OpponentTeamRow({ teamNum, teamName, mode, counts, posProbs, pickLabel,
   );
 }
 
-function OpponentsPanel({ league, oppData, picksMade, onSetTeamMode, fullWidth=false }) {
+function OpponentsPanel({ league, oppData, picksMade, onSetTeamMode }) {
   if (!oppData) return null;
   const modes = league.teamModes || {};
   const upcomingTeams = new Set(oppData.upcoming.map(u => u.teamNum));
@@ -309,14 +225,10 @@ function OpponentsPanel({ league, oppData, picksMade, onSetTeamMode, fullWidth=f
     .slice(0,4);
 
   return (
-    <div style={{
-      width: fullWidth ? '100%' : 236, flexShrink:0, background:T.surface,
-      borderLeft: fullWidth ? 'none' : `1px solid ${T.border}`, display:'flex', flexDirection:'column', overflowY:'auto',
-    }}>
-      <div style={{padding:'14px 16px', borderBottom:`1px solid ${T.border}`}}>
-        <div style={{fontSize:11, fontWeight:700, color:T.muted, letterSpacing:.5}}>OPPONENTS</div>
+    <div style={{display:'flex', flexDirection:'column', minHeight:0}}>
+      <div style={{padding:'12px 14px', borderBottom:`1px solid ${T.border}`}}>
         {expected.length > 0 ? (
-          <div style={{fontSize:11, color:T.muted, marginTop:4, lineHeight:1.5}}>
+          <div style={{fontSize:11.5, color:T.muted, lineHeight:1.5}}>
             Likely gone before your pick:{' '}
             {expected.map(([pos, n], i) => (
               <span key={pos} style={{fontWeight:700, color:T.text}}>
@@ -326,17 +238,15 @@ function OpponentsPanel({ league, oppData, picksMade, onSetTeamMode, fullWidth=f
             ))}
           </div>
         ) : (
-          <div style={{fontSize:11, color:T.muted, marginTop:4}}>
+          <div style={{fontSize:11.5, color:T.muted}}>
             {oppData.upcoming.length === 0 ? 'No picks before your next turn.' : 'Predictions update each pick.'}
           </div>
         )}
       </div>
 
-      <div style={{padding:'10px 10px', flex:1}}>
+      <div style={{padding:10, flex:1}}>
         {oppData.upcoming.length > 0 && (
-          <div style={{fontSize:10, fontWeight:700, color:T.muted, letterSpacing:.5, margin:'2px 6px 6px'}}>
-            PICKING BEFORE YOU
-          </div>
+          <SectionLabel style={{margin:'2px 6px 6px'}}>Picking before you</SectionLabel>
         )}
         {oppData.upcoming.map(u => (
           <OpponentTeamRow key={u.teamNum}
@@ -347,15 +257,10 @@ function OpponentsPanel({ league, oppData, picksMade, onSetTeamMode, fullWidth=f
             posProbs={u.posProbs}
             pickLabel={`pick ${u.pickNum - picksMade > 1 ? `in ${u.pickNum - picksMade}` : 'next'}`}
             onSetMode={m => onSetTeamMode(u.teamNum, m)}
-            highlight
-          />
+            highlight />
         ))}
 
-        {others.length > 0 && (
-          <div style={{fontSize:10, fontWeight:700, color:T.muted, letterSpacing:.5, margin:'12px 6px 6px'}}>
-            AFTER YOUR PICK
-          </div>
-        )}
+        {others.length > 0 && <SectionLabel style={{margin:'14px 6px 6px'}}>After your pick</SectionLabel>}
         {others.map(t => (
           <OpponentTeamRow key={t}
             teamNum={t}
@@ -365,27 +270,25 @@ function OpponentsPanel({ league, oppData, picksMade, onSetTeamMode, fullWidth=f
             posProbs={null}
             pickLabel={null}
             onSetMode={m => onSetTeamMode(t, m)}
-            highlight={false}
-          />
+            highlight={false} />
         ))}
       </div>
 
-      <div style={{padding:'10px 16px', borderTop:`1px solid ${T.border}`, fontSize:10, color:T.muted, lineHeight:1.5}}>
-        <b style={{color:T.text}}>LIVE</b> = drafts by roster need.{' '}
-        <b style={{color:T.text}}>AUTO</b> = autodraft, follows ADP. Toggle per team — it changes
-        availability odds and the position-run alerts.
+      <div style={{padding:'10px 14px', borderTop:`1px solid ${T.border}`, fontSize:10.5, color:T.muted, lineHeight:1.55}}>
+        <b style={{color:T.text}}>LIVE</b> drafts by roster need. <b style={{color:T.text}}>AUTO</b>{' '}
+        follows ADP. Toggling a team changes its availability odds and the position-run alerts.
       </div>
     </div>
   );
 }
 
 // ─── PICK TICKER ──────────────────────────────────────────────────────────────
-// ESPN/Yahoo-style horizontal strip of every pick: past picks show the player
-// taken, the on-the-clock cell is highlighted, and your seats are tinted.
-// Auto-centers on the current pick as the draft advances.
+// Horizontal strip of every pick: past picks show the player taken, the
+// on-the-clock cell is highlighted, and your seats are tinted. Auto-centres on
+// the current pick as the draft advances.
 function PickTicker({ league, picks, playersById }) {
   const numTeams = league.numTeams;
-  const totalRounds = Object.values(league.rosterSlots || {}).reduce((s, v) => s + (v || 0), 0) || 15;
+  const totalRounds = rosterTotal(league.rosterSlots) || 15;
   const totalPicks = totalRounds * numTeams;
   const currentPick = picks.length + 1;
   const modes = league.teamModes || {};
@@ -407,9 +310,9 @@ function PickTicker({ league, picks, playersById }) {
   }
 
   return (
-    <div ref={scrollRef} style={{
+    <div ref={scrollRef} className="da-no-scrollbar" style={{
       display:'flex', overflowX:'auto', background:T.surface,
-      borderBottom:`1px solid ${T.border}`, flexShrink:0, scrollbarWidth:'thin',
+      borderBottom:`1px solid ${T.border}`, flexShrink:0,
     }}>
       {cells.map(c => {
         if (c.type === 'round') return (
@@ -418,8 +321,8 @@ function PickTicker({ league, picks, playersById }) {
             alignItems:'center', justifyContent:'center', gap:1,
             background:T.surfaceAlt, borderRight:`1px solid ${T.border}`,
           }}>
-            <span style={{fontSize:8, fontWeight:800, color:T.muted, letterSpacing:.5}}>RD</span>
-            <span style={{fontSize:13, fontWeight:800, color:T.text}}>{c.round}</span>
+            <span style={{fontSize:8, fontWeight:800, color:T.mutedLight, letterSpacing:.5}}>RD</span>
+            <span style={{fontSize:13, fontWeight:800, color:T.muted}}>{c.round}</span>
           </div>
         );
         const teamNum = getSnakeTeam(c.n, numTeams);
@@ -431,27 +334,25 @@ function PickTicker({ league, picks, playersById }) {
         const mode = modes[teamNum] === 'auto' ? 'AUTO' : 'LIVE';
         return (
           <div key={c.key} ref={isCurrent ? currentRef : null} style={{
-            flexShrink:0, width:110, boxSizing:'border-box', padding:'5px 8px 6px',
+            flexShrink:0, width:112, padding:'5px 8px 6px',
             borderRight:`1px solid ${T.borderLight}`,
             background: isCurrent ? T.primary : isMine ? T.primaryLight : T.surface,
-            opacity: made && !isCurrent ? .72 : 1,
+            opacity: made && !isCurrent ? .7 : 1,
           }}>
             <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:4}}>
-              <span style={{fontSize:8.5, fontWeight:800, letterSpacing:.4,
-                color: isCurrent ? 'rgba(255,255,255,.85)' : T.muted}}>PICK {c.n}</span>
+              <span className="da-num" style={{fontSize:8.5, fontWeight:800,
+                color: isCurrent ? 'rgba(255,255,255,.85)' : T.mutedLight}}>{c.n}</span>
               {!made && !isCurrent && !isMine && (
                 <span style={{fontSize:8, fontWeight:800, letterSpacing:.3,
                   color: mode === 'AUTO' ? T.amber : T.primary}}>{mode}</span>
               )}
             </div>
-            <div style={{
+            <div className="da-ellipsis" style={{
               fontSize:10.5, fontWeight:700, marginTop:1,
-              whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
               color: isCurrent ? '#fff' : isMine ? T.primary : T.text,
             }}>{isMine ? 'YOU' : teamName}</div>
-            <div style={{
-              fontSize:9.5, marginTop:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-              fontWeight: player ? 600 : 500,
+            <div className="da-ellipsis" style={{
+              fontSize:9.5, marginTop:1, fontWeight: player ? 600 : 500,
               color: isCurrent ? 'rgba(255,255,255,.9)' : player ? T.muted : T.mutedLight,
             }}>
               {isCurrent ? 'On the clock' : player ? `${player.name} · ${player.pos}` : '—'}
@@ -463,16 +364,18 @@ function PickTicker({ league, picks, playersById }) {
   );
 }
 
-// ─── PICKS FEED (right panel, newest first) ──────────────────────────────────
+// ─── PICKS FEED (newest first) ───────────────────────────────────────────────
 function PicksFeedPanel({ league, picks, playersById }) {
   const rows = [...picks].reverse();
+  if (rows.length === 0) {
+    return (
+      <div style={{padding:'28px 16px', fontSize:12.5, color:T.muted, textAlign:'center', lineHeight:1.5}}>
+        No picks yet. They stream in here as the draft goes.
+      </div>
+    );
+  }
   return (
     <div style={{flex:1, overflowY:'auto', padding:'6px 10px'}}>
-      {rows.length === 0 && (
-        <div style={{padding:'20px 6px', fontSize:12, color:T.muted, textAlign:'center'}}>
-          No picks yet — they'll stream in here as the draft goes.
-        </div>
-      )}
       {rows.map(pk => {
         const p = playersById[pk.playerId];
         const rd = Math.ceil(pk.pickNum / league.numTeams);
@@ -488,11 +391,11 @@ function PicksFeedPanel({ league, picks, playersById }) {
           }}>
             <PosBadge pos={p ? p.pos : '?'} />
             <div style={{minWidth:0, flex:1}}>
-              <div style={{fontSize:12, fontWeight:700, color:T.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
+              <div className="da-ellipsis" style={{fontSize:12, fontWeight:700, color:T.text}}>
                 {p ? p.name : pk.playerId}
                 {p && p.nflTeam && <span style={{fontWeight:500, color:T.muted}}> · {p.nflTeam}</span>}
               </div>
-              <div style={{fontSize:10, color:T.muted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
+              <div className="da-ellipsis" style={{fontSize:10, color:T.muted}}>
                 R{rd} P{pip} · #{pk.pickNum} — {mine ? 'You' : teamName}
               </div>
             </div>
@@ -503,13 +406,13 @@ function PicksFeedPanel({ league, picks, playersById }) {
   );
 }
 
-// Right-side panel with Picks / Opponents tabs (ESPN-style draft activity).
-function RightTabbedPanel({ league, picks, playersById, oppData, picksMade, onSetTeamMode, fullWidth=false }) {
+// Right-side panel with Picks / Opponents tabs.
+function RightTabbedPanel({ league, picks, playersById, oppData, picksMade, onSetTeamMode, fullWidth = false }) {
   const [tab, setTab] = React.useState('picks');
   const tabBtn = (id, label) => (
-    <button key={id} onClick={() => setTab(id)} style={{
-      flex:1, padding:'9px 0', border:'none', cursor:'pointer', fontFamily:'inherit',
-      fontSize:11, fontWeight:800, letterSpacing:.5,
+    <button key={id} onClick={() => setTab(id)} aria-selected={tab === id} role="tab" style={{
+      flex:1, padding:'9px 0', border:'none', cursor:'pointer',
+      fontSize:11, fontWeight:800, letterSpacing:.5, textTransform:'uppercase',
       background: tab === id ? T.surface : T.surfaceAlt,
       color: tab === id ? T.primary : T.muted,
       borderBottom: `2px solid ${tab === id ? T.primary : 'transparent'}`,
@@ -517,79 +420,111 @@ function RightTabbedPanel({ league, picks, playersById, oppData, picksMade, onSe
   );
   return (
     <div style={{
-      width: fullWidth ? '100%' : 236, flexShrink:0, background:T.surface,
+      width: fullWidth ? '100%' : 240, flexShrink:0, background:T.surface,
       borderLeft: fullWidth ? 'none' : `1px solid ${T.border}`,
       display:'flex', flexDirection:'column', minHeight:0,
     }}>
-      <div style={{display:'flex', borderBottom:`1px solid ${T.border}`, flexShrink:0}}>
-        {tabBtn('picks', `PICKS${picks.length ? ` (${picks.length})` : ''}`)}
-        {tabBtn('opponents', 'OPPONENTS')}
+      <div role="tablist" style={{display:'flex', borderBottom:`1px solid ${T.border}`, flexShrink:0}}>
+        {tabBtn('picks', `Picks${picks.length ? ` (${picks.length})` : ''}`)}
+        {tabBtn('opponents', 'Opponents')}
       </div>
       {tab === 'picks'
         ? <PicksFeedPanel league={league} picks={picks} playersById={playersById} />
         : (
           <div style={{flex:1, minHeight:0, overflowY:'auto'}}>
-            <OpponentsPanel league={league} oppData={oppData} picksMade={picksMade}
-              onSetTeamMode={onSetTeamMode} fullWidth />
+            <OpponentsPanel league={league} oppData={oppData} picksMade={picksMade} onSetTeamMode={onSetTeamMode} />
           </div>
         )}
     </div>
   );
 }
 
-// ─── RECOMMENDATION BAR ───────────────────────────────────────────────────────
-function RecCard({ icon, label, player, reason, highlight }) {
+// ─── RECOMMENDATIONS ──────────────────────────────────────────────────────────
+function RecCard({ label, player, reason, highlight, onDraft, bestImpact }) {
   if (!player) return null;
+  const metric = (caption, node) => (
+    <span style={{display:'inline-flex', alignItems:'center', gap:4}}>
+      <span style={{fontSize:9.5, fontWeight:700, letterSpacing:.4, color:T.mutedLight, textTransform:'uppercase'}}>
+        {caption}
+      </span>
+      {node}
+    </span>
+  );
   return (
     <div style={{
       background: highlight ? T.primaryLight : T.surfaceAlt,
       border: `1.5px solid ${highlight ? T.primary : T.border}`,
-      borderRadius: T.r, padding:'12px 14px', flex:'1 1 200px', minWidth:200,
+      borderRadius: T.r, padding:'11px 13px', flex:'1 1 210px', minWidth:210,
+      display:'flex', flexDirection:'column', gap:5,
     }}>
-      <div style={{fontSize:10, fontWeight:700, color: highlight ? T.primary : T.muted, letterSpacing:.5, marginBottom:6}}>
-        {icon} {label}
-      </div>
-      <div style={{display:'flex', alignItems:'center', gap:8, marginBottom:4}}>
+      <SectionLabel style={{color: highlight ? T.primary : T.muted}}>{label}</SectionLabel>
+      <div style={{display:'flex', alignItems:'center', gap:8, minWidth:0}}>
         <PosBadge pos={player.pos} />
-        <span style={{fontSize:14, fontWeight:700, color:T.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
-          {player.name}
-        </span>
+        <span className="da-ellipsis" style={{fontSize:14, fontWeight:700, color:T.text}}>{player.name}</span>
+        <AvailabilityChip status={player.availability} />
       </div>
-      <div style={{display:'flex', alignItems:'center', gap:6, marginBottom:6, flexWrap:'wrap'}}>
+      <div style={{display:'flex', alignItems:'center', gap:9, flexWrap:'wrap'}}>
         <span style={{fontSize:11, color:T.muted}}>{player.nflTeam}</span>
-        {player.tier && <span style={{fontSize:11, color:T.muted}}>T{player.tier}</span>}
-        {player.draftScore != null && <ScoreBadge score={player.draftScore} />}
-        <VORPBadge vorp={player.vorp} />
+        {player.draftScore != null && metric('impact', <ScoreBadge score={player.draftScore} best={bestImpact} />)}
+        {metric('vorp', <VORPBadge vorp={player.vorp} />)}
       </div>
       {reason && (
-        <div style={{fontSize:11, color: highlight ? T.primary : T.muted, lineHeight:1.4}}>
-          {reason}
-        </div>
+        <div style={{fontSize:11.5, color: highlight ? T.primary : T.muted, lineHeight:1.45}}>{reason}</div>
       )}
+      {playerNewsSignals(player.signals).slice(0, 1).map((sig, i) => (
+        <div key={i} title={`${sig.source} · ${sig.observed_at}`}
+          style={{fontSize:11, color:T.primary, lineHeight:1.4}}>
+          {sig.attribution || sig.source}: {String(sig.kind).replace(/_/g, ' ')} {sig.value}
+        </div>
+      ))}
+      <Btn size="sm" variant={highlight ? 'primary' : 'secondary'} onClick={() => onDraft(player)}
+        style={{marginTop:2, alignSelf:'flex-start'}}>
+        Draft {player.name.split(' ').slice(-1)[0]}
+      </Btn>
     </div>
   );
 }
 
-function RecommendationBar({ scored, myPlayers, league, oppData }) {
-  if (!scored || scored.length === 0) {
-    return (
-      <div style={{padding:'12px 16px', background:T.surface, borderBottom:`1px solid ${T.border}`}}>
-        <div style={{fontSize:12, color:T.muted}}>No players available.</div>
+function RecommendationBar({ scored, myPlayers, league, oppData, onDraft, stale, untilMyTurn, loading }) {
+  const shell = children => (
+    <div style={{padding:'10px 14px', background:T.surface, borderBottom:`1px solid ${T.border}`}}>
+      {children}
+    </div>
+  );
+
+  // While it isn't your turn the last rollout's numbers describe a board that no
+  // longer exists, so showing them as "recommendations" would be a lie. Say
+  // what's actually happening instead.
+  if (stale) {
+    return shell(
+      <div style={{display:'flex', alignItems:'center', gap:10, fontSize:12.5, color:T.muted}}>
+        <span style={{
+          fontSize:11, fontWeight:800, letterSpacing:.5, color:T.muted,
+          background:T.borderLight, borderRadius:99, padding:'3px 10px',
+        }}>ON DECK</span>
+        {untilMyTurn} pick{untilMyTurn === 1 ? '' : 's'} until you're up — recommendations recompute
+        when you're on the clock. The board below still shows projections and VORP.
+      </div>
+    );
+  }
+
+  if (loading) {
+    return shell(
+      <div style={{display:'flex', alignItems:'center', gap:10, fontSize:12.5, color:T.muted}}>
+        <Spinner size={14} />
+        Simulating the rest of the draft…
       </div>
     );
   }
 
   // Only fully-simulated rows can be recommended: an estimated impact isn't
-  // measured against the same baseline, so promoting one to "BEST DRAFT SCORE"
-  // would compare numbers that don't mean the same thing.
-  const rolled = scored.filter(p => p.draftScore != null && p.simulated !== false);
+  // measured against the same baseline, so promoting one would compare numbers
+  // that don't mean the same thing.
+  const rolled = (scored || []).filter(p => p.draftScore != null && p.simulated !== false);
   if (rolled.length === 0) {
-    return (
-      <div style={{padding:'12px 16px', background:T.surface, borderBottom:`1px solid ${T.border}`}}>
-        <div style={{fontSize:12, color:T.muted}}>Waiting for the engine…</div>
-      </div>
-    );
+    return shell(<div style={{fontSize:12.5, color:T.muted}}>No players available to recommend.</div>);
   }
+
   const sortedByScore = [...rolled].sort((a,b) => b.draftScore - a.draftScore);
   const bestOverall   = sortedByScore[0];
 
@@ -634,57 +569,40 @@ function RecommendationBar({ scored, myPlayers, league, oppData }) {
 
   const dupId = id => id === bestOverall.id || (bestByNeed && id === bestByNeed.id);
   let situational = null;
-  if (runAlert && !dupId(runAlert.player.id)) {
-    situational = { kind:'run', ...runAlert };
-  } else if (atRisk && !dupId(atRisk.id)) {
-    situational = { kind:'at-risk', player: atRisk };
-  } else if (reach && reach.player.id !== bestOverall.id) {
-    situational = { kind:'reach', ...reach };
-  }
+  if (runAlert && !dupId(runAlert.player.id)) situational = { kind:'run', ...runAlert };
+  else if (atRisk && !dupId(atRisk.id)) situational = { kind:'at-risk', player: atRisk };
+  else if (reach && reach.player.id !== bestOverall.id) situational = { kind:'reach', ...reach };
 
-  return (
-    <div style={{padding:'12px 16px', background:T.surface, borderBottom:`1px solid ${T.border}`}}>
-      <div style={{fontSize:10, fontWeight:700, color:T.muted, letterSpacing:.5, marginBottom:8}}>RECOMMENDATIONS</div>
+  return shell(
+    <>
+      <SectionLabel style={{marginBottom:8}}>Recommended right now</SectionLabel>
       <div style={{display:'flex', gap:10, flexWrap:'wrap'}}>
-        <RecCard icon="▲" label="BEST DRAFT IMPACT"
-          player={bestOverall}
+        <RecCard label="Best draft impact" player={bestOverall} onDraft={onDraft} bestImpact={bestOverall.draftScore}
           reason={isSame
-            ? 'Top season-points impact AND fills an open starting slot.'
+            ? 'Highest season-points impact, and it fills an open starting slot.'
             : `${bestOverall.availPct}% chance still there at your next pick.`}
           highlight={isSame} />
         {bestByNeed && !isSame && (
-          <RecCard icon="◎" label="BEST BY NEED"
-            player={bestByNeed}
-            reason={`Top ${bestByNeed.pos} for an open starting slot · ${bestByNeed.availPct}% avail next pick`} />
+          <RecCard label="Best by need" player={bestByNeed} onDraft={onDraft} bestImpact={bestOverall.draftScore}
+            reason={`Top ${bestByNeed.pos} for an open starting slot · ${bestByNeed.availPct}% available next pick.`} />
         )}
         {situational && situational.kind === 'run' && (
-          <RecCard icon="⏳" label={`${situational.pos} RUN LIKELY`}
-            player={situational.player}
-            reason={`~${situational.exp.toFixed(1)} ${situational.pos}s likely gone before your next pick — only ${situational.player.availPct}% chance ${situational.player.name.split(' ').pop()} survives.`}
+          <RecCard label={`${situational.pos} run likely`} player={situational.player} onDraft={onDraft} bestImpact={bestOverall.draftScore}
+            reason={`~${situational.exp.toFixed(1)} ${situational.pos}s go before your next pick — only ${situational.player.availPct}% chance this one survives.`}
             highlight />
         )}
         {situational && situational.kind === 'at-risk' && (
-          <RecCard icon="⚠" label={`${situational.player.pos} VALUE AT RISK`}
-            player={situational.player}
+          <RecCard label={`${situational.player.pos} value at risk`} player={situational.player} onDraft={onDraft} bestImpact={bestOverall.draftScore}
             reason={`${Math.round(situational.player.vorp)} pts above replacement — only ${situational.player.availPct}% chance they last.`}
             highlight />
         )}
         {situational && situational.kind === 'reach' && (
-          <RecCard icon="⚡" label="WORTH THE REACH"
-            player={situational.player}
-            reason={`+${Math.round(situational.gap)} season-pts impact over your best need — worth taking now.`}
+          <RecCard label="Worth the reach" player={situational.player} onDraft={onDraft} bestImpact={bestOverall.draftScore}
+            reason={`+${Math.round(situational.gap)} season-pts over your best need — worth taking now.`}
             highlight />
         )}
-        {!situational && !isSame && (
-          <div style={{
-            flex:'1 1 200px', minWidth:200, background:T.surfaceAlt, border:`1.5px dashed ${T.border}`,
-            borderRadius:T.r, padding:'12px 14px', display:'flex', alignItems:'center', justifyContent:'center',
-          }}>
-            <span style={{fontSize:12, color:T.muted}}>No run, value-risk, or reach alerts.</span>
-          </div>
-        )}
       </div>
-    </div>
+    </>
   );
 }
 
@@ -707,19 +625,19 @@ function picksUntilMyTurn(picksMade, numTeams, draftPosition) {
   return numTeams;
 }
 
-// ─── QUICK PICK FUZZY MATCH HELPER ──────────────────────────────────────────
+// ─── QUICK PICK ──────────────────────────────────────────────────────────────
 function matchQuickPickCandidates(query, players, limit = 5) {
   if (!query || !query.trim()) return [];
   const rawQ = query.trim().toLowerCase();
   const tokens = rawQ.split(/\s+/);
 
-  const POSITIONS = new Set(['QB', 'RB', 'WR', 'TE', 'K', 'DST', 'DEF']);
+  const POS_SET = new Set(['QB', 'RB', 'WR', 'TE', 'K', 'DST', 'DEF']);
   let queryPos = null;
   const nameTokens = [];
 
   tokens.forEach(t => {
     const tu = t.toUpperCase();
-    if (POSITIONS.has(tu)) queryPos = tu === 'DEF' ? 'DST' : tu;
+    if (POS_SET.has(tu)) queryPos = tu === 'DEF' ? 'DST' : tu;
     else nameTokens.push(t.toLowerCase());
   });
 
@@ -743,10 +661,7 @@ function matchQuickPickCandidates(query, players, limit = 5) {
         if (w === qt) tScore = Math.max(tScore, 90);
         else if (w.startsWith(qt)) tScore = Math.max(tScore, 75);
       });
-      if (tScore > 0) {
-        matchesCount++;
-        score += tScore;
-      }
+      if (tScore > 0) { matchesCount++; score += tScore; }
     });
 
     if (nameTokens.length > 0 && matchesCount < nameTokens.length) return;
@@ -759,24 +674,26 @@ function matchQuickPickCandidates(query, players, limit = 5) {
   return scored.slice(0, limit).map(s => s.player);
 }
 
-function QuickPickInput({ players, search, setSearch, onSelectPlayer }) {
+// Typing filters the board below; Enter drafts the highlighted match. The old
+// version claimed "Enter to confirm" but only rewrote the search box, which is
+// the last thing you want when you're on the clock.
+function QuickPickInput({ players, search, setSearch, onDraftPlayer }) {
   const [selectedIndex, setSelectedIndex] = React.useState(0);
   const [isOpen, setIsOpen] = React.useState(false);
 
-  const candidates = React.useMemo(() => {
-    return matchQuickPickCandidates(search, players, 5);
-  }, [search, players]);
+  const candidates = React.useMemo(
+    () => matchQuickPickCandidates(search, players, 5), [search, players]);
 
-  React.useEffect(() => {
-    setSelectedIndex(0);
-  }, [search]);
+  React.useEffect(() => { setSelectedIndex(0); }, [search]);
 
-  const handleKeyDown = (e) => {
+  const take = p => { onDraftPlayer(p); setSearch(''); setIsOpen(false); };
+
+  const handleKeyDown = e => {
+    if (e.key === 'Escape') { e.preventDefault(); setSearch(''); setIsOpen(false); return; }
     if (!isOpen || candidates.length === 0) {
       if (e.key === 'ArrowDown') setIsOpen(true);
       return;
     }
-
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setSelectedIndex(i => (i + 1) % candidates.length);
@@ -785,99 +702,66 @@ function QuickPickInput({ players, search, setSearch, onSelectPlayer }) {
       setSelectedIndex(i => (i - 1 + candidates.length) % candidates.length);
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (candidates[selectedIndex]) {
-        onSelectPlayer(candidates[selectedIndex]);
-        setSearch(candidates[selectedIndex].name);
-        setIsOpen(false);
-      }
-    } else if (['1', '2', '3'].includes(e.key) && !e.ctrlKey && !e.altKey && !e.shiftKey) {
-      const idx = parseInt(e.key, 10) - 1;
-      if (candidates[idx]) {
-        e.preventDefault();
-        onSelectPlayer(candidates[idx]);
-        setSearch(candidates[idx].name);
-        setIsOpen(false);
-      }
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      setSearch('');
-      setIsOpen(false);
+      if (candidates[selectedIndex]) take(candidates[selectedIndex]);
     }
   };
 
   return (
-    <div style={{position:'relative', flex:1, minWidth:220}}>
+    <div style={{position:'relative', flex:1, minWidth:200}}>
       <input
         type="text"
-        placeholder="⚡ Quick Pick search ('bij', 'allen qb', 'kc dst') — Enter to confirm"
+        aria-label="Search players — Enter drafts the highlighted match"
+        placeholder="Search players (“bij”, “allen qb”, “kc dst”) — Enter drafts"
         value={search}
         onChange={e => { setSearch(e.target.value); setIsOpen(true); }}
         onFocus={() => setIsOpen(true)}
+        onBlur={() => setTimeout(() => setIsOpen(false), 120)}
         onKeyDown={handleKeyDown}
+        className="da-input"
         style={{
-          width:'100%', padding:'7px 28px 7px 12px', border:`1.5px solid ${T.primary}`,
-          borderRadius:T.rsm, fontSize:13, fontFamily:'inherit', color:T.text,
-          background: T.surface, outline:'none', boxShadow:'0 1px 4px rgba(0,0,0,.06)',
+          width:'100%', padding:'7px 30px 7px 11px', border:`1.5px solid ${T.border}`,
+          borderRadius:T.rsm, fontSize:13, color:T.text, background:T.surface, outline:'none',
         }}
       />
       {search && (
-        <button
-          type="button"
-          onClick={() => { setSearch(''); setIsOpen(false); }}
-          title="Clear search"
+        <button type="button" onClick={() => { setSearch(''); setIsOpen(false); }} aria-label="Clear search"
           style={{
-            position:'absolute', right:8, top:'50%', transform:'translateY(-50%)',
-            background:'none', border:'none', cursor:'pointer', color:T.muted,
-            fontSize:14, fontWeight:700, padding:'2px 4px', lineHeight:1,
-            display:'flex', alignItems:'center', justifyContent:'center',
-          }}
-          onMouseEnter={e => e.currentTarget.style.color = T.text}
-          onMouseLeave={e => e.currentTarget.style.color = T.muted}
-        >
-          ✕
-        </button>
+            position:'absolute', right:6, top:'50%', transform:'translateY(-50%)',
+            background:'none', border:'none', cursor:'pointer', color:T.mutedLight,
+            fontSize:14, fontWeight:700, padding:'2px 5px', lineHeight:1,
+          }}>×</button>
       )}
       {isOpen && candidates.length > 0 && (
-        <div style={{
-          position:'absolute', top:'100%', left:0, right:0, zIndex:999,
+        <div className="da-pop" style={{
+          position:'absolute', top:'calc(100% + 4px)', left:0, right:0, zIndex:400,
           background:T.surface, border:`1px solid ${T.border}`, borderRadius:T.rsm,
-          boxShadow:'0 8px 24px rgba(0,0,0,.18)', marginTop:4, overflow:'hidden',
+          boxShadow:T.shadowLg, overflow:'hidden',
         }}>
-          <div style={{padding:'4px 8px', fontSize:10, color:T.muted, background:T.surfaceAlt, borderBottom:`1px solid ${T.borderLight}`, display:'flex', justifyContent:'space-between'}}>
-            <span>Enter to confirm search · 1/2/3 hotkeys</span>
-            <span>Esc to close</span>
-          </div>
-          {candidates.map((p, idx) => (
-            <div
-              key={p.id}
-              onClick={() => {
-                onSelectPlayer(p);
-                setSearch(p.name);
-                setIsOpen(false);
-              }}
-              onMouseEnter={() => setSelectedIndex(idx)}
-              style={{
-                padding:'8px 12px', display:'flex', alignItems:'center', justifyContent:'space-between',
-                cursor:'pointer', background: idx === selectedIndex ? T.primaryLight : 'transparent',
-                borderBottom: idx < candidates.length - 1 ? `1px solid ${T.borderLight}` : 'none',
-              }}
-            >
-              <div style={{display:'flex', alignItems:'center', gap:8}}>
-                <span style={{
-                  fontSize:11, fontWeight:700, width:16, height:16, borderRadius:8,
-                  background: idx === selectedIndex ? T.primary : T.border,
-                  color:'#fff', display:'inline-flex', alignItems:'center', justifyContent:'center'
-                }}>{idx + 1}</span>
-                <span style={{fontWeight:700, fontSize:13, color:T.text}}>{p.name}</span>
-                <PosBadge pos={p.pos} />
-                <span style={{fontSize:11, color:T.muted}}>{p.nflTeam || p.team}</span>
+          {candidates.map((p, idx) => {
+            const on = idx === selectedIndex;
+            return (
+              <div key={p.id}
+                onMouseDown={e => { e.preventDefault(); take(p); }}
+                onMouseEnter={() => setSelectedIndex(idx)}
+                style={{
+                  padding:'8px 11px', display:'flex', alignItems:'center', justifyContent:'space-between',
+                  gap:10, cursor:'pointer', background: on ? T.primaryLight : 'transparent',
+                  borderBottom: idx < candidates.length - 1 ? `1px solid ${T.borderLight}` : 'none',
+                }}>
+                <div style={{display:'flex', alignItems:'center', gap:8, minWidth:0}}>
+                  <PosBadge pos={p.pos} />
+                  <span className="da-ellipsis" style={{fontWeight:700, fontSize:13, color:T.text}}>{p.name}</span>
+                  <span style={{fontSize:11, color:T.muted, flexShrink:0}}>{p.nflTeam || p.team}</span>
+                </div>
+                <div style={{display:'flex', alignItems:'center', gap:8, flexShrink:0}}>
+                  <span className="da-num" style={{fontSize:11, color:T.mutedLight}}>ADP {p.adp || '—'}</span>
+                  <span style={{
+                    fontSize:10.5, fontWeight:700, color: on ? T.primary : T.mutedLight,
+                  }}>{on ? '↵ draft' : 'draft'}</span>
+                </div>
               </div>
-              <div style={{display:'flex', alignItems:'center', gap:8}}>
-                <span style={{fontSize:11, color:T.muted}}>ADP {p.adp || '-'}</span>
-                {p.vorp != null && <VORPBadge vorp={p.vorp} />}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -890,38 +774,56 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
   const [posFilter, setPosFilter] = React.useState('ALL');
   const [sortBy,    setSortBy]    = React.useState('draftScore');
   const [hoverId,   setHoverId]   = React.useState(null);
-  const width = useWindowWidth();
+  const { width } = useLayout();
 
   const isNarrow = width < 650;
-  const isMedium = width >= 650 && width < 960;
-  const isWide   = width >= 960;
-
-  const sortOptions = [
-    {value:'draftScore', label:'Draft Score'},
-    {value:'vorp',       label:'VORP'},
-    {value:'projPts',    label:'Proj Pts'},
-    {value:'adp',        label:'ADP'},
-  ];
+  const isMedium = width >= 650 && width < 980;
+  const isWide   = width >= 980;
 
   const filtered = players
     .filter(p => showDrafted || !p.drafted)
     .filter(p => posFilter === 'ALL' || p.pos === posFilter)
     .filter(p => !search ||
       p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.nflTeam.toLowerCase().includes(search.toLowerCase())
+      (p.nflTeam || '').toLowerCase().includes(search.toLowerCase())
     )
     .sort((a,b) => {
-      if (sortBy === 'adp')      return a.adp - b.adp;
-      if (sortBy === 'projPts')  return b.projPts - a.projPts;
-      if (sortBy === 'vorp')     return b.vorp - a.vorp;
+      if (sortBy === 'adp')     return (a.adp || 9999) - (b.adp || 9999);
+      if (sortBy === 'projPts') return b.projPts - a.projPts;
+      if (sortBy === 'vorp')    return (b.vorp || 0) - (a.vorp || 0);
       return cmpScore(a, b);
     });
 
+  const bestImpact = filtered.reduce(
+    (best, p) => (p.draftScore != null && p.draftScore > best ? p.draftScore : best), 0);
+
   const GRID = isWide
-    ? '30px 1fr 52px 48px 44px 54px 54px 64px 74px'
+    ? '30px 1fr 54px 50px 46px 52px 58px 60px 68px 74px'
     : isMedium
-      ? '26px 1fr 48px 54px 54px 62px 70px'
-      : '24px 1fr 44px 52px 58px 66px';
+      ? '26px 1fr 50px 58px 60px 68px 70px'
+      : '24px 1fr 46px 60px 68px';
+
+  // Clickable column headers replace the old sort dropdown: the header already
+  // names the column, so it may as well be the control that sorts by it.
+  const SORT_HELP = {
+    adp:        'Average draft position across public drafts — where the field is taking this player.',
+    projPts:    "Projected season points under this league's scoring.",
+    vorp:       'Points above the replacement-level player at this position in this league.',
+    draftScore: 'Expected change in your total season points from drafting this player now, from the rest-of-draft simulation.',
+  };
+
+  const SortHead = ({ id, label, align = 'right' }) => (
+    <button className="da-sort" onClick={() => setSortBy(id)}
+      title={SORT_HELP[id]}
+      aria-sort={sortBy === id ? 'descending' : 'none'}
+      style={{
+        justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
+        color: sortBy === id ? T.primary : T.muted,
+        fontWeight: 800, fontSize: 10, letterSpacing: .6, textTransform: 'uppercase',
+      }}>
+      {label}{sortBy === id ? ' ↓' : ''}
+    </button>
+  );
 
   return (
     <div style={{flex:1, display:'flex', flexDirection:'column', minHeight:0, overflow:'hidden'}}>
@@ -929,69 +831,55 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
         padding:'8px 14px', background:T.surface, borderBottom:`1px solid ${T.border}`,
         display:'flex', flexDirection:'column', gap:8, flexShrink:0,
       }}>
-        <div style={{display:'flex', gap:8, alignItems:'center'}}>
-          <QuickPickInput
-            players={players}
-            search={search}
-            setSearch={setSearch}
-            onSelectPlayer={(p) => setSearch(p.name)}
-          />
-          <div style={{display:'flex', alignItems:'center', gap:4, flexShrink:0}}>
-            <span style={{fontSize:11, fontWeight:700, color:T.muted, letterSpacing:.3}}>Sort:</span>
-            <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{
-              padding:'6px 8px', border:`1.5px solid ${T.primary}`, borderRadius:T.rsm,
-              fontSize:12, fontWeight:700, color:T.primary, fontFamily:'inherit', background:T.primaryLight, cursor:'pointer',
-            }}>
-              {sortOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-        </div>
+        <QuickPickInput players={players} search={search} setSearch={setSearch} onDraftPlayer={onDraft} />
 
-        <div style={{
-          display:'flex', gap:4, alignItems:'center', overflowX:'auto',
-          whiteSpace:'nowrap', paddingBottom:2, msOverflowStyle:'none', scrollbarWidth:'none',
-        }}>
-          {['ALL',...window.POSITIONS].map(pos => (
-            <button key={pos} onClick={() => setPosFilter(pos)} style={{
-              padding:'4px 8px', borderRadius:T.rxs, flexShrink:0,
+        <div className="da-no-scrollbar" style={{display:'flex', gap:4, alignItems:'center', overflowX:'auto'}}>
+          {['ALL', ...POSITIONS].map(pos => (
+            <button key={pos} onClick={() => setPosFilter(pos)} aria-pressed={posFilter === pos} style={{
+              padding:'4px 9px', borderRadius:T.rxs, flexShrink:0, cursor:'pointer',
               border:`1.5px solid ${posFilter===pos ? T.primary : T.border}`,
               background: posFilter===pos ? T.primaryLight : T.surface,
               color: posFilter===pos ? T.primary : T.muted,
-              fontSize:11, fontWeight:600, cursor:'pointer', fontFamily:'inherit',
+              fontSize:11.5, fontWeight:700,
             }}>{pos}</button>
           ))}
           <div style={{width:1, height:16, background:T.border, margin:'0 4px', flexShrink:0}} />
-          <button onClick={onToggleDrafted} style={{
-            padding:'4px 8px', borderRadius:T.rxs, flexShrink:0,
+          <button onClick={onToggleDrafted} aria-pressed={showDrafted} style={{
+            padding:'4px 9px', borderRadius:T.rxs, flexShrink:0, cursor:'pointer',
             border:`1.5px solid ${T.border}`,
             background: showDrafted ? T.borderLight : T.surface,
-            color:T.muted, fontSize:11, cursor:'pointer', fontFamily:'inherit', fontWeight:600,
+            color:T.muted, fontSize:11.5, fontWeight:600,
           }}>
-            {showDrafted ? 'Hide Drafted' : 'Show Drafted'}
+            {showDrafted ? 'Hide drafted' : 'Show drafted'}
           </button>
+          <span style={{marginLeft:'auto', fontSize:11.5, color:T.mutedLight, flexShrink:0, paddingLeft:8}}>
+            {filtered.length} shown
+          </span>
         </div>
       </div>
 
       <div style={{
         display:'grid', gridTemplateColumns:GRID,
         padding:'7px 14px', background:T.surfaceAlt, borderBottom:`1px solid ${T.border}`,
-        fontSize:10, fontWeight:700, color:T.muted, letterSpacing:.5, gap:6, alignItems:'center',
+        fontSize:10, fontWeight:800, color:T.muted, letterSpacing:.6, gap:6, alignItems:'center',
+        textTransform:'uppercase',
       }}>
         <span>#</span>
-        <span>PLAYER</span>
-        <span>POS</span>
-        {isWide && <span>TEAM</span>}
-        {isWide && <span style={{textAlign:'center'}}>BYE</span>}
-        {(isWide || isMedium) && <span style={{textAlign:'right'}}>PROJ</span>}
-        <span style={{textAlign:'right'}}>VORP</span>
-        <span style={{textAlign:'right', color:T.primary}}>IMPACT ↓</span>
-        <span></span>
+        <span>Player</span>
+        <span>Pos</span>
+        {isWide && <span>Team</span>}
+        {isWide && <span style={{textAlign:'center'}}>Bye</span>}
+        {isWide && <SortHead id="adp" label="ADP" />}
+        {(isWide || isMedium) && <SortHead id="projPts" label="Proj" />}
+        <SortHead id="vorp" label="VORP" />
+        <SortHead id="draftScore" label="Impact" />
+        <span />
       </div>
 
       <div style={{flex:1, overflowY:'auto'}}>
         {filtered.length === 0 && (
-          <div style={{padding:40, textAlign:'center', color:T.muted, fontSize:14}}>
-            No players match your filters.
+          <div style={{padding:40, textAlign:'center', color:T.muted, fontSize:13.5}}>
+            No players match {search ? `“${search}”` : 'these filters'}.
           </div>
         )}
         {filtered.map((p,i) => {
@@ -999,18 +887,18 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
           const tierDot = ['','#d97706','#6b7280','#9ca3af','#d1d5db','#e5e7eb'][p.tier] || '#e5e7eb';
           const teamText = p.nflTeam || 'FA';
           const byeText = p.byeWeek ? `Bye ${p.byeWeek}` : null;
-          const projText = `${Math.round(p.projPts)} pts`;
           const subDetails = isNarrow
-            ? [teamText, byeText, projText, `ADP ${p.adp}`].filter(Boolean).join(' · ')
+            ? [teamText, byeText, `${Math.round(p.projPts)} pts`, `ADP ${p.adp}`].filter(Boolean).join(' · ')
             : isMedium
               ? [teamText, byeText, `ADP ${p.adp}`].filter(Boolean).join(' · ')
-              : `ADP ${p.adp}`;
-          const updateDetails = (p.signals || []).map(s =>
-            `${s.attribution || s.source}: ${s.kind.replace('_',' ')} ${s.value}`
+              : (p.tier ? `Tier ${p.tier}` : '');
+          // News signals from /api/context: injury, depth chart, snaps, trending adds.
+          const updateDetails = playerNewsSignals(p.signals).map(sig =>
+            `${sig.attribution || sig.source}: ${sig.kind.replace(/_/g, ' ')} ${sig.value}`
           );
           const rowTitle = [
             p.draftScore != null
-              ? `Draft impact: ${Math.round(p.draftScore)} | Immediate lineup gain: ${p.lineupGain} | Available next pick: ${p.availPct}%`
+              ? `Draft impact ${Math.round(p.draftScore)} · immediate lineup gain ${p.lineupGain} · ${p.availPct}% available at your next pick`
               : null,
             p.availability ? `Availability: ${p.availability}` : null,
             ...updateDetails,
@@ -1025,47 +913,43 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
                 display:'grid', gridTemplateColumns:GRID,
                 padding:'7px 14px', gap:6, alignItems:'center',
                 borderBottom:`1px solid ${T.borderLight}`,
-                background: p.drafted ? T.surfaceAlt : isHov ? '#f5f7ff' : T.surface,
-                opacity: p.drafted ? 0.4 : 1,
-                transition:'background .1s',
+                background: p.drafted ? T.surfaceAlt : isHov ? '#f3f6ff' : T.surface,
+                opacity: p.drafted ? .45 : 1,
               }}>
-              <span style={{fontSize:11, color:T.mutedLight, fontFamily:'DM Mono,monospace'}}>{i+1}</span>
+              <span className="da-num" style={{fontSize:11, color:T.mutedLight}}>{i+1}</span>
 
               <div style={{minWidth:0}}>
                 <div style={{fontSize:13, fontWeight:600, color:T.text, display:'flex', alignItems:'center', gap:5}}>
-                  <span style={{
-                    width:7, height:7, borderRadius:'50%', background:tierDot, flexShrink:0,
-                  }} title={`Tier ${p.tier}`} />
-                  <span style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{p.name}</span>
-                  {p.availability && (
-                    <span style={{
-                      fontSize:9, fontWeight:800, color:T.red, background:T.redLight,
-                      borderRadius:3, padding:'1px 4px', flexShrink:0,
-                    }}>{p.availability}</span>
-                  )}
+                  <span style={{width:7, height:7, borderRadius:'50%', background:tierDot, flexShrink:0}}
+                    title={`Tier ${p.tier}`} />
+                  <span className="da-ellipsis">{p.name}</span>
+                  {p.availability && <AvailabilityChip status={p.availability} />}
                 </div>
-                {isHov && p.draftScore != null ? (
-                  <div style={{fontSize:10, color:T.muted, marginTop:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
-                    avail {p.availPct}%
-                    {p.byePen > 0 && <span style={{color:T.amber}}> · bye −{p.byePen}</span>}
-                    {updateDetails.length > 0 && <span style={{color:T.primary}}> · why changed: {updateDetails[0]}</span>}
-                  </div>
-                ) : (
-                  <div style={{fontSize:10, color:T.mutedLight, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis'}}>
-                    {subDetails}
-                  </div>
-                )}
+                <div className="da-ellipsis" style={{fontSize:10, color:T.mutedLight, marginTop:1}}>
+                  {isHov && p.draftScore != null
+                    ? <>
+                        avail {p.availPct}%
+                        {p.byePen > 0 && <span style={{color:T.amber}}> · bye −{p.byePen}</span>}
+                        {updateDetails.length > 0 && <span style={{color:T.primary}}> · {updateDetails[0]}</span>}
+                      </>
+                    : subDetails}
+                </div>
               </div>
 
               <span><PosBadge pos={p.pos} /></span>
-              {isWide && <span style={{fontSize:12, color:T.muted, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{p.nflTeam}</span>}
+              {isWide && <span className="da-ellipsis" style={{fontSize:12, color:T.muted}}>{p.nflTeam}</span>}
               {isWide && (
-                <span style={{fontSize:12, fontFamily:'DM Mono,monospace', color:T.muted, textAlign:'center'}}>
+                <span className="da-num" style={{fontSize:12, color:T.muted, textAlign:'center'}}>
                   {p.byeWeek || '—'}
                 </span>
               )}
+              {isWide && (
+                <span className="da-num" style={{fontSize:12, color:T.mutedLight, textAlign:'right'}}>
+                  {p.adp != null ? p.adp : '—'}
+                </span>
+              )}
               {(isWide || isMedium) && (
-                <span style={{fontSize:12, fontWeight:600, color:T.text, fontFamily:'DM Mono,monospace', textAlign:'right'}}>
+                <span className="da-num" style={{fontSize:12, fontWeight:600, color:T.text, textAlign:'right'}}>
                   {Math.round(p.projPts)}
                 </span>
               )}
@@ -1074,19 +958,18 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
               </span>
               <span style={{display:'flex', justifyContent:'flex-end'}}>
                 {p.draftScore != null
-                  ? <ScoreBadge score={p.draftScore} />
-                  : <span style={{fontSize:11, color:T.muted}}>—</span>
-                }
+                  ? <ScoreBadge score={p.draftScore} best={bestImpact} />
+                  : <span style={{fontSize:11, color:T.mutedLight}}>—</span>}
               </span>
               <span style={{display:'flex', justifyContent:'flex-end'}}>
                 {p.drafted ? (
-                  <span style={{fontSize:11, color:T.muted}}>Drafted</span>
+                  <span style={{fontSize:11, color:T.mutedLight}}>Taken</span>
                 ) : (
-                  <button onClick={() => onDraft(p)} style={{
+                  <button onClick={() => onDraft(p)} aria-label={`Draft ${p.name}`} style={{
                     background: isHov ? T.primary : T.primaryLight,
                     color: isHov ? '#fff' : T.primary,
-                    border:'none', borderRadius:T.rxs, padding:'4px 8px',
-                    fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit', transition:'all .15s',
+                    border:'none', borderRadius:T.rxs, padding:'4px 9px',
+                    fontSize:11, fontWeight:700, cursor:'pointer', transition:'all .13s',
                   }}>Draft</button>
                 )}
               </span>
@@ -1102,27 +985,26 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
 function DraftBoardModal({ league, picks, allPlayers, onClose }) {
   const { numTeams, draftPosition } = league;
   const playerById = Object.fromEntries(allPlayers.map(p=>[p.id,p]));
-  const totalSlots = Object.entries(league.rosterSlots)
-    .reduce((s,[k,v]) => k === 'IR' ? s : s + v, 0);
-  const rounds     = Math.max(totalSlots, Math.ceil(picks.length / numTeams));
+  const rounds     = Math.max(rosterTotal(league.rosterSlots), Math.ceil(picks.length / numTeams));
   const teamNums   = Array.from({length:numTeams},(_,i)=>i+1);
   const roundNums  = Array.from({length:rounds||1},(_,i)=>i+1);
 
   return (
-    <Modal title="Full Draft Board" onClose={onClose} width={Math.min(numTeams*110+80,1100)}>
+    <Modal title="Full draft board" onClose={onClose} width={Math.min(numTeams*112+80, 1100)}
+      subtitle="Snake order — odd rounds left to right, even rounds right to left. Your seat is tinted.">
       <div style={{overflowX:'auto'}}>
         <table style={{borderCollapse:'collapse', width:'100%', fontSize:11}}>
           <thead>
             <tr>
-              <th style={{padding:'6px 10px', textAlign:'left', color:T.muted, fontWeight:700, fontSize:10, letterSpacing:.4}}>RND</th>
+              <th style={{padding:'6px 10px', textAlign:'left', color:T.mutedLight, fontWeight:800, fontSize:10, letterSpacing:.5}}>RD</th>
               {teamNums.map(t=>(
-                <th key={t} style={{
-                  padding:'6px 8px', textAlign:'center',
+                <th key={t} className="da-ellipsis" style={{
+                  padding:'6px 8px', textAlign:'center', maxWidth:110,
                   color: t===draftPosition ? T.primary : T.muted,
-                  fontWeight:700, fontSize:10, letterSpacing:.4,
+                  fontWeight:800, fontSize:10, letterSpacing:.4,
                   background: t===draftPosition ? T.primaryLight : 'transparent',
                 }}>
-                  {t===draftPosition ? `YOU (${t})` : `T${t}`}
+                  {t===draftPosition ? 'YOU' : ((league.teamNames || [])[t-1] || `T${t}`)}
                 </th>
               ))}
             </tr>
@@ -1130,8 +1012,8 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
           <tbody>
             {roundNums.map(rnd=>(
               <tr key={rnd} style={{background: rnd%2===0 ? T.surfaceAlt : T.surface}}>
-                <td style={{padding:'5px 10px', fontWeight:700, color:T.muted, fontSize:11, fontFamily:'DM Mono,monospace'}}>
-                  R{rnd}
+                <td className="da-num" style={{padding:'5px 10px', fontWeight:700, color:T.mutedLight, fontSize:11}}>
+                  {rnd}
                 </td>
                 {teamNums.map(t=>{
                   const snakeTeam = rnd%2===1 ? t : numTeams-t+1;
@@ -1143,8 +1025,8 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
                     <td key={t} style={{
                       padding:'5px 8px', textAlign:'center', verticalAlign:'middle',
                       border:`1px solid ${T.borderLight}`,
-                      background: isMe ? 'rgba(58,91,239,.04)' : 'transparent',
-                      minWidth:90,
+                      background: isMe ? 'rgba(58,91,239,.05)' : 'transparent',
+                      minWidth:92,
                     }}>
                       {player ? (
                         <div>
@@ -1154,7 +1036,7 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
                           <PosBadge pos={player.pos} />
                         </div>
                       ) : (
-                        <span style={{color:T.borderLight, fontSize:16}}>·</span>
+                        <span style={{color:T.border}}>—</span>
                       )}
                     </td>
                   );
@@ -1163,9 +1045,6 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
             ))}
           </tbody>
         </table>
-      </div>
-      <div style={{marginTop:16, fontSize:12, color:T.muted}}>
-        Your picks are highlighted. Snake draft — odd rounds left→right, even rounds right→left.
       </div>
     </Modal>
   );
@@ -1184,10 +1063,7 @@ function PasteDraftModal({ league, picks, allPlayers, onClose, onBatchDraft }) {
     setErr(null);
 
     const playersPayload = (allPlayers || []).map(p => ({
-      id: p.id,
-      name: p.name,
-      pos: p.pos,
-      team: p.nflTeam || p.team,
+      id: p.id, name: p.name, pos: p.pos, team: p.nflTeam || p.team,
     }));
 
     fetch('/api/parse-draft-text', {
@@ -1206,116 +1082,101 @@ function PasteDraftModal({ league, picks, allPlayers, onClose, onBatchDraft }) {
         if (d.error) { setErr(d.error); return; }
         setParsedItems(d.items || []);
       })
-      .catch(e => {
-        setLoading(false);
-        setErr(String(e));
-      });
+      .catch(e => { setLoading(false); setErr(String(e)); });
   };
 
-  const handleToggleConfirm = (idx) => {
+  const toggleConfirm = idx =>
     setParsedItems(items => items.map((item, i) => i === idx ? { ...item, isConfirmed: !item.isConfirmed } : item));
-  };
+
+  const ready = parsedItems.filter(i => i.isConfirmed && i.matchedPlayerId);
 
   const handleApply = () => {
-    const confirmed = parsedItems.filter(item => item.isConfirmed && item.matchedPlayerId);
-    if (confirmed.length === 0) return;
-    onBatchDraft(confirmed);
+    if (ready.length === 0) return;
+    onBatchDraft(ready);
     onClose();
+    toast(`Added ${ready.length} pick${ready.length === 1 ? '' : 's'}.`, 'ok');
   };
 
-  const confidenceBadge = (conf) => {
+  const confidenceBadge = conf => {
     const map = {
-      HIGH: { bg: T.greenLight, fg: T.green, label: 'High' },
-      MEDIUM: { bg: '#fef3c7', fg: '#92400e', label: 'Med' },
-      LOW: { bg: T.redLight, fg: T.red, label: 'Low' },
-      UNMATCHED: { bg: T.borderLight, fg: T.muted, label: 'Unmatched' },
+      HIGH:      { color:'green', label:'High' },
+      MEDIUM:    { color:'amber', label:'Medium' },
+      LOW:       { color:'red',   label:'Low' },
+      UNMATCHED: { color:'gray',  label:'No match' },
     };
     const c = map[conf] || map.UNMATCHED;
-    return (
-      <span style={{
-        background: c.bg, color: c.fg, borderRadius: 4, padding: '2px 6px',
-        fontSize: 10, fontWeight: 700, display: 'inline-block',
-      }}>{c.label}</span>
-    );
+    return <Badge label={c.label} color={c.color} />;
   };
 
   return (
-    <Modal title="Paste Draft Room History" onClose={onClose} width={760}>
-      <div style={{display:'flex', flexDirection:'column', gap:14}}>
-        <div style={{fontSize:12, color:T.muted, lineHeight:1.4}}>
-          Paste copied text from ESPN, Yahoo, Sleeper, or a list of player names. The parser will map picks sequentially starting from pick <strong>#{picks.length + 1}</strong>.
+    <Modal title="Paste draft history" onClose={onClose} width={780}
+      subtitle={`Picks are mapped sequentially starting from pick #${picks.length + 1}.`}
+      footer={parsedItems.length > 0 ? (
+        <>
+          <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
+          <Btn onClick={handleApply} disabled={ready.length === 0}>
+            Add {ready.length} pick{ready.length === 1 ? '' : 's'}
+          </Btn>
+        </>
+      ) : null}>
+      <div style={{display:'flex', flexDirection:'column', gap:12}}>
+        <div style={{fontSize:12.5, color:T.muted, lineHeight:1.5}}>
+          Paste copied text from ESPN, Yahoo, Sleeper, or just a list of player names. Everything is
+          previewed before anything is added to your board.
         </div>
 
-        <textarea
-          rows={5}
-          placeholder="Paste draft room log text here..."
-          value={rawText}
-          onChange={e => setRawText(e.target.value)}
-          style={{
-            width:'100%', padding:10, border:`1.5px solid ${T.border}`, borderRadius:T.rsm,
-            fontSize:12, fontFamily:'DM Mono, monospace', color:T.text, outline:'none',
-          }}
-        />
+        <Textarea rows={5} value={rawText} onChange={e => setRawText(e.target.value)}
+          aria-label="Draft room text"
+          placeholder="Paste the draft room log here…"
+          style={{fontFamily:'var(--mono)', fontSize:12}} />
 
-        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-          <Btn variant="primary" size="sm" onClick={handleParse} disabled={loading || !rawText.trim()}>
-            {loading ? 'Parsing...' : 'Parse & Preview Draft Picks'}
+        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:10}}>
+          <Btn onClick={handleParse} disabled={loading || !rawText.trim()}>
+            {loading ? 'Parsing…' : 'Parse and preview'}
           </Btn>
-          {err && <span style={{fontSize:12, color:T.red}}>⚠ {err}</span>}
+          {err && <span style={{fontSize:12, color:T.red}}>{err}</span>}
         </div>
 
         {parsedItems.length > 0 && (
-          <div style={{marginTop:10, borderTop:`1px solid ${T.border}`, paddingTop:12}}>
+          <div style={{borderTop:`1px solid ${T.border}`, paddingTop:12}}>
             <div style={{fontSize:13, fontWeight:700, color:T.text, marginBottom:8}}>
-              Parsed Pick Preview ({parsedItems.filter(i=>i.isConfirmed).length}/{parsedItems.length} confirmed)
+              {ready.length} of {parsedItems.length} picks selected
             </div>
-
-            <div style={{maxHeight:260, overflowY:'auto', border:`1px solid ${T.borderLight}`, borderRadius:T.rsm}}>
-              <table style={{width:'100%', borderCollapse:'collapse', fontSize:11}}>
+            <div style={{maxHeight:280, overflowY:'auto', border:`1px solid ${T.borderLight}`, borderRadius:T.rsm}}>
+              <table className="da-table">
                 <thead>
-                  <tr style={{background:T.surfaceAlt, borderBottom:`1px solid ${T.borderLight}`, textAlign:'left'}}>
-                    <th style={{padding:6}}>CONFIRM</th>
-                    <th style={{padding:6}}>PICK</th>
-                    <th style={{padding:6}}>TEAM</th>
-                    <th style={{padding:6}}>MATCHED PLAYER</th>
-                    <th style={{padding:6}}>MATCH</th>
-                    <th style={{padding:6}}>ORIGINAL TEXT</th>
+                  <tr>
+                    <th style={{width:32}}>Add</th>
+                    <th style={{width:44}}>Pick</th>
+                    <th style={{width:44}}>Team</th>
+                    <th>Matched player</th>
+                    <th style={{width:80}}>Match</th>
+                    <th>Original text</th>
                   </tr>
                 </thead>
                 <tbody>
                   {parsedItems.map((item, idx) => (
-                    <tr key={idx} style={{
-                      borderBottom:`1px solid ${T.borderLight}`,
-                      background: item.isConfirmed ? 'rgba(58,91,239,.04)' : 'transparent',
-                    }}>
-                      <td style={{padding:6, textAlign:'center'}}>
-                        <input
-                          type="checkbox"
-                          checked={!!item.isConfirmed}
+                    <tr key={idx} style={{background: item.isConfirmed ? 'rgba(58,91,239,.05)' : 'transparent'}}>
+                      <td style={{textAlign:'center'}}>
+                        <input type="checkbox" checked={!!item.isConfirmed}
+                          aria-label={`Include pick ${item.pickNum}`}
                           disabled={!item.matchedPlayerId}
-                          onChange={() => handleToggleConfirm(idx)}
-                        />
+                          onChange={() => toggleConfirm(idx)} />
                       </td>
-                      <td style={{padding:6, fontWeight:700, fontFamily:'DM Mono, monospace'}}>#{item.pickNum}</td>
-                      <td style={{padding:6, color:T.muted}}>T{item.teamNum}</td>
-                      <td style={{padding:6, fontWeight:600, color: item.matchedPlayerId ? T.text : T.muted}}>
-                        {item.matchedPlayerName} {item.matchedPlayerPos && <PosBadge pos={item.matchedPlayerPos} />}
+                      <td className="da-num" style={{fontWeight:700}}>#{item.pickNum}</td>
+                      <td style={{color:T.muted}}>T{item.teamNum}</td>
+                      <td style={{fontWeight:600, color: item.matchedPlayerId ? T.text : T.mutedLight}}>
+                        {item.matchedPlayerName}{' '}
+                        {item.matchedPlayerPos && <PosBadge pos={item.matchedPlayerPos} />}
                       </td>
-                      <td style={{padding:6}}>{confidenceBadge(item.confidence)}</td>
-                      <td style={{padding:6, color:T.muted, fontSize:10, fontFamily:'DM Mono, monospace', maxWidth:220, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                      <td>{confidenceBadge(item.confidence)}</td>
+                      <td className="da-ellipsis" style={{color:T.mutedLight, fontSize:11, maxWidth:200}}>
                         {item.rawText}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
-
-            <div style={{marginTop:14, display:'flex', justifyContent:'flex-end', gap:10}}>
-              <Btn variant="ghost" size="sm" onClick={onClose}>Cancel</Btn>
-              <Btn variant="green" size="sm" onClick={handleApply} disabled={parsedItems.filter(i=>i.isConfirmed && i.matchedPlayerId).length === 0}>
-                Apply {parsedItems.filter(i=>i.isConfirmed && i.matchedPlayerId).length} Confirmed Picks
-              </Btn>
             </div>
           </div>
         )}
@@ -1324,30 +1185,56 @@ function PasteDraftModal({ league, picks, allPlayers, onClose, onBatchDraft }) {
   );
 }
 
+// ─── ENGINE SETTINGS ─────────────────────────────────────────────────────────
+// Was a floating glass panel pinned over the board in a different visual
+// language (and with a drag cursor that dragged nothing). It's a normal modal
+// now, opened from the draft room's More menu.
+function EngineSettingsModal({ league, tweaks, setTweaks, adpNoise, onClose }) {
+  return (
+    <Modal title="Engine settings" onClose={onClose} width={460}
+      subtitle="Changing either value recomputes the recommendations."
+      footer={<Btn onClick={onClose}>Done</Btn>}>
+      <Field label="Opponents autodrafting"
+        hint={`${tweaks.autoDrafters} of ${Math.max(1, league.numTeams - 1)}`}>
+        <input type="range" min={0} max={Math.max(1, league.numTeams - 1)} step={1}
+          value={tweaks.autoDrafters} style={{width:'100%'}}
+          onChange={e => setTweaks('autoDrafters', Number(e.target.value))} />
+      </Field>
+      <Note style={{marginTop:-6, marginBottom:18}}>
+        More autodrafters means opponents stick closer to ADP and the board gets less chaotic.
+        Current opponent noise σ ≈ <b style={{color:T.text}}>{adpNoise}</b>.
+      </Note>
+
+      <Field label="Precision" hint={`${tweaks.sims} simulations per pick`}>
+        <input type="range" min={16} max={96} step={8}
+          value={tweaks.sims} style={{width:'100%'}}
+          onChange={e => setTweaks('sims', Number(e.target.value))} />
+      </Field>
+      <Note style={{marginTop:-6}}>
+        Higher precision gives steadier numbers between picks, at a little more time per
+        recommendation.
+      </Note>
+    </Modal>
+  );
+}
+
 // ─── DRAFT SCREEN ─────────────────────────────────────────────────────────────
-function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, onAddPick, onUndoPick, onResetPicks, onReplacePicks, onUpdateLeague, onRefreshPlayers }) {
-  const [showDraftBoard, setShowDraftBoard] = React.useState(false);
-  const [showDrafted,    setShowDrafted]    = React.useState(false);
-  const [showOpponents,  setShowOpponents]  = React.useState(true);
-  const [showMyTeamDrawer, setShowMyTeamDrawer]   = React.useState(false);
-  const [showOppDrawer,    setShowOppDrawer]      = React.useState(false);
-  const [showActionsMenu,  setShowActionsMenu]    = React.useState(false);
-  const [showPasteModal,   setShowPasteModal]     = React.useState(false);
-  const [hint,           setHint]           = React.useState('');
-  const [showPullModal,  setShowPullModal]  = React.useState(false);
-  const [showAuction,    setShowAuction]    = React.useState(false);
-  const [showFreeAgents, setShowFreeAgents] = React.useState(false);
-  const [saveMsg,        setSaveMsg]        = React.useState(null);
+function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
+                       onResetPicks, onReplacePicks, onUpdateLeague, onRefreshPlayers }) {
+  const [showDraftBoard,   setShowDraftBoard]   = React.useState(false);
+  const [showDrafted,      setShowDrafted]      = React.useState(false);
+  const [showSidePanel,    setShowSidePanel]    = React.useState(true);
+  const [showMyTeamDrawer, setShowMyTeamDrawer] = React.useState(false);
+  const [showOppDrawer,    setShowOppDrawer]    = React.useState(false);
+  const [showPasteModal,   setShowPasteModal]   = React.useState(false);
+  const [showPullModal,    setShowPullModal]    = React.useState(false);
+  const [showAuction,      setShowAuction]      = React.useState(false);
+  const [showEngine,       setShowEngine]       = React.useState(false);
+  const [hint,             setHint]             = React.useState('');
 
-  const width = useWindowWidth();
-  const isDesktop = width >= 1140;
-  const isTablet  = width >= 850 && width < 1140;
-  const isMobile  = width < 850;
-  const isHeaderCompact = width < 960;
+  const { isMobile, isTablet, isDesktop } = useLayout();
 
-  const tweakDefaults = typeof TWEAK_DEFAULTS !== 'undefined' ? TWEAK_DEFAULTS : {
-    sims: 24, autoDrafters: 0,
-  };
+  const tweakDefaults = typeof TWEAK_DEFAULTS !== 'undefined' ? TWEAK_DEFAULTS : { sims: 24, autoDrafters: 0 };
   const [tweaks, setTweaks] = useTweaks(tweakDefaults);
 
   const draftedIds = React.useMemo(() => new Set(picks.map(p=>p.playerId)), [picks]);
@@ -1355,14 +1242,8 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
   const currentTeam = getSnakeTeam(picks.length + 1, league.numTeams);
   const isMyPick    = currentTeam === league.draftPosition;
 
-  const playersWithProj = React.useMemo(
-    () => withProjections(allPlayers, league),
-    [allPlayers, league]
-  );
-  const playersWithVORP = React.useMemo(
-    () => withVORP(playersWithProj, league),
-    [playersWithProj, league]
-  );
+  const playersWithProj = React.useMemo(() => withProjections(allPlayers, league), [allPlayers, league]);
+  const playersWithVORP = React.useMemo(() => withVORP(playersWithProj, league), [playersWithProj, league]);
 
   const myPlayers = React.useMemo(() =>
     picks
@@ -1384,9 +1265,7 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
 
   const oppData = React.useMemo(() => {
     if (!window.OpponentModel) return null;
-    return window.OpponentModel.analyze(
-      available, picks, league, league.teamModes || {}, playersById
-    );
+    return window.OpponentModel.analyze(available, picks, league, league.teamModes || {}, playersById);
   }, [available, picks, league, playersById]);
 
   const setTeamMode = (teamNum, mode) => {
@@ -1400,19 +1279,15 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
 
   const [suggest, setSuggest] = React.useState({ rows: {}, loading: false, sims: 0, err: null, stale: false });
   const [refreshNonce, setRefreshNonce] = React.useState(0);
-  const forceRef = React.useRef(false);
-  const handleRefreshRecs = () => { forceRef.current = true; setRefreshNonce(n => n + 1); };
+  const handleRefreshRecs = () => setRefreshNonce(n => n + 1);
 
   React.useEffect(() => {
-    const force = forceRef.current;
-    forceRef.current = false;
-    // A recommendation means "draft this player now", so only compute it on
-    // the user's actual turn.  Computing one pick early let the rollout reserve
+    // A recommendation means "draft this player now", so only compute it on the
+    // user's actual turn. Computing one pick early let the rollout reserve
     // candidates through an opponent selection and overstated availability.
-    const shouldCompute = untilMyTurn === 0;
-    if (!shouldCompute) {
+    if (untilMyTurn !== 0) {
       setSuggest(s => ({ ...s, loading: false, stale: true }));
-      return;
+      return undefined;
     }
     const pickKeys = picks.map(pk => pk.playerId);
     const myKeys = picks
@@ -1456,7 +1331,7 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
     }, 120);
     return () => { ctrl.abort(); clearTimeout(timer); };
   }, [picks, untilMyTurn, league.numTeams, league.draftPosition, league.rosterSlots,
-      league.scoringType, league.customScoring, refreshNonce]);
+      league.scoringType, league.customScoring, refreshNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tweakSig = `${tweaks.sims}|${tweaks.autoDrafters}`;
   const prevTweakSig = React.useRef(tweakSig);
@@ -1465,7 +1340,7 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
       prevTweakSig.current = tweakSig;
       handleRefreshRecs();
     }
-  }, [tweakSig]);
+  }, [tweakSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const scored = React.useMemo(() => {
     const rows = suggest.rows;
@@ -1484,6 +1359,10 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
         availPct: Math.max(0, Math.round(100 * (1 - (r.goneRisk || 0)))),
         lineupGain: r.immediateGain,
         byePen: r.byePenalty || 0,
+        // News context from /api/context, joined server-side onto each row.
+        availability: r.availability || p.availability,
+        confidence: r.confidence,
+        signals: r.signals && r.signals.length ? r.signals : p.signals,
       };
     });
   }, [available, suggest]);
@@ -1507,7 +1386,10 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
     setHint(generateRoundHint(round, myPlayers, sortedScored, league));
   };
 
-  const handleSave = () => {
+  // A snapshot on disk, shared by every league on this machine — one slot, not
+  // per-league storage. Picks themselves autosave in the browser; this exists
+  // to move a draft between profiles or recover after clearing site data.
+  const handleSaveSnapshot = () => {
     const pickData = picks.map(pk => pk.playerId);
     const myPickData = picks.filter(pk => pk.teamNum === league.draftPosition).map(pk => pk.playerId);
     fetch('/api/save-draft', {
@@ -1516,38 +1398,37 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
       body: JSON.stringify({ picks: pickData, my_picks: myPickData }),
     })
       .then(r => r.json())
-      .then(d => {
-        setSaveMsg(d.ok ? 'Saved!' : (d.error || 'Error'));
-        setTimeout(() => setSaveMsg(null), 2000);
-      })
-      .catch(() => { setSaveMsg('Save failed'); setTimeout(() => setSaveMsg(null), 2000); });
+      .then(d => toast(d.ok ? 'Snapshot saved to disk.' : (d.error || 'Save failed'), d.ok ? 'ok' : 'error'))
+      .catch(() => toast('Save failed.', 'error'));
   };
 
-  const handleLoad = () => {
-    if (picks.length > 0 &&
-        !window.confirm('Replace the current picks with the saved draft state?')) return;
-    fetch('/api/load-draft')
+  const handleRestoreSnapshot = () => {
+    const run = () => fetch('/api/load-draft')
       .then(r => r.json())
       .then(d => {
-        if (d.error) { setSaveMsg(d.error); setTimeout(() => setSaveMsg(null), 2500); return; }
+        if (d.error) { toast(d.error, 'error'); return; }
         const keys = Array.isArray(d.picks) ? d.picks : [];
         const known = new Set(allPlayers.map(p => p.id));
         const loaded = keys
           .filter(k => known.has(k))
-          .map((k, i) => ({
-            pickNum: i + 1,
-            teamNum: getSnakeTeam(i + 1, league.numTeams),
-            playerId: k,
-          }));
+          .map((k, i) => ({ pickNum: i + 1, teamNum: getSnakeTeam(i + 1, league.numTeams), playerId: k }));
         onReplacePicks(loaded);
         const skipped = keys.length - loaded.length;
-        setSaveMsg(skipped > 0 ? `Loaded ${loaded.length} (${skipped} unknown)` : `Loaded ${loaded.length}`);
-        setTimeout(() => setSaveMsg(null), 2500);
+        toast(skipped > 0
+          ? `Restored ${loaded.length} picks (${skipped} unknown players skipped).`
+          : `Restored ${loaded.length} picks.`, 'ok');
       })
-      .catch(() => { setSaveMsg('Load failed'); setTimeout(() => setSaveMsg(null), 2500); });
+      .catch(() => toast('Restore failed.', 'error'));
+
+    if (picks.length === 0) { run(); return; }
+    confirmDialog({
+      title: 'Replace the current picks?',
+      body: `The ${picks.length} picks on this board are replaced by the snapshot saved on disk. The snapshot is shared by every league on this machine, so make sure it belongs to this draft.`,
+      confirmLabel: 'Replace picks', tone: 'danger',
+    }).then(ok => { if (ok) run(); });
   };
 
-  const handleBatchDraft = (confirmedItems) => {
+  const handleBatchDraft = confirmedItems => {
     let count = picks.length;
     confirmedItems.forEach(item => {
       count++;
@@ -1610,9 +1491,14 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
   }, [live.on]);
 
   const toggleLive = () => {
-    if (!live.on && picks.length > 0 &&
-        !window.confirm('Live sync makes Sleeper the source of truth and will replace the current picks. Continue?')) return;
-    setLive(s => ({ ...s, on: !s.on, msg: s.on ? null : 'Connecting…' }));
+    if (live.on) { setLive(s => ({ ...s, on:false, msg:null })); return; }
+    const start = () => setLive(s => ({ ...s, on:true, msg:'Connecting…' }));
+    if (picks.length === 0) { start(); return; }
+    confirmDialog({
+      title: 'Follow the Sleeper draft live?',
+      body: 'Sleeper becomes the source of truth: the picks on this board are replaced by whatever Sleeper reports, and keep updating every 5 seconds.',
+      confirmLabel: 'Go live',
+    }).then(ok => { if (ok) start(); });
   };
 
   const handleExportLog = () => {
@@ -1633,269 +1519,155 @@ function DraftScreen({ league, picks, allPlayers, allLeagues, allPicks, onBack, 
     a.download = `draft_log_${league.name.replace(/\s+/g, '_')}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
+    toast('Draft log exported.', 'ok');
   };
+
+  // Everything that isn't "who do I take right now" lives behind one menu. The
+  // header used to carry fourteen buttons at desktop width and a second,
+  // divergent menu below it.
+  const menuItems = [
+    isMobile && { type:'label', label:'Panels' },
+    isMobile && { label: `My team (${myPlayers.length})`, onClick: () => setShowMyTeamDrawer(true) },
+    isMobile && { label: 'Picks & opponents', onClick: () => setShowOppDrawer(true) },
+    isMobile && { type:'sep' },
+    { type:'label', label:'Live draft' },
+    canLiveSync && { label: live.on ? 'Stop following Sleeper' : 'Follow Sleeper live',
+      hint: live.on ? 'on' : null, onClick: toggleLive },
+    canLiveSync && !live.on && { label: 'Sync picks once', onClick: () => syncSleeperDraft({ manual:true }) },
+    { label: 'Paste draft history', onClick: () => setShowPasteModal(true) },
+    { type:'sep' },
+    { type:'label', label:'View' },
+    { label: 'Full draft board', onClick: () => setShowDraftBoard(true) },
+    isDesktop && { label: showSidePanel ? 'Hide picks & opponents' : 'Show picks & opponents',
+      onClick: () => setShowSidePanel(v => !v) },
+    league.draftType === 'auction' && { label: 'Auction values', onClick: () => setShowAuction(true) },
+    { type:'sep' },
+    { type:'label', label:'Data' },
+    { label: 'Engine settings', hint: `${tweaks.sims} sims`, onClick: () => setShowEngine(true) },
+    { label: 'Pull player data', onClick: () => setShowPullModal(true) },
+    { label: 'Export draft log (CSV)', disabled: picks.length === 0, onClick: handleExportLog },
+    { label: 'Save snapshot to disk', onClick: handleSaveSnapshot },
+    { label: 'Restore snapshot', onClick: handleRestoreSnapshot },
+    { type:'sep' },
+    { label: 'Clear all picks', tone:'danger', disabled: picks.length === 0, onClick: onResetPicks },
+  ].filter(Boolean);
 
   return (
     <div style={{height:'100vh', display:'flex', flexDirection:'column', background:T.bg, overflow:'hidden'}}>
-      {/* Header Bar */}
-      <div style={{
-        background:T.surface, borderBottom:`1px solid ${T.border}`,
-        padding:'0 14px', height:52, display:'flex', alignItems:'center',
-        justifyContent:'space-between', flexShrink:0, gap:8,
-      }}>
-        <div style={{display:'flex', alignItems:'center', gap:10, minWidth:0}}>
-          <button onClick={onBack} style={{
-            background:'none', border:'none', cursor:'pointer', color:T.muted,
-            fontSize:12, fontWeight:600, fontFamily:'inherit', display:'flex', alignItems:'center', gap:3, flexShrink:0,
-          }}>← Leagues</button>
-          <div style={{width:1, height:18, background:T.border, flexShrink:0}} />
-          <div style={{minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
-            <span style={{fontSize:14, fontWeight:700, color:T.text}}>{league.name}</span>
-            {!isMobile && (
-              <span style={{marginLeft:6}}>
-                <Badge label={SCORING_LABELS[league.scoringType]} color="blue" />
-              </span>
-            )}
+      <AppBar onBack={onBack} backLabel={isMobile ? '' : league.name} title="Draft room" compact
+        badges={!isMobile ? <Badge label={SCORING_LABELS[league.scoringType]} color="blue" /> : null}>
+        <div style={{
+          background: isMyPick ? T.primary : T.surfaceAlt,
+          border:`1.5px solid ${isMyPick ? T.primary : T.border}`,
+          borderRadius:T.rsm, padding:'3px 10px', textAlign:'center', flexShrink:0,
+        }}>
+          <div style={{fontSize:9, fontWeight:800, letterSpacing:.5,
+            color: isMyPick ? 'rgba(255,255,255,.85)' : T.muted}}>
+            {isMyPick ? 'YOUR PICK' : `TEAM ${currentTeam}`}
+          </div>
+          <div className="da-num" style={{fontSize:11.5, fontWeight:700, color: isMyPick ? '#fff' : T.text}}>
+            R{round} · {pickInRound}/{league.numTeams}
           </div>
         </div>
 
-        <div style={{display:'flex', alignItems:'center', gap:6, flexShrink:0}}>
-          <div style={{
-            background: isMyPick ? T.primaryLight : T.surfaceAlt,
-            border:`1.5px solid ${isMyPick ? T.primary : T.border}`,
-            borderRadius:T.rsm, padding:'3px 8px', textAlign:'center', flexShrink:0,
-          }}>
-            <div style={{fontSize:9, fontWeight:700, color:isMyPick?T.primary:T.muted, letterSpacing:.3}}>
-              {isMyPick ? 'YOUR PICK' : `TEAM ${currentTeam}`}
-            </div>
-            <div style={{fontSize:11, fontWeight:700, color:isMyPick?T.primary:T.text}}>
-              R{round} · Pick {pickInRound}/{league.numTeams}
-            </div>
-          </div>
-          {/* Strategic Mobile/Tablet Drawer Toggle Buttons */}
-          {(isMobile || isTablet) && (
-            <button onClick={() => setShowMyTeamDrawer(true)} style={{
-              background: T.surfaceAlt, border:`1px solid ${T.border}`, borderRadius:T.rsm,
-              padding:'4px 8px', fontSize:11, fontWeight:700, color:T.text, cursor:'pointer', fontFamily:'inherit',
-            }}>
-              🛡️ Team ({myPlayers.length})
-            </button>
-          )}
+        {isTablet && (
+          <>
+            <Btn variant="secondary" size="sm" onClick={() => setShowMyTeamDrawer(true)}>
+              Team ({myPlayers.length})
+            </Btn>
+            <Btn variant="secondary" size="sm" onClick={() => setShowOppDrawer(true)}>Picks</Btn>
+          </>
+        )}
+        <Btn variant="secondary" size="sm" onClick={onUndoPick} disabled={picks.length === 0}>Undo</Btn>
+        <Menu label="More" items={menuItems} />
+      </AppBar>
 
-          {isMobile && (
-            <button onClick={() => setShowOppDrawer(true)} style={{
-              background: T.surfaceAlt, border:`1px solid ${T.border}`, borderRadius:T.rsm,
-              padding:'4px 8px', fontSize:11, fontWeight:700, color:T.text, cursor:'pointer', fontFamily:'inherit',
-            }}>
-              👥 Opponents
-            </button>
-          )}
+      {!isMobile && <PickTicker league={league} picks={picks} playersById={playersById} />}
 
-          {!isHeaderCompact ? (
-            <>
-              <Btn variant="green" size="sm" onClick={() => setShowPullModal(true)}>Pull Data</Btn>
-              {canLiveSync && (
-                <Btn variant={live.on ? 'green' : 'ghost'} size="sm" onClick={toggleLive}
-                  style={live.on ? {} : {}}>
-                  {live.on ? '● Live' : 'Go Live'}
-                </Btn>
-              )}
-              <Btn variant="ghost" size="sm" onClick={() => setShowPasteModal(true)}>Paste History</Btn>
-              <Btn variant="ghost" size="sm" onClick={() => setShowFreeAgents(true)}>Free Agents</Btn>
-              {league.draftType === 'auction' && (
-                <Btn variant="ghost" size="sm" onClick={() => setShowAuction(true)}>Auction $</Btn>
-              )}
-              <Btn variant="ghost" size="sm" onClick={handleSave}>{saveMsg || 'Save'}</Btn>
-              <Btn variant="ghost" size="sm" onClick={handleLoad}>Load</Btn>
-              <Btn variant="ghost" size="sm" onClick={handleExportLog} disabled={picks.length===0}>Export</Btn>
-              <div style={{width:1, height:18, background:T.border}} />
-              {isDesktop && (
-                <Btn variant="ghost" size="sm" onClick={()=>setShowOpponents(v=>!v)}
-                  style={showOpponents ? {background:T.borderLight} : {}}>Opponents</Btn>
-              )}
-              <Btn variant="ghost" size="sm" onClick={()=>setShowDraftBoard(true)}>Board</Btn>
-            </>
-          ) : (
-            <div style={{position:'relative'}}>
-              <button onClick={() => setShowActionsMenu(v => !v)} style={{
-                background: T.surfaceAlt, border:`1px solid ${T.border}`, borderRadius:T.rsm,
-                padding:'4px 8px', fontSize:11, fontWeight:700, color:T.text, cursor:'pointer', fontFamily:'inherit',
-              }}>
-                Actions ▾
-              </button>
-              {showActionsMenu && (
-                <div style={{
-                  position:'absolute', right:0, top:32, zIndex:100, background:T.surface,
-                  border:`1px solid ${T.border}`, borderRadius:T.rsm, boxShadow:'0 8px 24px rgba(0,0,0,.15)',
-                  padding:6, display:'flex', flexDirection:'column', gap:4, minWidth:140,
-                }} onClick={() => setShowActionsMenu(false)}>
-                  <button onClick={() => setShowPullModal(true)} style={{textAlign:'left', padding:'6px 10px', background:'none', border:'none', cursor:'pointer', fontSize:12, color:T.text}}>Pull Data</button>
-                  {canLiveSync && (
-                    <button onClick={toggleLive} style={{textAlign:'left', padding:'6px 10px', background:'none', border:'none', cursor:'pointer', fontSize:12, color:T.text}}>
-                      {live.on ? 'Stop Live Sync' : 'Go Live (Sleeper)'}
-                    </button>
-                  )}
-                  {canLiveSync && !live.on && (
-                    <button onClick={() => syncSleeperDraft({ manual:true })} style={{textAlign:'left', padding:'6px 10px', background:'none', border:'none', cursor:'pointer', fontSize:12, color:T.text}}>Sync Picks Once</button>
-                  )}
-                  <button onClick={() => setShowPasteModal(true)} style={{textAlign:'left', padding:'6px 10px', background:'none', border:'none', cursor:'pointer', fontSize:12, color:T.text}}>Paste History</button>
-                  <button onClick={() => setShowFreeAgents(true)} style={{textAlign:'left', padding:'6px 10px', background:'none', border:'none', cursor:'pointer', fontSize:12, color:T.text}}>Free Agents</button>
-                  {league.draftType === 'auction' && (
-                    <button onClick={() => setShowAuction(true)} style={{textAlign:'left', padding:'6px 10px', background:'none', border:'none', cursor:'pointer', fontSize:12, color:T.text}}>Auction $</button>
-                  )}
-                  <button onClick={handleSave} style={{textAlign:'left', padding:'6px 10px', background:'none', border:'none', cursor:'pointer', fontSize:12, color:T.text}}>{saveMsg || 'Save Draft'}</button>
-                  <button onClick={handleLoad} style={{textAlign:'left', padding:'6px 10px', background:'none', border:'none', cursor:'pointer', fontSize:12, color:T.text}}>Load Draft</button>
-                  <button onClick={handleExportLog} disabled={picks.length===0} style={{textAlign:'left', padding:'6px 10px', background:'none', border:'none', cursor:'pointer', fontSize:12, color:T.text}}>Export CSV</button>
-                  <button onClick={()=>setShowDraftBoard(true)} style={{textAlign:'left', padding:'6px 10px', background:'none', border:'none', cursor:'pointer', fontSize:12, color:T.text}}>Full Draft Board</button>
-                </div>
-              )}
-            </div>
-          )}
-          <Btn variant="ghost" size="sm" onClick={onUndoPick} disabled={picks.length===0}>Undo</Btn>
-          <Btn variant="danger" size="sm" onClick={onResetPicks} disabled={picks.length===0}>Reset</Btn>
-        </div>
-      </div>
-
-      {/* Pick Ticker: ESPN-style strip of picks (hidden on mobile to save space) */}
-      {!isMobile && (
-        <PickTicker league={league} picks={picks} playersById={playersById} />
-      )}
-
-      {/* Main Content Area */}
       <div style={{flex:1, display:'flex', minHeight:0}}>
-        {/* Left Panel: My Team (visible inline on Desktop/Tablet, drawer on Mobile) */}
-        {!isMobile && (
-          <MyTeamPanel
-            league={league} myPlayers={myPlayers}
-            round={round} hint={hint}
-            onGetHint={handleGetHint}
-          />
+        {isDesktop && (
+          <MyTeamPanel league={league} myPlayers={myPlayers} round={round} hint={hint} onGetHint={handleGetHint} />
         )}
 
-        {/* Center: Main Draft Board & Recommendations */}
         <div style={{flex:1, display:'flex', flexDirection:'column', minWidth:0}}>
           <div style={{
-            padding:'3px 12px', fontSize:11, color:T.muted, background:T.surface,
-            borderBottom:`1px solid ${T.border}`, display:'flex', gap:6, alignItems:'center',
+            padding:'4px 12px', fontSize:11, color:T.muted, background:T.surface,
+            borderBottom:`1px solid ${T.border}`, display:'flex', gap:8, alignItems:'center',
           }}>
             {suggest.err
-              ? <span style={{color:T.danger || '#c0392b'}}>⚠ recommendations: {suggest.err}</span>
+              ? <span style={{color:T.red}}>Recommendations failed: {suggest.err}</span>
               : suggest.loading
-                ? <span>⏳ Computing rollout…</span>
+                ? <span>Computing rollout…</span>
                 : suggest.stale
-                  ? <span>↺ Board held — recomputes when pick is near ({untilMyTurn} away)</span>
-                  : <span>✓ Rollout engine · {suggest.sims} sims/pick</span>}
+                  ? <span>Board held — recomputes when your pick is up</span>
+                  : <span>Rollout engine · {suggest.sims} sims per pick</span>}
             {canLiveSync && (live.on || live.msg) && (
               <span style={{
-                marginLeft:8, paddingLeft:8, borderLeft:`1px solid ${T.border}`,
-                color: live.ok === false ? (T.danger || '#c0392b') : live.on ? T.green : T.muted,
+                paddingLeft:8, borderLeft:`1px solid ${T.border}`,
+                color: live.ok === false ? T.red : live.on ? T.green : T.muted,
               }}>
                 {live.on ? '● ' : ''}Sleeper: {live.msg || 'connecting…'}
               </span>
             )}
             <button onClick={handleRefreshRecs} title="Recompute recommendations now"
-              style={{marginLeft:'auto', background:'none', border:`1px solid ${T.border}`, borderRadius:6,
-                padding:'1px 6px', cursor:'pointer', color:T.muted, fontSize:10, fontFamily:'inherit'}}>
-              ↻ Refresh
+              style={{marginLeft:'auto', background:'none', border:`1px solid ${T.border}`, borderRadius:T.rxs,
+                padding:'1px 7px', cursor:'pointer', color:T.muted, fontSize:10.5}}>
+              Refresh
             </button>
           </div>
 
-          <RecommendationBar scored={scored} myPlayers={myPlayers} league={league} oppData={oppData} />
-          <PlayerList
-            players={enriched}
-            onDraft={handleDraft}
-            showDrafted={showDrafted}
-            onToggleDrafted={()=>setShowDrafted(v=>!v)}
-          />
+          <RecommendationBar scored={scored} myPlayers={myPlayers} league={league} oppData={oppData}
+            onDraft={handleDraft} stale={suggest.stale && !suggest.err}
+            untilMyTurn={untilMyTurn} loading={suggest.loading} />
+
+          <PlayerList players={enriched} onDraft={handleDraft}
+            showDrafted={showDrafted} onToggleDrafted={() => setShowDrafted(v => !v)} />
         </div>
 
-        {/* Right Panel: Picks feed + Opponents tabs (inline on Desktop only when enabled) */}
-        {isDesktop && showOpponents && (
-          <RightTabbedPanel
-            league={league} picks={picks} playersById={playersById}
-            oppData={oppData} picksMade={picks.length}
-            onSetTeamMode={setTeamMode}
-          />
+        {isDesktop && showSidePanel && (
+          <RightTabbedPanel league={league} picks={picks} playersById={playersById}
+            oppData={oppData} picksMade={picks.length} onSetTeamMode={setTeamMode} />
         )}
       </div>
 
-      {/* Mobile/Tablet Drawers */}
       {showMyTeamDrawer && (
-        <Drawer title="My Team Roster & Strategy" onClose={() => setShowMyTeamDrawer(false)}>
-          <MyTeamPanel
-            league={league} myPlayers={myPlayers}
-            round={round} hint={hint}
-            onGetHint={handleGetHint}
-            fullWidth
-          />
+        <Drawer title="My team" onClose={() => setShowMyTeamDrawer(false)}>
+          <MyTeamPanel league={league} myPlayers={myPlayers} round={round}
+            hint={hint} onGetHint={handleGetHint} fullWidth />
         </Drawer>
       )}
 
       {showOppDrawer && (
-        <Drawer title="Picks & Opponents" onClose={() => setShowOppDrawer(false)}>
-          <RightTabbedPanel
-            league={league} picks={picks} playersById={playersById}
-            oppData={oppData} picksMade={picks.length}
-            onSetTeamMode={setTeamMode}
-            fullWidth
-          />
+        <Drawer title="Picks & opponents" onClose={() => setShowOppDrawer(false)}>
+          <RightTabbedPanel league={league} picks={picks} playersById={playersById}
+            oppData={oppData} picksMade={picks.length} onSetTeamMode={setTeamMode} fullWidth />
         </Drawer>
       )}
 
-      <TweaksPanel title="Draft Tweaks">
-        <TweakSection title="ENGINE">
-          <TweakSlider id="autoDrafters" label="Opponents autodrafting"
-            min={0} max={Math.max(1, league.numTeams - 1)} step={1}
-            tweaks={tweaks} setTweaks={setTweaks} />
-          <TweakSlider id="sims" label="Precision (sims/pick)"
-            min={16} max={96} step={8} tweaks={tweaks} setTweaks={setTweaks} />
-          <div style={{fontSize:10.5, color:'rgba(41,38,27,.6)', lineHeight:1.45, marginTop:2}}>
-            More autodrafters → opponents stick to ADP → less board chaos
-            (opponent noise σ ≈ {adpNoise}). Higher precision = steadier numbers,
-            a little slower per pick.
-          </div>
-        </TweakSection>
-      </TweaksPanel>
-
+      {showEngine && (
+        <EngineSettingsModal league={league} tweaks={tweaks} setTweaks={setTweaks}
+          adpNoise={adpNoise} onClose={() => setShowEngine(false)} />
+      )}
       {showDraftBoard && (
-        <DraftBoardModal
-          league={league} picks={picks} allPlayers={enriched}
-          onClose={()=>setShowDraftBoard(false)}
-        />
+        <DraftBoardModal league={league} picks={picks} allPlayers={enriched}
+          onClose={() => setShowDraftBoard(false)} />
       )}
       {showPasteModal && (
-        <PasteDraftModal
-          league={league}
-          picks={picks}
-          allPlayers={enriched}
-          onClose={() => setShowPasteModal(false)}
-          onBatchDraft={handleBatchDraft}
-        />
+        <PasteDraftModal league={league} picks={picks} allPlayers={enriched}
+          onClose={() => setShowPasteModal(false)} onBatchDraft={handleBatchDraft} />
       )}
       {showPullModal && (
-        <PullDataModal
-          league={league}
-          espnLeagueId={league.espnLeagueId}
+        <PullDataModal league={league} espnLeagueId={league.espnLeagueId}
           onClose={() => setShowPullModal(false)}
-          onComplete={() => onRefreshPlayers && onRefreshPlayers()}
-        />
+          onComplete={() => onRefreshPlayers && onRefreshPlayers()} />
       )}
-      {showAuction && (
-        <AuctionModal league={league} onClose={() => setShowAuction(false)} />
-      )}
-      {showFreeAgents && (
-        <FreeAgentFinderModal
-          leagues={allLeagues || [league]}
-          picks={allPicks || { [league.id]: picks }}
-          onClose={() => setShowFreeAgents(false)}
-        />
-      )}
+      {showAuction && <AuctionModal league={league} onClose={() => setShowAuction(false)} />}
     </div>
   );
 }
 
 Object.assign(window, {
-  PosBadge, VORPBadge, ScoreBadge,
-  MyTeamPanel, RecommendationBar, PlayerList, DraftBoardModal, DraftScreen,
-  OpponentsPanel,
+  VORPBadge, ScoreBadge, MyTeamPanel, RecommendationBar, PlayerList,
+  DraftBoardModal, PasteDraftModal, EngineSettingsModal, DraftScreen, OpponentsPanel,
+  PickTicker, RightTabbedPanel, matchQuickPickCandidates,
 });

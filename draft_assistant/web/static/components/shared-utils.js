@@ -123,6 +123,48 @@ function withVORP(players, league) {
   return players.map(p => ({ ...p, vorp: Math.round(p.projPts - (repPts[p.pos] || 0)) }));
 }
 
+// Draftable roster size. IR is a roster slot but never a draft round, so
+// counting it inflated "N slots" on the league cards and drew a phantom extra
+// round on the pick ticker.
+function rosterTotal(rosterSlots) {
+  return Object.entries(rosterSlots || {})
+    .reduce((sum, [key, value]) => key === 'IR' ? sum : sum + (value || 0), 0);
+}
+
+// Slot a roster into its lineup: starters first (position slots, then the
+// tightest flex first so a WR/TE slot isn't consumed by a player only the
+// wide-open FLEX could have taken), then bench. Shared by the draft room's
+// team panel and the waiver wire's roster panel so both agree on what a
+// "starter" is.
+function buildLineup(players, rosterSlots) {
+  const slots = rosterSlots || {};
+  const defs = [];
+  const push = (n, def) => { for (let i = 0; i < (n || 0); i++) defs.push(def); };
+  push(slots.QB, { label: 'QB', pos: 'QB' });
+  push(slots.RB, { label: 'RB', pos: 'RB' });
+  push(slots.WR, { label: 'WR', pos: 'WR' });
+  push(slots.TE, { label: 'TE', pos: 'TE' });
+  Object.keys(FLEX_TYPES_JS)
+    .filter(fk => (slots[fk] || 0) > 0)
+    .sort((a, b) => FLEX_TYPES_JS[a].elig.length - FLEX_TYPES_JS[b].elig.length)
+    .forEach(fk => push(slots[fk], { label: FLEX_TYPES_JS[fk].label, pos: 'FLEX', elig: FLEX_TYPES_JS[fk].elig }));
+  push(slots.K, { label: 'K', pos: 'K' });
+  push(slots.DST, { label: 'DST', pos: 'DST' });
+  push(slots.BN, { label: 'BN', pos: null, bench: true });
+
+  const remaining = players.slice();
+  return defs.map(slot => {
+    if (!slot.pos) return { slot, player: remaining.shift() || null };
+    if (slot.pos === 'FLEX') {
+      const elig = new Set(slot.elig || ['RB', 'WR', 'TE']);
+      const idx = remaining.findIndex(p => elig.has(p.pos));
+      return { slot, player: idx >= 0 ? remaining.splice(idx, 1)[0] : null };
+    }
+    const idx = remaining.findIndex(p => p.pos === slot.pos);
+    return { slot, player: idx >= 0 ? remaining.splice(idx, 1)[0] : null };
+  });
+}
+
 function getSnakeTeam(pickNum, numTeams) {
   const round = Math.ceil(pickNum / numTeams);
   const pos   = pickNum - (round - 1) * numTeams;

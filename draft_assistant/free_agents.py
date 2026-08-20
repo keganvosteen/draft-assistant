@@ -213,7 +213,7 @@ def _horizon(player: Player, roster_players: List[Player], points_map: Dict[str,
     drop = _suggested_drop(roster_players, kept_players, points_map) if roster_full and kept else None
     drop_points = round(points_map.get(drop.key(), 0.0), 2) if drop else None
     score = _score(player, roster_gain, starter_gain, bench_gain, vor, drop) if kept else -1_000_000.0
-    reason = _reason(player, roster_gain, starter_gain, drop) if kept else "No legal roster upgrade"
+    reason = _reason(player, starter_gain, vor, drop) if kept else "No legal roster upgrade"
     return _Horizon(
         points, vor, score, roster_gain, starter_gain, bench_gain,
         drop, drop_points, reason, kept,
@@ -262,18 +262,28 @@ def _score(player: Player, roster_gain: float, starter_gain: float,
     )
 
 
-def _reason(player: Player, roster_gain: float, starter_gain: float,
-            drop_player: Optional[Player]) -> str:
-    gain = _fmt_delta(roster_gain)
+def _reason(
+    player: Player,
+    starter_gain: float,
+    vor: float,
+    drop_player: Optional[Player],
+) -> str:
+    """One clause explaining what the add *does*.
+
+    Deliberately carries no point totals and no drop name: the caller renders
+    both in their own columns, and repeating them there left the "why" column
+    saying nothing the row hadn't already said.
+    """
     if drop_player:
-        if starter_gain > 0:
-            return f"{gain} roster pts; starts over current lineup, drop {drop_player.name}"
-        return f"{gain} roster pts over {drop_player.name}"
-    if starter_gain > 0:
-        return f"{gain} roster pts; improves a starting slot"
-    return f"{gain} roster pts; adds {player.position} depth"
-
-
-def _fmt_delta(value: float) -> str:
-    sign = "+" if value >= 0 else ""
-    return f"{sign}{value:.1f}"
+        note = (
+            "Steps straight into your starting lineup" if starter_gain > 0
+            else "Better bench stash than your weakest current player"
+        )
+    else:
+        note = (
+            "Fills an open starting slot" if starter_gain > 0
+            else f"{player.position} depth for an open bench spot"
+        )
+    if vor > 0:
+        note += f"; above replacement at {player.position}"
+    return note + "."
