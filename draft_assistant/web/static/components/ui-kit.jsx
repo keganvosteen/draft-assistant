@@ -187,28 +187,69 @@ function PosBadge({ pos }) {
   );
 }
 
-// Availability status from the news context ("OUT", "Q", "IR", …). Severity is
-// colour-coded rather than always-red: a questionable tag and a season-ending
-// one should not read the same at a glance on a draft board.
-const AVAILABILITY_TONE = {
-  OUT: 'red', IR: 'red', PUP: 'red', SUS: 'red', NFI: 'red', DNR: 'red', NA: 'red',
-  DOUBTFUL: 'amber', QUESTIONABLE: 'amber',
+// Availability status from the news context. It reaches the chip in three
+// different vocabularies, because `primary_availability` returns whichever
+// signal it finds first: Sleeper's short injury codes ("Q", "IR"), a roster
+// status spelled out in prose ("Injured Reserve", "Practice Squad"), or
+// practice participation ("Did Not Participate In Practice"). Normalise all
+// three onto one abbreviation and one severity — otherwise a season-ending
+// status renders in the same amber as a questionable tag, at a width no chip
+// beside a player name can hold.
+const AVAILABILITY_TONES = {
+  red:   { bg: T.redLight,    fg: T.red },
+  amber: { bg: T.amberLight,  fg: T.amber },
+  gray:  { bg: T.borderLight, fg: T.muted },
 };
-// The feed spells these out ("Questionable"), which is far too wide for a chip
-// sitting beside a player name on a dense board. Abbreviate, keep the full
-// wording in the tooltip.
-const AVAILABILITY_SHORT = { QUESTIONABLE: 'Q', DOUBTFUL: 'D', OUT: 'OUT' };
+
+// Matched in order against the normalised status, so a phrase always wins over
+// a shorter code it happens to contain ("out for season" before "out"). Codes
+// match on word boundaries because the feed also compounds them
+// ("Reserve/PUP", "Reserve/COVID-19").
+const AVAILABILITY_RULES = [
+  [/injured reserve|\bir\b/,      'IR',   'red'],
+  [/physically unable|\bpup\b/,   'PUP',  'red'],
+  [/non football injury|\bnfi\b/, 'NFI',  'red'],
+  [/suspend|\bsus\b/,             'SUS',  'red'],
+  [/covid/,                       'COV',  'red'],
+  [/\bdnr\b/,                     'DNR',  'red'],
+  [/^na$/,                        'NA',   'red'],
+  [/retired/,                     'RET',  'red'],
+  [/inactive/,                    'INA',  'red'],
+  [/practice squad/,              'PS',   'gray'],
+  [/free agent/,                  'FA',   'gray'],
+  [/did not participate/,         'DNP',  'amber'],
+  [/limited participation/,       'LTD',  'amber'],
+  [/full participation/,          'FULL', 'gray'],
+  [/doubtful|^d$/,                'D',    'amber'],
+  [/questionable|^q$/,            'Q',    'amber'],
+  [/out/,                         'OUT',  'red'],
+];
+
+// Mirrors context.py::_normalized, so both sides read the feed's wording the
+// same way.
+function normalizedAvailability(status) {
+  return String(status).toLowerCase().replace(/[-/]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function availabilityChipStyle(status) {
+  const key = normalizedAvailability(status);
+  const rule = AVAILABILITY_RULES.find(([re]) => re.test(key));
+  if (rule) return { short: rule[1], tone: rule[2] };
+  // Unknown wording is still worth showing — amber says "check this", and the
+  // tooltip carries the full text the chip cannot.
+  const raw = String(status).toUpperCase();
+  return { short: raw.length > 6 ? `${raw.slice(0, 5).trim()}…` : raw, tone: 'amber' };
+}
 
 function AvailabilityChip({ status, title }) {
   if (!status) return null;
-  const key = String(status).toUpperCase();
-  const tone = AVAILABILITY_TONE[key] || 'amber';
-  const c = tone === 'red' ? { bg: T.redLight, fg: T.red } : { bg: T.amberLight, fg: T.amber };
+  const { short, tone } = availabilityChipStyle(status);
+  const c = AVAILABILITY_TONES[tone];
   return (
     <span title={title || `Availability: ${status}`} style={{
       background: c.bg, color: c.fg, borderRadius: 3, padding: '1px 5px',
       fontSize: 9.5, fontWeight: 800, letterSpacing: .3, flexShrink: 0, whiteSpace: 'nowrap',
-    }}>{AVAILABILITY_SHORT[key] || status}</span>
+    }}>{short}</span>
   );
 }
 
