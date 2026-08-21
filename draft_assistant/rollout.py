@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import random
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .draft_value import (
     _bye_week_penalty,
@@ -125,6 +125,7 @@ def rollout_values(
     my_roster: Dict[str, List[Player]],
     state: Optional[DraftState] = None,
     top_n: int = 20,
+    drafted_players: Optional[Sequence[Player]] = None,
 ) -> List[RolloutResult]:
     """Rank available players by expected final-roster season points.
 
@@ -147,8 +148,17 @@ def rollout_values(
     all_players = available + roster_players
     points_map = compute_points(all_players, config.scoring)
     by_key: Dict[str, Player] = {p.key(): p for p in all_players}
+    occupied_by_key = {
+        player.key(): player
+        for player in [*(drafted_players or ()), *roster_players]
+    }
     repl = replacement_levels(
-        available, config.scoring, config.teams, roster, points_map=points_map
+        available,
+        config.scoring,
+        config.teams,
+        roster,
+        points_map=points_map,
+        occupied_players=list(occupied_by_key.values()),
     )
 
     base_value = roster_value(roster_players, points_map, roster).total_value

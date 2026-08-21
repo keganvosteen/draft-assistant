@@ -14,7 +14,7 @@ import it from this module; it remains a useful cheap read of roster needs for
 display, separate from the engine's own lineup optimization.
 """
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .models import DraftState, LeagueConfig, Player
 from .rollout import rollout_values
@@ -30,6 +30,7 @@ def suggest_players(
     top_n: int = 12,
     total_picks: int = 0,
     draft_state: Optional[DraftState] = None,
+    drafted_players: Optional[Sequence[Player]] = None,
 ) -> List[Tuple[Player, float, float, float]]:
     """Return ranked ``(player, points, vor, score)`` tuples.
 
@@ -48,5 +49,6 @@ def suggest_players(
         my_roster=my_roster,
         state=draft_state,
         top_n=top_n,
+        drafted_players=drafted_players,
     )
     return [(r.player, r.points, r.vor, r.impact) for r in results]

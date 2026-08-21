@@ -161,6 +161,7 @@ def run_single_draft_sim(
                 my_roster=current_roster,
                 state=draft_state,
                 top_n=5,
+                drafted_players=pick_history,
             )
             chosen = results[0].player if results else select_adp_pick(available, current_roster, slots, total_slots)
             if log:

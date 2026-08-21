@@ -105,6 +105,38 @@ class TestConfigDriven(unittest.TestCase):
 
 
 class TestPolicyDetails(unittest.TestCase):
+    def test_vor_uses_remaining_league_demand_mid_draft(self):
+        drafted = [
+            _p("RB1", "RB", 100, adp=1.0),
+            _p("RB2", "RB", 90, adp=2.0),
+            _p("RB3", "RB", 80, adp=3.0),
+        ]
+        available = [
+            _p("RB4", "RB", 70, adp=4.0),
+            _p("RB5", "RB", 60, adp=5.0),
+            _p("RB6", "RB", 50, adp=6.0),
+            _p("RB7", "RB", 40, adp=7.0),
+        ]
+        cfg = _config({"RB": 1}, teams=4, slot=4, sims=0, noise=0.0)
+        state = DraftState(
+            "Me",
+            ["T1", "T2", "T3", "Me"],
+            picks=[player.key() for player in drafted],
+        )
+
+        result = rollout_values(
+            cfg,
+            available,
+            {},
+            state=state,
+            top_n=4,
+            drafted_players=drafted,
+        )
+
+        by_name = {row.player.name: row for row in result}
+        self.assertEqual(by_name["RB4"].vor, 0.0)
+        self.assertLess(by_name["RB5"].vor, 0.0)
+
     def test_kicker_not_recommended_early(self):
         available = [
             _p("RB1", "RB", 300, adp=1.0),
