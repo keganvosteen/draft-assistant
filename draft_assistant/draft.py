@@ -19,6 +19,18 @@ class DraftTracker:
         picked = {self._canonical_key(key) for key in self.state.picked_set()}
         return [p for k, p in self.players.items() if k not in picked]
 
+    def drafted_players(self) -> List[Player]:
+        """Return resolvable drafted players once each, in pick order."""
+        drafted: List[Player] = []
+        seen: Set[str] = set()
+        for key in self.state.picks:
+            canonical = self._canonical_key(key)
+            player = self.players.get(canonical)
+            if player is not None and canonical not in seen:
+                drafted.append(player)
+                seen.add(canonical)
+        return drafted
+
     def record_pick(self, player_name: str, position: Optional[str] = None, my_pick: bool = False) -> Optional[Player]:
         avail = self.available_players()
         name_lower = player_name.strip().lower()

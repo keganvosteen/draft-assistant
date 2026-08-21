@@ -374,6 +374,7 @@ class DraftAssistantApp:
             self.tracker.my_roster(),
             top_n=top_n,
             draft_state=self.state,
+            drafted_players=self.tracker.drafted_players(),
         )
         for p, pts, vor, score in ranked:
             adp = "" if p.adp is None else f"{p.adp:.1f}"

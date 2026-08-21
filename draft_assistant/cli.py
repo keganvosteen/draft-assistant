@@ -87,7 +87,14 @@ def cmd_suggest(args: argparse.Namespace) -> None:
         config.draft = draft_settings
     tracker = DraftTracker(config, state, players)
     avail = tracker.available_players()
-    ranked = suggest_players(config, avail, tracker.my_roster(), top_n=args.top, draft_state=state)
+    ranked = suggest_players(
+        config,
+        avail,
+        tracker.my_roster(),
+        top_n=args.top,
+        draft_state=state,
+        drafted_players=tracker.drafted_players(),
+    )
     print(f"Top {len(ranked)} suggestions:")
     for p, pts, vor, score in ranked:
         adp = f" ADP:{p.adp:.1f}" if p.adp else ""

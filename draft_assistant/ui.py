@@ -197,7 +197,15 @@ def _show_board(tracker: DraftTracker, config: LeagueConfig, state: DraftState):
     needs = needs_by_position(config, roster)
     total_picks = len(state.picks)
 
-    ranked = suggest_players(config, avail, roster, top_n=10, total_picks=total_picks, draft_state=state)
+    ranked = suggest_players(
+        config,
+        avail,
+        roster,
+        top_n=10,
+        total_picks=total_picks,
+        draft_state=state,
+        drafted_players=tracker.drafted_players(),
+    )
 
     # Compact header
     rd = total_picks // config.teams + 1

@@ -248,7 +248,15 @@ def _score_pick(
         picks=list(picks),
         my_picks=list(my_picks),
     )
-    ranked = rollout_values(config, avail_players, my_roster, state=state, top_n=1)
+    drafted_players = [by_key[key] for key in picks if key in by_key]
+    ranked = rollout_values(
+        config,
+        avail_players,
+        my_roster,
+        state=state,
+        top_n=1,
+        drafted_players=drafted_players,
+    )
     if ranked:
         key = ranked[0].player.key()
         if key in available:

@@ -666,8 +666,16 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 picks=picks,
                 my_picks=my_picks,
             )
+            drafted_players = [by_key[key] for key in picks if key in by_key]
 
-            results = rollout_values(eff, available, my_roster, state, top_n=top_n)
+            results = rollout_values(
+                eff,
+                available,
+                my_roster,
+                state,
+                top_n=top_n,
+                drafted_players=drafted_players,
+            )
             rows = [{
                 "id": r.player.key(),
                 "name": r.player.name,
