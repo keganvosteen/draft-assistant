@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
-from .config import DEFAULT_CONFIG, load_config, save_config
+from .config import (
+    CONFIG_FILENAME,
+    DEFAULT_CONFIG,
+    load_config,
+    migrate_legacy_config,
+    save_config,
+)
 from .models import DraftState, LeagueConfig
 from .paths import resolve, seed_user_data
 from .storage import save_players, save_state
@@ -45,7 +51,7 @@ def get_profile_paths(name: str) -> ProfilePaths:
         return ProfilePaths(
             profile=DEFAULT_PROFILE,
             base_dir=os.fspath(PROFILE_ROOT.parent) if PROFILE_ROOT.is_absolute() else ".",
-            config_path=resolve("league.config.yaml"),
+            config_path=resolve(CONFIG_FILENAME),
             state_path=resolve("draft_state.json"),
             projections_path=SHARED_PROJECTIONS_PATH,
         )
@@ -53,7 +59,7 @@ def get_profile_paths(name: str) -> ProfilePaths:
     return ProfilePaths(
         profile=profile,
         base_dir=os.fspath(base),
-        config_path=os.fspath(base / "league.config.yaml"),
+        config_path=os.fspath(base / CONFIG_FILENAME),
         state_path=os.fspath(base / "draft_state.json"),
         projections_path=SHARED_PROJECTIONS_PATH,
     )
@@ -85,15 +91,21 @@ def _default_state(teams: int) -> DraftState:
 
 
 def ensure_profile(name: str) -> ProfilePaths:
-    # In a packaged build this is first run: copy the shipped player board and
-    # default config out of the read-only bundle into the user data directory.
-    seed_user_data()
-
     paths = get_profile_paths(name)
     if paths.profile != DEFAULT_PROFILE:
         os.makedirs(paths.base_dir, exist_ok=True)
     os.makedirs(os.path.dirname(paths.config_path) or ".", exist_ok=True)
     os.makedirs(os.path.dirname(paths.projections_path) or ".", exist_ok=True)
+
+    # A profile written before the rename still has league.config.yaml. Migrate
+    # before seeding: an installed build that seeded the old name would
+    # otherwise get a fresh default config dropped beside the real settings,
+    # and the real ones would never be read again.
+    migrate_legacy_config(paths.config_path)
+
+    # In a packaged build this is first run: copy the shipped player board and
+    # default config out of the read-only bundle into the user data directory.
+    seed_user_data()
 
     config_exists = os.path.exists(paths.config_path)
     if config_exists:

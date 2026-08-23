@@ -1,10 +1,18 @@
 """Tests for league config loading robustness."""
 import json
 import os
+import shutil
 import tempfile
 import unittest
 
-from draft_assistant.config import DEFAULT_CONFIG, load_config, save_config
+from draft_assistant.config import (
+    CONFIG_FILENAME,
+    DEFAULT_CONFIG,
+    LEGACY_CONFIG_FILENAME,
+    load_config,
+    migrate_legacy_config,
+    save_config,
+)
 from draft_assistant.models import LeagueConfig
 
 
@@ -69,6 +77,47 @@ class TestLoadConfig(unittest.TestCase):
         self.assertNotIn("monte_carlo_sims", cfg.draft)
         self.assertNotIn("candidate_pool", cfg.draft)
         self.assertNotIn("snake", cfg.draft)
+
+
+class TestLegacyConfigName(unittest.TestCase):
+    """league.config.yaml was renamed to .json; the old name still works."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.path = os.path.join(self.dir, CONFIG_FILENAME)
+        self.legacy = os.path.join(self.dir, LEGACY_CONFIG_FILENAME)
+
+    def _write_legacy(self, teams: int) -> None:
+        with open(self.legacy, "w", encoding="utf-8") as f:
+            json.dump({"teams": teams}, f)
+
+    def test_legacy_file_is_read_when_the_new_name_is_absent(self):
+        self._write_legacy(14)
+        self.assertEqual(load_config(self.path).teams, 14)
+
+    def test_migration_renames_the_legacy_file(self):
+        self._write_legacy(14)
+        self.assertTrue(migrate_legacy_config(self.path))
+        self.assertTrue(os.path.exists(self.path))
+        self.assertFalse(os.path.exists(self.legacy))
+        self.assertEqual(load_config(self.path).teams, 14)
+
+    def test_migration_never_clobbers_an_existing_config(self):
+        self._write_legacy(14)
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump({"teams": 8}, f)
+        self.assertFalse(migrate_legacy_config(self.path))
+        self.assertEqual(load_config(self.path).teams, 8)
+
+    def test_migration_is_a_no_op_without_a_legacy_file(self):
+        self.assertFalse(migrate_legacy_config(self.path))
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_save_writes_the_new_name(self):
+        save_config(LeagueConfig(**DEFAULT_CONFIG), self.path)
+        self.assertTrue(os.path.exists(self.path))
+        self.assertFalse(os.path.exists(self.legacy))
 
 
 if __name__ == "__main__":

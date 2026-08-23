@@ -9,6 +9,14 @@ from .models import LeagueConfig
 from .storage import atomic_write_json
 
 
+#: The league file has always held JSON.  It used to be named ``.yaml``, which
+#: invited people to edit it as YAML — silently getting the defaults instead of
+#: their league.  The extension now matches the format; the old name is still
+#: read, and :func:`migrate_legacy_config` renames it in place.
+CONFIG_FILENAME = "league.config.json"
+LEGACY_CONFIG_FILENAME = "league.config.yaml"
+
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "teams": 12,
     "roster": {
@@ -51,10 +59,38 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 }
 
 
-def load_config(path: str = "league.config.yaml") -> LeagueConfig:
-    # The config file is JSON (despite the historical .yaml extension).
+def legacy_path_for(path: str) -> str:
+    """The pre-rename ``.yaml`` sibling of a config path."""
+    directory, name = os.path.split(os.fspath(path))
+    if name != CONFIG_FILENAME:
+        return ""
+    return os.path.join(directory, LEGACY_CONFIG_FILENAME)
+
+
+def migrate_legacy_config(path: str) -> bool:
+    """Rename a leftover ``league.config.yaml`` onto ``path``.
+
+    Returns True when a file was moved.  Keeping both names around would
+    recreate the original trap in a new form — edits to the stale one would be
+    ignored — so this moves rather than copies.
+    """
+    legacy = legacy_path_for(path)
+    if not legacy or os.path.exists(path) or not os.path.exists(legacy):
+        return False
+    os.replace(legacy, path)
+    print(f"Renamed {legacy} to {path} (it has always been JSON).", file=sys.stderr)
+    return True
+
+
+def load_config(path: str = CONFIG_FILENAME) -> LeagueConfig:
+    # The league file is JSON. `.yaml` was the historical name; still read it so
+    # an existing checkout or profile keeps working.
     if not os.path.exists(path):
-        return LeagueConfig(**_defaults_copy())
+        legacy = legacy_path_for(path)
+        if legacy and os.path.exists(legacy):
+            path = legacy
+        else:
+            return LeagueConfig(**_defaults_copy())
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -108,6 +144,6 @@ def _defaults_copy() -> Dict[str, Any]:
     }
 
 
-def save_config(config: LeagueConfig, path: str = "league.config.yaml") -> None:
+def save_config(config: LeagueConfig, path: str = CONFIG_FILENAME) -> None:
     atomic_write_json(path, asdict(config))
 

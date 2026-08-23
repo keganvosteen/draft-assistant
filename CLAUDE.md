@@ -22,7 +22,7 @@
 - 240+ tests in `tests/`
 - Web UI uses hashed, license-inventoried vendored React + in-browser Babel (no build step), with no runtime CDN dependency.
 - Player data lives in `data/projections.json` (tracked)
-- League config in `league.config.yaml`
+- League config in `league.config.json`
 - Named profiles under `.draft_assistant_profiles/<name>/` — gitignored, as is `draft_state.json`
 
 ## Packaging
@@ -63,4 +63,5 @@
 - Servers are `ThreadingHTTPServer` (the rollout takes ~1.5s; a single-threaded server froze the UI).
 - Only the leading `rollout_candidates` players (default 16) get a full rollout. Keep the sim pool decoupled from `top_n` — tying them together made every extra board row cost a full set of simulations.
 - The remaining requested rows come back with `simulated: false` and **`impact: null`**, and the board shows them as `—`. Don't be tempted to surface the prelim score there instead: a simulated impact compares two *completed* rosters, while a prelim row only knows what the player adds to the roster as it stands, so the two differ by roughly the value of every remaining pick (~1800 pts in a 17-round league). There is no cheap rescaling — closing that gap is what the simulation does.
+- **Replacement level is priced off *remaining* league demand.** `replacement_levels(..., occupied_players=...)` subtracts already-drafted players from league-wide starter slots; without it the baseline sank deeper every round and inflated VOR. Two consequences worth knowing: once a position's starter demand is satisfied its replacement becomes the best available player (so VOR stops discriminating there — normal from roughly round 8 on), and **every drafted player must reach that argument**. Callers resolve picks against the board, so an unmatched `name|POS` pick would be filtered out — `rollout.py::_unmatched_board_players` re-synthesizes those from `state.picks`, mirroring what `_unmatched_roster_players` does for your own roster.
 - Everything is config-driven (teams/roster/scoring per league). Tunables live in `config.draft`: `rollout_sims`, `rollout_candidates`, `adp_noise`.

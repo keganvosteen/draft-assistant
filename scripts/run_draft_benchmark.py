@@ -25,7 +25,7 @@ def _rank_label(rank: int) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run draft simulation benchmark.")
-    parser.add_argument("--config", default="league.config.yaml", help="Path to league config")
+    parser.add_argument("--config", default="league.config.json", help="Path to league config")
     parser.add_argument("--players", default="data/projections.json", help="Path to projections JSON")
     parser.add_argument("--sims", type=int, default=24, help="Simulations per pick in rollout engine")
     parser.add_argument("--slot", type=int, default=None, help="Run only one draft slot with verbose logs")

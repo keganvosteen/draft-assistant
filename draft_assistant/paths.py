@@ -19,7 +19,7 @@ from pathlib import Path
 APP_NAME = "DraftAssistant"
 
 #: Files seeded into a fresh user data directory from the bundled read-only copy.
-_SEEDED = ("data/projections.json", "league.config.yaml")
+_SEEDED = ("data/projections.json", "league.config.json")
 
 
 def is_frozen() -> bool:

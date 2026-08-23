@@ -29,7 +29,7 @@ class TestResolveInCheckout(unittest.TestCase):
         self.assertIsNone(paths.mutable_root())
 
     def test_resolve_is_identity(self):
-        self.assertEqual(paths.resolve("league.config.yaml"), "league.config.yaml")
+        self.assertEqual(paths.resolve("league.config.json"), "league.config.json")
         self.assertEqual(paths.resolve("data/projections.json"), "data/projections.json")
 
     def test_seed_is_a_noop(self):
@@ -62,11 +62,11 @@ class TestResolveWithOverride(unittest.TestCase):
         paths.seed_user_data()
         board = Path(self._tmp) / "data" / "projections.json"
         self.assertTrue(board.is_file(), "player board was not seeded")
-        self.assertTrue((Path(self._tmp) / "league.config.yaml").is_file())
+        self.assertTrue((Path(self._tmp) / "league.config.json").is_file())
 
     def test_seed_never_overwrites_existing_state(self):
         """An upgrade must not clobber a league config or a draft in progress."""
-        config = Path(self._tmp) / "league.config.yaml"
+        config = Path(self._tmp) / "league.config.json"
         config.parent.mkdir(parents=True, exist_ok=True)
         config.write_text('{"teams": 14}', encoding="utf-8")
 

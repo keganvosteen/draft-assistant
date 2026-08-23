@@ -18,7 +18,7 @@
 - 240+ tests in `tests/`
 - Web UI uses vendored React + in-browser Babel (no build step, works offline), Python stdlib HTTP server
 - Player data lives in `data/projections.json`
-- League config in `league.config.yaml`
+- League config in `league.config.json`
 - Named profiles under `.draft_assistant_profiles/<name>/`
 
 ## Web UI structure

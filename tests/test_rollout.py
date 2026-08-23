@@ -137,6 +137,67 @@ class TestPolicyDetails(unittest.TestCase):
         self.assertEqual(by_name["RB4"].vor, 0.0)
         self.assertLess(by_name["RB5"].vor, 0.0)
 
+    def test_off_board_synced_pick_still_consumes_league_demand(self):
+        # A live provider pick we could not match keeps its slot as "name|POS"
+        # (see synced_draft_to_picks).  Callers build their drafted list by
+        # looking each pick up on the board, so that pick reaches us only via
+        # state.picks.  Dropping it would leave two RB starters apparently
+        # unfilled instead of one, pushing replacement from RB4 down to RB5.
+        drafted = [
+            _p("RB1", "RB", 100, adp=1.0),
+            _p("RB2", "RB", 90, adp=2.0),
+        ]
+        off_board_key = "Deep Rookie|RB"
+        available = [
+            _p("RB4", "RB", 70, adp=4.0),
+            _p("RB5", "RB", 60, adp=5.0),
+            _p("RB6", "RB", 50, adp=6.0),
+        ]
+        cfg = _config({"RB": 1}, teams=4, slot=4, sims=0, noise=0.0)
+        state = DraftState(
+            "Me",
+            ["T1", "T2", "T3", "Me"],
+            picks=[*(player.key() for player in drafted), off_board_key],
+        )
+
+        result = rollout_values(
+            cfg,
+            available,
+            {},
+            state=state,
+            top_n=3,
+            drafted_players=drafted,  # the off-board pick is not resolvable
+        )
+
+        by_name = {row.player.name: row for row in result}
+        self.assertEqual(by_name["RB4"].vor, 0.0)
+        self.assertLess(by_name["RB5"].vor, 0.0)
+
+    def test_off_board_pick_counted_once_when_caller_resolves_it(self):
+        # The same pick arriving through both channels must not be double
+        # counted: a board player whose key is name|POS-shaped is already in
+        # the caller's drafted list, so it must not also become a placeholder.
+        drafted = [_p("RB1", "RB", 100, adp=1.0)]
+        available = [
+            _p("RB2", "RB", 90, adp=2.0),
+            _p("RB3", "RB", 80, adp=3.0),
+            _p("RB4", "RB", 70, adp=4.0),
+        ]
+        cfg = _config({"RB": 1}, teams=3, slot=3, sims=0, noise=0.0)
+        state = DraftState(
+            "Me", ["T1", "T2", "Me"],
+            picks=[player.key() for player in drafted],
+        )
+
+        result = rollout_values(
+            cfg, available, {}, state=state, top_n=3, drafted_players=drafted,
+        )
+
+        # One RB gone of three starters => two remain => replacement is RB3.
+        by_name = {row.player.name: row for row in result}
+        self.assertEqual(by_name["RB2"].vor, 10.0)
+        self.assertEqual(by_name["RB3"].vor, 0.0)
+
     def test_kicker_not_recommended_early(self):
         available = [
             _p("RB1", "RB", 300, adp=1.0),

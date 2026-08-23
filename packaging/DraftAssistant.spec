@@ -35,7 +35,7 @@ ENTITLEMENTS = os.environ.get("DRAFT_ASSISTANT_ENTITLEMENTS") or None
 datas = [
     (str(ROOT / "draft_assistant" / "web" / "static"), "draft_assistant/web/static"),
     (str(ROOT / "data" / "projections.json"), "data"),
-    (str(ROOT / "league.config.yaml"), "."),
+    (str(ROOT / "league.config.json"), "."),
     # Shipped alongside the app: the vendored React/Babel bundles are
     # third-party code and their notices travel with the binary.
     (str(ROOT / "LICENSE"), "."),

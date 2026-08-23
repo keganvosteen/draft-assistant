@@ -143,7 +143,7 @@ All commands accept `--profile <name>` to target a specific league:
 
 Keep multiple league setups in one install.
 
-- Default profile uses root files (`league.config.yaml`, `draft_state.json`, `data/projections.json`).
+- Default profile uses root files (`league.config.json`, `draft_state.json`, `data/projections.json`).
 - Named profiles store config/state under `.draft_assistant_profiles/<name>/`, sharing the populated `data/projections.json`.
 - In the desktop UI: use the `League` dropdown + `New League` buttons.
 - In the terminal UI: run `python -m draft_assistant --profile <name>`.
@@ -230,7 +230,7 @@ are shown for reference, not treated as a clean preseason source.
 
 ## Configuration
 
-Edit `league.config.yaml` (or use the setup wizards):
+Edit `league.config.json` (or use the setup wizards):
 
 ```json
 {

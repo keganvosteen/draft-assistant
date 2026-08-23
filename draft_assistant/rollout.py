@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import random
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .draft_value import (
     _bye_week_penalty,
@@ -82,6 +82,9 @@ def _flatten(my_roster: Dict[str, List[Player]]) -> List[Player]:
     return players
 
 
+VALID_POSITIONS = frozenset({"QB", "RB", "WR", "TE", "K", "DST"})
+
+
 def _unmatched_roster_players(
     state: Optional[DraftState], roster_players: List[Player]
 ) -> List[Player]:
@@ -101,13 +104,12 @@ def _unmatched_roster_players(
         for key in (player.key(), player.legacy_key())
     }
     placeholders: List[Player] = []
-    valid_positions = {"QB", "RB", "WR", "TE", "K", "DST"}
     for key in state.my_picks:
         if key in known:
             continue
         name, separator, position = str(key).rpartition("|")
         position = position.upper() if separator else "UNKNOWN"
-        if position not in valid_positions:
+        if position not in VALID_POSITIONS:
             position = "UNKNOWN"
         placeholders.append(Player(
             id=f"unmatched:{key}",
@@ -116,6 +118,43 @@ def _unmatched_roster_players(
             metadata={"unmatched_roster_placeholder": True},
         ))
         known.add(key)
+    return placeholders
+
+
+def _unmatched_board_players(
+    state: Optional[DraftState], known_keys: Iterable[str]
+) -> List[Player]:
+    """Represent *league-wide* synced picks that are not on the projection board.
+
+    The counterpart of :func:`_unmatched_roster_players`, for everyone else's
+    picks rather than the user's own.  Callers can only hand us the drafted
+    players they were able to look up on the board, so an unmatched ``name|POS``
+    pick would otherwise vanish before ``replacement_levels`` counts league
+    demand — leaving the engine convinced more starter slots remain open than
+    really do, and so pushing replacement deeper and inflating VOR.  That is the
+    very distortion the ``occupied_players`` argument exists to remove.
+
+    Only keys that actually carry a position are synthesized.  A matched pick is
+    normally stored under a bare provider id, which is unparseable here and is
+    already accounted for by the caller's drafted list.
+    """
+    if state is None:
+        return []
+    known = set(known_keys)
+    placeholders: List[Player] = []
+    for key in state.picks:
+        if key in known:
+            continue
+        name, separator, position = str(key).rpartition("|")
+        if not separator or position.upper() not in VALID_POSITIONS:
+            continue
+        known.add(key)
+        placeholders.append(Player(
+            id=f"unmatched:{key}",
+            name=name or str(key),
+            position=position.upper(),
+            metadata={"unmatched_board_placeholder": True},
+        ))
     return placeholders
 
 
@@ -152,13 +191,19 @@ def rollout_values(
         player.key(): player
         for player in [*(drafted_players or ()), *roster_players]
     }
+    occupied_players = list(occupied_by_key.values())
+    occupied_players.extend(_unmatched_board_players(state, {
+        key
+        for player in occupied_players
+        for key in (player.key(), player.legacy_key())
+    }))
     repl = replacement_levels(
         available,
         config.scoring,
         config.teams,
         roster,
         points_map=points_map,
-        occupied_players=list(occupied_by_key.values()),
+        occupied_players=occupied_players,
     )
 
     base_value = roster_value(roster_players, points_map, roster).total_value

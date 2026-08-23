@@ -23,7 +23,7 @@ all mutable state:
 | Config, draft state, player board, player context | current directory | `%LOCALAPPDATA%\DraftAssistant` (Windows) <br> `~/Library/Application Support/DraftAssistant` (macOS) |
 
 On first run the app copies the bundled `data/projections.json` and
-`league.config.yaml` into that directory. Upgrades never overwrite them, so a
+`league.config.json` into that directory. Upgrades never overwrite them, so a
 reinstall keeps a draft in progress.
 
 Set `DRAFT_ASSISTANT_HOME` to point any build at a different directory — that
