@@ -216,6 +216,17 @@ class TestContextAndUpdateEndpoints(_ServerFixture):
         self.assertEqual(status, 400)
         self.assertIn(b"week", body)
 
+    def test_suggest_reports_news_freshness(self):
+        # The eligibility filter is only as good as the feed behind it, so the
+        # draft room has to be told when that feed is out of date rather than
+        # being left to imply the news was checked.
+        status, body = self.request("POST", "/api/suggest", {"top": 1})
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertIn("contextStale", payload)
+        self.assertIsInstance(payload["contextStale"], bool)
+        self.assertIsInstance(payload["contextFailedSources"], list)
+
     def test_update_endpoint_is_safe_in_source_checkout(self):
         status, body = self.request("GET", "/api/update")
         payload = json.loads(body)

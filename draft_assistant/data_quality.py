@@ -23,6 +23,16 @@ MIN_POSITION_COUNTS = {
     "DST": 20,
 }
 
+#: Coverage ratios are measured over the players who might actually be drafted,
+#: not the whole pool. A provider's player universe grows without the board
+#: getting worse -- Sleeper alone lists ~2,000 players with an ADP, most of whom
+#: nobody projects because nobody drafts them. Scoring coverage against that
+#: denominator punishes carrying *more* data: a pull that added ESPN and lifted
+#: consensus in the top 200 from 76% to 88% still "failed" for having also
+#: brought in a thousand undraftable names. A deep 12-team league makes about
+#: 200 picks, so 300 is a generous cut that stays honest about what matters.
+DRAFT_RELEVANT_BY_ADP = 300
+
 
 @dataclass(frozen=True)
 class ProjectionQualityReport:
@@ -85,25 +95,44 @@ def evaluate_projection_quality(players: Iterable[Player]) -> ProjectionQualityR
                 f"{position} pool is too small ({count}; expected at least {minimum})"
             )
 
-    def require_ratio(label: str, count: int, minimum: float) -> None:
-        ratio = (count / total) if total else 0.0
+    def require_ratio(label: str, count: int, denominator: int, minimum: float) -> None:
+        ratio = (count / denominator) if denominator else 0.0
         if ratio < minimum:
             issues.append(
-                f"{label} coverage is {ratio:.1%} ({count}/{total}); "
+                f"{label} coverage is {ratio:.1%} ({count}/{denominator}); "
                 f"expected at least {minimum:.0%}"
             )
 
-    require_ratio("projection", projected, 0.58)
-    require_ratio("ADP", with_adp, 0.15)
-    require_ratio("bye-week", with_bye, 0.50)
-    require_ratio("historical-stat", with_history, 0.50)
-    require_ratio("provenance metadata", with_metadata, 0.50)
+    # The draftable slice: best ADP first, unranked players last. With no ADP
+    # anywhere there is no head to speak of -- ordering would fall back to
+    # whatever order the pull happened to emit, which can exclude a whole
+    # position and quietly skip its check. Judge the entire board instead: a
+    # pull that lost every ADP is broken, and the gate should get stricter when
+    # information disappears, never more forgiving.
+    relevant = board if not with_adp else sorted(
+        board,
+        key=lambda p: (p.adp is None, p.adp if p.adp is not None else 9999.0),
+    )[:DRAFT_RELEVANT_BY_ADP]
+    n_relevant = len(relevant)
+    relevant_projected = sum(bool(p.projections) for p in relevant)
+    relevant_bye = sum(p.bye_week is not None for p in relevant)
+    relevant_history = sum(bool(p.historical_stats) for p in relevant)
+    relevant_kickers = [p for p in relevant if p.position == "K"]
+    relevant_projected_kickers = sum(bool(p.projections) for p in relevant_kickers)
+
+    require_ratio("projection", relevant_projected, n_relevant, 0.58)
+    require_ratio("bye-week", relevant_bye, n_relevant, 0.50)
+    require_ratio("historical-stat", relevant_history, n_relevant, 0.50)
+    # These two describe the whole board, not just its draftable head: a pull
+    # that lost ADP or provenance wholesale is broken however deep you look.
+    require_ratio("ADP", with_adp, total, 0.15)
+    require_ratio("provenance metadata", with_metadata, total, 0.50)
     if consensus == 0:
         issues.append("no player has a multi-source consensus projection")
-    if kickers and projected_kickers / kickers < 0.50:
+    if relevant_kickers and relevant_projected_kickers / len(relevant_kickers) < 0.50:
         issues.append(
-            f"kicker projection coverage is {projected_kickers}/{kickers}; "
-            "expected at least 50%"
+            f"kicker projection coverage is {relevant_projected_kickers}/"
+            f"{len(relevant_kickers)} among draftable kickers; expected at least 50%"
         )
 
     return ProjectionQualityReport(

@@ -896,10 +896,16 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
           const updateDetails = playerNewsSignals(p.signals).map(sig =>
             `${sig.attribution || sig.source}: ${sig.kind.replace(/_/g, ' ')} ${sig.value}`
           );
+          // /api/players marks anyone the news feed says is off an NFL roster.
+          // They stay listed and draftable by hand — you may know something the
+          // feed does not — but they are dimmed and never recommended.
+          const ineligible = p.eligible === false;
+          const ineligibleNote = 'Not on an NFL roster — excluded from recommendations';
           const rowTitle = [
             p.draftScore != null
               ? `Draft impact ${Math.round(p.draftScore)} · immediate lineup gain ${p.lineupGain} · ${p.availPct}% available at your next pick`
               : null,
+            ineligible ? ineligibleNote : null,
             p.availability ? `Availability: ${p.availability}` : null,
             ...updateDetails,
           ].filter(Boolean).join('\n');
@@ -913,8 +919,8 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
                 display:'grid', gridTemplateColumns:GRID,
                 padding:'7px 14px', gap:6, alignItems:'center',
                 borderBottom:`1px solid ${T.borderLight}`,
-                background: p.drafted ? T.surfaceAlt : isHov ? '#f3f6ff' : T.surface,
-                opacity: p.drafted ? .45 : 1,
+                background: p.drafted || ineligible ? T.surfaceAlt : isHov ? '#f3f6ff' : T.surface,
+                opacity: p.drafted ? .45 : ineligible ? .55 : 1,
               }}>
               <span className="da-num" style={{fontSize:11, color:T.mutedLight}}>{i+1}</span>
 
@@ -923,7 +929,11 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
                   <span style={{width:7, height:7, borderRadius:'50%', background:tierDot, flexShrink:0}}
                     title={`Tier ${p.tier}`} />
                   <span className="da-ellipsis">{p.name}</span>
-                  {p.availability && <AvailabilityChip status={p.availability} />}
+                  {(p.availability || ineligible) && (
+                    <AvailabilityChip
+                      status={p.availability || 'Free Agent'}
+                      title={ineligible ? ineligibleNote : undefined} />
+                  )}
                 </div>
                 <div className="da-ellipsis" style={{fontSize:10, color:T.mutedLight, marginTop:1}}>
                   {isHov && p.draftScore != null
@@ -1277,7 +1287,13 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   const autoFrac = Math.min(1, Math.max(0, (tweaks.autoDrafters || 0) / opponentCount));
   const adpNoise = +(1 + (8 - 1) * (1 - autoFrac)).toFixed(1);
 
-  const [suggest, setSuggest] = React.useState({ rows: {}, loading: false, sims: 0, err: null, stale: false });
+  // `stale` means "not your turn yet"; `newsStale` means the injury/roster feed
+  // behind the eligibility filter is out of date. Deliberately separate fields —
+  // conflating them would hide a dead news feed behind a routine waiting state.
+  const [suggest, setSuggest] = React.useState({
+    rows: {}, loading: false, sims: 0, err: null, stale: false,
+    newsStale: false, newsSources: [],
+  });
   const [refreshNonce, setRefreshNonce] = React.useState(0);
   const handleRefreshRecs = () => setRefreshNonce(n => n + 1);
 
@@ -1323,13 +1339,23 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       })
         .then(r => r.json())
         .then(d => {
-          if (d.error) { setSuggest({ rows: {}, loading: false, sims: 0, err: d.error, stale: false }); return; }
+          if (d.error) {
+            setSuggest({ rows: {}, loading: false, sims: 0, err: d.error, stale: false,
+                         newsStale: false, newsSources: [] });
+            return;
+          }
           const rows = {};
           (d.suggestions || []).forEach(row => { rows[row.id] = row; });
-          setSuggest({ rows, loading: false, sims: d.sims || 0, err: null, stale: false });
+          setSuggest({
+            rows, loading: false, sims: d.sims || 0, err: null, stale: false,
+            newsStale: !!d.contextStale, newsSources: d.contextFailedSources || [],
+          });
         })
         .catch(e => {
-          if (e.name !== 'AbortError') setSuggest({ rows: {}, loading: false, sims: 0, err: String(e), stale: false });
+          if (e.name !== 'AbortError') {
+            setSuggest({ rows: {}, loading: false, sims: 0, err: String(e), stale: false,
+                         newsStale: false, newsSources: [] });
+          }
         });
     }, 120);
     return () => { ctrl.abort(); clearTimeout(timer); };
@@ -1615,6 +1641,18 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
                 color: live.ok === false ? T.red : live.on ? T.green : T.muted,
               }}>
                 {live.on ? '● ' : ''}Sleeper: {live.msg || 'connecting…'}
+              </span>
+            )}
+            {suggest.newsStale && (
+              <span
+                title={suggest.newsSources.length
+                  ? `These feeds are failing: ${suggest.newsSources.join(', ')}`
+                  : 'The cached injury and roster feed has not refreshed recently.'}
+                style={{
+                  paddingLeft:8, borderLeft:`1px solid ${T.border}`,
+                  color:T.amber, fontWeight:700,
+                }}>
+                ⚠ Player news stale — free-agent and injury filtering may be out of date
               </span>
             )}
             <button onClick={handleRefreshRecs} title="Recompute recommendations now"

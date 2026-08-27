@@ -12,18 +12,20 @@ def compute_points(
     players: List[Player],
     scoring: Dict[str, float],
     use_historical: bool = True,
+    season: Optional[int] = None,
 ) -> Dict[str, float]:
     """Compute projected fantasy points per player.
 
     When use_historical=True (default) and a player has age or historical_stats,
     the raw projections are blended with multi-year trends and adjusted by the
-    positional age curve before scoring.
+    positional age curve before scoring. ``season`` sets which season the blend
+    treats as current, and defaults to the calendar year.
     """
     pts: Dict[str, float] = {}
     for p in players:
         if use_historical and (p.age is not None or p.historical_stats):
             from .historical import adjust_projections
-            adj = adjust_projections(p, scoring)
+            adj = adjust_projections(p, scoring, season=season)
             pts[p.key()] = fantasy_points(adj, scoring)
         else:
             pts[p.key()] = fantasy_points(p.projections, scoring)

@@ -65,6 +65,8 @@ STAT_ALIASES = {
 INELIGIBLE_ROSTER_STATUSES = {
     "inactive", "practice squad", "retired", "free agent",
 }
+#: Positions drafted as a team unit, which legitimately carry no player team.
+TEAM_UNIT_POSITIONS = {"DEF", "DST"}
 ZERO_WEEK_STATUSES = {
     "out", "inactive", "injured reserve", "ir", "reserve/pup", "pup",
     "reserve/nfi", "nfi", "suspended",
@@ -306,6 +308,17 @@ def _refresh_sleeper_players(context: PlayerContext, now: datetime) -> int:
         if status and _normalized(str(status)) != "active":
             signals.append(_signal(identity, "roster_status", status, "sleeper_players", now,
                                    attribution="Sleeper"))
+        elif position not in TEAM_UNIT_POSITIONS and not meta.get("team"):
+            # A player on no NFL roster cannot score, but Sleeper keeps reporting
+            # status "Active" for them -- a released veteran who has not filed
+            # retirement papers looks identical to a healthy starter. ``team`` is
+            # the fact that actually distinguishes them, and "Free Agent" is
+            # already in INELIGIBLE_ROSTER_STATUSES, so emitting it here is what
+            # makes is_candidate_eligible drop them from recommendations. Like
+            # every other roster_status this does not expire: it stays true until
+            # a refresh sees the player signed somewhere.
+            signals.append(_signal(identity, "roster_status", "Free Agent", "sleeper_players",
+                                   now, attribution="Sleeper"))
         injury = meta.get("injury_status")
         if injury:
             signals.append(_signal(identity, "injury", injury, "sleeper_players", now,
@@ -655,8 +668,15 @@ def signal_summary(context: Optional[PlayerContext], player: Player, limit: int 
 
 
 def primary_availability(context: Optional[PlayerContext], player: Player) -> Optional[str]:
+    # A disqualifying roster status outranks any injury designation. Sleeper
+    # reports a released veteran as merely "Questionable", so ordering injury
+    # first showed an amber Q for someone who is not on a roster at all.
+    signals = signals_for_player(context, player)
+    for signal in signals:
+        if signal.kind == "roster_status" and _normalized(signal.value) in INELIGIBLE_ROSTER_STATUSES:
+            return signal.value
     for kind in ("injury", "roster_status", "practice"):
-        for signal in signals_for_player(context, player):
+        for signal in signals:
             if signal.kind == kind:
                 value = _normalized(signal.value)
                 if kind != "roster_status" or value != "active":

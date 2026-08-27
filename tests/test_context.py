@@ -6,6 +6,7 @@ from unittest import mock
 from urllib.error import URLError
 
 from draft_assistant.context import (
+    _refresh_sleeper_players,
     actual_stats_for,
     confidence_for_player,
     context_from_dict,
@@ -14,6 +15,7 @@ from draft_assistant.context import (
     is_candidate_eligible,
     load_context,
     player_context_ids,
+    primary_availability,
     refresh_context,
     save_context,
     signals_for_player,
@@ -86,6 +88,70 @@ class TestPlayerContext(unittest.TestCase):
         self.assertTrue(is_candidate_eligible(None, self.player))
         context = PlayerContext(2026, 1, signals=[_signal("roster_status", "Practice Squad")])
         self.assertFalse(is_candidate_eligible(context, self.player))
+
+    def test_teamless_player_is_flagged_free_agent_and_blocked(self):
+        # Sleeper keeps reporting status "Active" for a released veteran who has
+        # not filed retirement papers -- team is the field that gives it away.
+        # This is the Joe Mixon case: on no roster, but indistinguishable from a
+        # healthy starter by status alone.
+        raw = {
+            "4018": {
+                "position": "RB", "team": None,
+                "status": "Active", "injury_status": None,
+            },
+        }
+        context = PlayerContext(2026, 1)
+        with mock.patch("draft_assistant.context._fetch_json", return_value=raw):
+            _refresh_sleeper_players(context, NOW)
+
+        statuses = [s for s in context.signals if s.kind == "roster_status"]
+        self.assertEqual([s.value for s in statuses], ["Free Agent"])
+        # Roster status must outlive a weekly injury designation: Mixon's only
+        # flag expired after 48h and left him looking perfectly healthy.
+        self.assertIsNone(statuses[0].expires_at)
+
+        mixon = Player(id="sleeper:4018", name="Joe Mixon", position="RB",
+                       metadata={"sleeper_id": "4018"})
+        self.assertFalse(is_candidate_eligible(context, mixon))
+
+    def test_free_agency_outranks_an_injury_designation(self):
+        # The real feed reports both: "Free Agent" because he has no team, and a
+        # leftover "Questionable". Showing the amber Q would badly understate it.
+        context = PlayerContext(2026, 1, signals=[
+            _signal("injury", "Questionable"),
+            _signal("roster_status", "Free Agent"),
+        ])
+        self.assertEqual(primary_availability(context, self.player), "Free Agent")
+
+    def test_ordinary_injury_still_wins_when_rostered(self):
+        context = PlayerContext(2026, 1, signals=[
+            _signal("injury", "Questionable"),
+            _signal("roster_status", "Active"),
+        ])
+        self.assertEqual(primary_availability(context, self.player), "Questionable")
+
+    def test_rostered_player_is_not_flagged_free_agent(self):
+        raw = {"7": {"position": "RB", "team": "SF", "status": "Active"}}
+        context = PlayerContext(2026, 1)
+        with mock.patch("draft_assistant.context._fetch_json", return_value=raw):
+            _refresh_sleeper_players(context, NOW)
+        self.assertEqual([s for s in context.signals if s.kind == "roster_status"], [])
+
+    def test_team_defense_without_a_team_is_not_a_free_agent(self):
+        # A DST is drafted as a unit and legitimately carries no player team.
+        raw = {"SF": {"position": "DEF", "team": None, "status": "Active"}}
+        context = PlayerContext(2026, 1)
+        with mock.patch("draft_assistant.context._fetch_json", return_value=raw):
+            _refresh_sleeper_players(context, NOW)
+        self.assertEqual([s for s in context.signals if s.kind == "roster_status"], [])
+
+    def test_explicit_inactive_status_still_wins_over_free_agent(self):
+        raw = {"9": {"position": "WR", "team": None, "status": "Inactive"}}
+        context = PlayerContext(2026, 1)
+        with mock.patch("draft_assistant.context._fetch_json", return_value=raw):
+            _refresh_sleeper_players(context, NOW)
+        statuses = [s.value for s in context.signals if s.kind == "roster_status"]
+        self.assertEqual(statuses, ["Inactive"])
 
     def test_round_trip_persistence(self):
         context = PlayerContext(

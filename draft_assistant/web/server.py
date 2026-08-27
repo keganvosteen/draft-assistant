@@ -26,6 +26,7 @@ from ..context import (
     default_season,
     default_week,
     is_candidate_eligible,
+    is_stale,
     load_context,
     primary_availability,
     refresh_context,
@@ -699,12 +700,21 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 "confidence": confidence_for_player(context, r.player),
                 "signals": signal_summary(context, r.player),
             } for r in results]
+            # The eligibility filter above is only as good as the feed behind it.
+            # Say so on every response rather than letting the draft room imply
+            # the news has been checked when it has not.
+            failed_sources = sorted(
+                source for source, health in context.source_health.items()
+                if isinstance(health, dict) and health.get("ok") is False
+            )
             self._send_json({
                 "suggestions": rows,
                 "sims": results[0].sims if results else 0,
                 "teams": eff.teams,
                 "slot": int((eff.draft or {}).get("slot", 1)),
                 "contextAsOf": context.refreshed_at,
+                "contextStale": is_stale(context) or bool(failed_sources),
+                "contextFailedSources": failed_sources,
             })
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)

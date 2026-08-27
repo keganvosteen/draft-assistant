@@ -1218,24 +1218,33 @@ function App() {
     }).catch(() => {});
 
     // Render cached context immediately; refresh stale signals in the background.
+    // Every failure here used to be swallowed, so a dead news feed looked exactly
+    // like a working one — that is how a player who had left the league kept
+    // being recommended. Say so instead: stale signals are a draft-day problem.
+    const newsFailed = detail => toast(
+      `Could not refresh player news${detail ? ` (${detail})` : ''} — injury and ` +
+      'roster status may be out of date. Reload to retry.', 'error', 8000);
+
     fetch('/api/context').then(r => r.json()).then(ctx => {
-      if (!ctx || ctx.error || !ctx.stale) return;
+      if (!ctx || ctx.error) { newsFailed(ctx && ctx.error); return; }
+      if (!ctx.stale) return;
       return fetch('/api/context/refresh', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({season:ctx.season, week:ctx.week}),
       }).then(r => r.json()).then(started => {
-        if (!started.taskId) return;
+        if (!started.taskId) { newsFailed(started && started.error); return; }
         let attempts = 0;
         const poll = () => {
           fetch(`/api/task/${started.taskId}`).then(r => r.json()).then(task => {
             if (task.status === 'done') { refreshPlayers(); return; }
-            if (task.status === 'error' || attempts++ >= 90) return;
+            if (task.status === 'error') { newsFailed(task.error); return; }
+            if (attempts++ >= 90) { newsFailed('timed out'); return; }
             setTimeout(poll, 1000);
-          }).catch(() => {});
+          }).catch(e => newsFailed(String(e)));
         };
         poll();
       });
-    }).catch(() => {});
+    }).catch(e => newsFailed(String(e)));
   }, [refreshPlayers]);
 
   React.useEffect(() => { localStorage.setItem('fda_leagues', JSON.stringify(leagues)); }, [leagues]);
