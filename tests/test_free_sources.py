@@ -1,4 +1,7 @@
 """Tests for the no-dependency free data collector's field mapping and merge."""
+import os
+import shutil
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -86,21 +89,27 @@ class TestMergePlayer(unittest.TestCase):
 
 
 class TestConsensusProjection(unittest.TestCase):
+    # Samples arrive as (source, stat line): the vendor name travels with the
+    # numbers so a snapshot can be archived and graded per source.
     def test_per_stat_median_across_sources(self):
         out = _consensus_projection([
-            {"rush_yd": 1000.0, "rush_td": 8.0},
-            {"rush_yd": 1200.0, "rush_td": 10.0},
-            {"rush_yd": 1400.0, "rush_td": 9.0},
+            ("sleeper", {"rush_yd": 1000.0, "rush_td": 8.0}),
+            ("fftoday", {"rush_yd": 1200.0, "rush_td": 10.0}),
+            ("espn", {"rush_yd": 1400.0, "rush_td": 9.0}),
         ])
         self.assertEqual(out["rush_yd"], 1200.0)  # median of 1000/1200/1400
         self.assertEqual(out["rush_td"], 9.0)
 
     def test_two_sources_average(self):
         # median of two values is their mean — a fair Sleeper+FFToday blend.
-        self.assertEqual(_consensus_projection([{"rec": 80.0}, {"rec": 90.0}])["rec"], 85.0)
+        out = _consensus_projection([("sleeper", {"rec": 80.0}), ("fftoday", {"rec": 90.0})])
+        self.assertEqual(out["rec"], 85.0)
 
     def test_stat_only_one_source_has_stands(self):
-        out = _consensus_projection([{"rush_yd": 1000.0, "fumbles": -2.0}, {"rush_yd": 1100.0}])
+        out = _consensus_projection([
+            ("sleeper", {"rush_yd": 1000.0, "fumbles": -2.0}),
+            ("fftoday", {"rush_yd": 1100.0}),
+        ])
         self.assertEqual(out["rush_yd"], 1050.0)
         self.assertEqual(out["fumbles"], -2.0)
 
@@ -114,6 +123,7 @@ class TestMergeCollectsProjectionSamples(unittest.TestCase):
         _merge_many(merged, [b], "fftoday", samples)
         key = next(iter(samples))
         self.assertEqual(len(samples[key]), 2)
+        self.assertEqual([source for source, _ in samples[key]], ["sleeper", "fftoday"])
         self.assertEqual(_consensus_projection(samples[key])["rush_yd"], 1200.0)
 
     def test_no_samples_dict_means_no_collection(self):
@@ -233,6 +243,18 @@ class TestFftodayRetryAndFailure(unittest.TestCase):
 
 class TestSingleSourceWarning(unittest.TestCase):
     """A pull that ends up Sleeper-only must say so, not just report success."""
+
+    def setUp(self):
+        # pull_free_data archives each source's preseason stat lines, so it
+        # writes to data/ relative to the cwd. Without this the suite drops test
+        # fixtures into the real board's archive.
+        self._tmp = tempfile.mkdtemp()
+        self._orig = os.getcwd()
+        os.chdir(self._tmp)
+
+    def tearDown(self):
+        os.chdir(self._orig)
+        shutil.rmtree(self._tmp, ignore_errors=True)
 
     def _pull(self, fftoday_result, include_fftoday=True):
         from draft_assistant.importers import free_sources as fs

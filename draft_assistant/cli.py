@@ -7,12 +7,12 @@ from .draft import DraftTracker
 from .export import export_players_csv
 from .importers.fantasypros import load_dst_csv, load_k_csv, load_offense_csv, merge_players
 from .importers.fftoday import fetch_all_fftoday
-from .importers.free_sources import pull_free_data
+from .importers.free_sources import merge_historical_into, pull_free_data
 from .models import FLEX_TYPES
 from .profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from .providers.base import build_provider
 from .sample_data import sample_players
-from .storage import load_state, save_players, save_state
+from .storage import load_state, save_players, save_state, update_players
 from .suggest import suggest_players
 
 
@@ -298,8 +298,24 @@ def main() -> None:
             espn_league_id=args.espn_league_id,
         )
         out_json = args.out or paths.projections_path
-        save_players(result.players, out_json)
-        print(f"Saved {len(result.players)} players to {out_json}")
+        if args.out:
+            # An explicit --out is an export, not the live board: write it as-is.
+            save_players(result.players, out_json)
+            players = result.players
+        else:
+            # Accumulate history across pulls. A pull only fetches the seasons it
+            # was asked for, so saving it directly would discard every earlier
+            # season already banked on the board -- this path used to do exactly
+            # that, silently dropping 2023 and 2024 on a default pull. The web
+            # endpoints have always merged; the CLI has to as well.
+            players = update_players(
+                out_json,
+                lambda current: merge_historical_into(result.players, current),
+            )
+        seasons = sorted({s for p in players for s in p.historical_stats})
+        print(f"Saved {len(players)} players to {out_json}")
+        if seasons:
+            print(f"History seasons on the board: {', '.join(str(s) for s in seasons)}")
         if args.csv:
             export_players_csv(result.players, args.csv)
             print(f"Also wrote CSV to {args.csv}")

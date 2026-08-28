@@ -45,6 +45,7 @@ from .importers.free_sources import (
     _players_from_sleeper_projection_rows,
 )
 from .importers.fftoday import fetch_all_fftoday
+from .projection_archive import archived_projection_points, archived_sources
 from .scoring import fantasy_points
 from .storage import atomic_write_json
 
@@ -172,6 +173,20 @@ def _preseason_relevant(
     return sub.loc[keys]
 
 
+def archived_proj(season: int, scoring: dict) -> Dict[str, Dict[str, float]]:
+    """Every source this app banked before ``season`` kicked off.
+
+    These are the only clean preseason numbers we will ever have for Sleeper and
+    ESPN, whose own archives are either revised in-season or absent entirely.
+    Empty until a pull has run during a preseason — see projection_archive.py.
+    Named ``<source>@archive`` so they never collide with a live-fetched source.
+    """
+    return {
+        f"{source}@archive": archived_projection_points(season, source, scoring)
+        for source in archived_sources(season)
+    }
+
+
 def evaluate(seasons: List[int], scoring: dict, include_sleeper: bool = True) -> pd.DataFrame:
     players_map = _fetch_sleeper_players() if include_sleeper else {}
     rows: List[dict] = []
@@ -181,6 +196,7 @@ def evaluate(seasons: List[int], scoring: dict, include_sleeper: bool = True) ->
             "prior_year": _pts_only(actuals(season - 1, scoring)),
             "trend_3yr": trend_3yr(season, scoring),
         }
+        srcs.update({k: v for k, v in archived_proj(season, scoring).items() if v})
         if include_sleeper:
             srcs["sleeper*"] = sleeper_proj(season, scoring, players_map)
         df = _season_frame(season, scoring, srcs)
@@ -385,10 +401,40 @@ def grade_adjusted(seasons: List[int]) -> None:
           f"delta={df['delta'].mean():+.3f}  (positive = the adjustments help)\n")
 
 
+def report_archive(seasons: List[int]) -> None:
+    """What clean preseason data we have banked, and what is still missing.
+
+    Sleeper supplies most of the board and cannot be graded from its own
+    history, so until these snapshots accumulate there is no honest way to show
+    that a change to the projection blend helped. Printing the gap keeps that
+    visible instead of letting an unmeasurable pipeline look measured.
+    """
+    from datetime import date
+
+    from .projection_archive import is_preseason
+
+    banked = {s: archived_sources(s) for s in seasons}
+    banked = {s: v for s, v in banked.items() if v}
+    print("=== archived preseason snapshots (clean, gradeable) ===")
+    if not banked:
+        print("  none yet — no pull has run during a preseason window.")
+    for season, sources in sorted(banked.items()):
+        detail = ", ".join(f"{src} ({n})" for src, n in sorted(sources.items()))
+        print(f"  {season}: {detail}")
+
+    current = date.today().year
+    if not archived_sources(current) and is_preseason(current):
+        print(f"\n  ** {current} is still preseason and nothing is banked yet. **")
+        print("     Run a data pull before September 1 to capture it; after that")
+        print("     this season's clean preseason record is gone for good.")
+    print()
+
+
 def main(seasons: List[int] = None, include_sleeper: bool = True) -> None:
     scoring = DEFAULT_SCORING
     seasons = seasons or list(range(2019, 2026))
     print(f"Backtesting seasons {seasons[0]}-{seasons[-1]} in half-PPR scoring...\n")
+    report_archive(seasons + [seasons[-1] + 1])
     res = evaluate(seasons, scoring, include_sleeper=include_sleeper)
 
     pd.set_option("display.float_format", lambda x: f"{x:.3f}")
