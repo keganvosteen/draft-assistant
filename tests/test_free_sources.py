@@ -260,7 +260,7 @@ class TestEspnProjectionStats(unittest.TestCase):
 
 class TestFftodayRetryAndFailure(unittest.TestCase):
     def test_fetch_retries_transient_failures(self):
-        from draft_assistant.importers import fftoday
+        from draft_assistant.importers import _scrape, fftoday
         calls = {"n": 0}
 
         def flaky(url):
@@ -270,14 +270,14 @@ class TestFftodayRetryAndFailure(unittest.TestCase):
             return "<html></html>"
 
         with patch.object(fftoday, "_fetch_once", side_effect=flaky), \
-             patch.object(fftoday.time, "sleep"):
+             patch.object(_scrape.time, "sleep"):
             self.assertEqual(fftoday._fetch("http://example"), "<html></html>")
         self.assertEqual(calls["n"], 3)
 
     def test_fetch_raises_after_exhausting_attempts(self):
-        from draft_assistant.importers import fftoday
+        from draft_assistant.importers import _scrape, fftoday
         with patch.object(fftoday, "_fetch_once", side_effect=OSError("down")), \
-             patch.object(fftoday.time, "sleep"):
+             patch.object(_scrape.time, "sleep"):
             with self.assertRaises(OSError):
                 fftoday._fetch("http://example")
 
@@ -333,7 +333,8 @@ class TestSingleSourceWarning(unittest.TestCase):
                 raise espn_result
             return espn_result or []
 
-        with patch.object(fs, "_fetch_espn_players", side_effect=espn), \
+        with patch.object(fs, "fetch_all_cbs", side_effect=RuntimeError("CBS offline")), \
+             patch.object(fs, "_fetch_espn_players", side_effect=espn), \
              patch.object(fs, "_fetch_sleeper_players", return_value=sleeper_meta), \
              patch.object(fs, "_fetch_sleeper_projection_rows", return_value=sleeper_rows), \
              patch.object(fs, "_fetch_ffc_adp_players", side_effect=RuntimeError("offline")), \

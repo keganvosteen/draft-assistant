@@ -12694,6 +12694,3843 @@
           }
         }
       }
+    },
+    "cbs": {
+      "taken_at": "2026-08-29T02:13:06+00:00",
+      "players": {
+        "parkerwashington|WR": {
+          "name": "Parker Washington",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 2.0,
+            "rec": 62.0,
+            "rec_yd": 925.0,
+            "rec_td": 7.0
+          }
+        },
+        "ceedeelamb|WR": {
+          "name": "CeeDee Lamb",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 25.0,
+            "rec": 102.0,
+            "rec_yd": 1334.0,
+            "rec_td": 6.0
+          }
+        },
+        "buckyirving|RB": {
+          "name": "Bucky Irving",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1028.0,
+            "rush_td": 6.0,
+            "rec": 44.0,
+            "rec_yd": 401.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "jerryjeudy|WR": {
+          "name": "Jerry Jeudy",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 4.0,
+            "rec": 66.0,
+            "rec_yd": 830.0,
+            "rec_td": 4.0,
+            "fumbles": 1.0
+          }
+        },
+        "kayshonboutte|WR": {
+          "name": "Kayshon Boutte",
+          "pos": "WR",
+          "stats": {
+            "rec": 39.0,
+            "rec_yd": 584.0,
+            "rec_td": 6.0
+          }
+        },
+        "omarionhampton|RB": {
+          "name": "Omarion Hampton",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 891.0,
+            "rush_td": 10.0,
+            "rec": 47.0,
+            "rec_yd": 299.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "adamrandall|RB": {
+          "name": "Adam Randall",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 442.0,
+            "rush_td": 3.0,
+            "rec": 18.0,
+            "rec_yd": 189.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "orondegadsden|TE": {
+          "name": "Oronde Gadsden",
+          "pos": "TE",
+          "stats": {
+            "rec": 49.0,
+            "rec_yd": 689.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "kylepitts|TE": {
+          "name": "Kyle Pitts",
+          "pos": "TE",
+          "stats": {
+            "rec": 75.0,
+            "rec_yd": 822.0,
+            "rec_td": 6.0
+          }
+        },
+        "joeflacco|QB": {
+          "name": "Joe Flacco",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 174.0,
+            "pass_td": 1.0,
+            "pass_int": 1.0,
+            "rush_yd": 16.0,
+            "fumbles": 1.0
+          }
+        },
+        "jaketonges|TE": {
+          "name": "Jake Tonges",
+          "pos": "TE",
+          "stats": {
+            "rec": 12.0,
+            "rec_yd": 102.0,
+            "rec_td": 1.0
+          }
+        },
+        "davismills|QB": {
+          "name": "Davis Mills",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 160.0,
+            "pass_td": 1.0,
+            "rush_yd": 19.0
+          }
+        },
+        "ameerabdullah|RB": {
+          "name": "Ameer Abdullah",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 71.0,
+            "rush_td": 1.0,
+            "rec": 8.0,
+            "rec_yd": 56.0
+          }
+        },
+        "audricestime|RB": {
+          "name": "Audric Estime",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 122.0,
+            "rush_td": 1.0,
+            "rec": 3.0,
+            "rec_yd": 24.0
+          }
+        },
+        "dakprescott|QB": {
+          "name": "Dak Prescott",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 4432.0,
+            "pass_td": 33.0,
+            "pass_int": 12.0,
+            "rush_yd": 173.0,
+            "rush_td": 2.0,
+            "fumbles": 2.0
+          }
+        },
+        "antoniowilliams|WR": {
+          "name": "Antonio Williams",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 15.0,
+            "rec": 45.0,
+            "rec_yd": 649.0,
+            "rec_td": 4.0,
+            "fumbles": 2.0
+          }
+        },
+        "matthewstafford|QB": {
+          "name": "Matthew Stafford",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 4048.0,
+            "pass_td": 34.0,
+            "pass_int": 7.0,
+            "rush_yd": 38.0,
+            "fumbles": 2.0
+          }
+        },
+        "khalilshakir|WR": {
+          "name": "Khalil Shakir",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 4.0,
+            "rec": 67.0,
+            "rec_yd": 648.0,
+            "rec_td": 4.0,
+            "fumbles": 1.0
+          }
+        },
+        "noahgray|TE": {
+          "name": "Noah Gray",
+          "pos": "TE",
+          "stats": {
+            "rec": 15.0,
+            "rec_yd": 139.0,
+            "rec_td": 1.0
+          }
+        },
+        "joemilton|QB": {
+          "name": "Joe Milton",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 181.0,
+            "pass_td": 1.0,
+            "rush_yd": 21.0
+          }
+        },
+        "justicehill|RB": {
+          "name": "Justice Hill",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 324.0,
+            "rush_td": 3.0,
+            "rec": 26.0,
+            "rec_yd": 218.0,
+            "rec_td": 2.0
+          }
+        },
+        "colstonloveland|TE": {
+          "name": "Colston Loveland",
+          "pos": "TE",
+          "stats": {
+            "rec": 84.0,
+            "rec_yd": 1036.0,
+            "rec_td": 8.0
+          }
+        },
+        "jamescook|RB": {
+          "name": "James Cook",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1437.0,
+            "rush_td": 9.0,
+            "rec": 32.0,
+            "rec_yd": 274.0,
+            "rec_td": 2.0,
+            "fumbles": 3.0
+          }
+        },
+        "jauanjennings|WR": {
+          "name": "Jauan Jennings",
+          "pos": "WR",
+          "stats": {
+            "rec": 51.0,
+            "rec_yd": 629.0,
+            "rec_td": 7.0,
+            "fumbles": 1.0
+          }
+        },
+        "rachaadwhite|RB": {
+          "name": "Rachaad White",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 710.0,
+            "rush_td": 6.0,
+            "rec": 25.0,
+            "rec_yd": 167.0,
+            "rec_td": 1.0,
+            "fumbles": 1.0
+          }
+        },
+        "malikwashington|WR": {
+          "name": "Malik Washington",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 84.0,
+            "rush_td": 1.0,
+            "rec": 46.0,
+            "rec_yd": 349.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "samdarnold|QB": {
+          "name": "Sam Darnold",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 4131.0,
+            "pass_td": 32.0,
+            "pass_int": 13.0,
+            "rush_yd": 145.0,
+            "fumbles": 6.0
+          }
+        },
+        "andydalton|QB": {
+          "name": "Andy Dalton",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 140.0,
+            "pass_td": 1.0,
+            "rush_yd": 23.0,
+            "fumbles": 1.0
+          }
+        },
+        "jaydenreed|WR": {
+          "name": "Jayden Reed",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 147.0,
+            "rec": 59.0,
+            "rec_yd": 696.0,
+            "rec_td": 5.0
+          }
+        },
+        "cadeotton|TE": {
+          "name": "Cade Otton",
+          "pos": "TE",
+          "stats": {
+            "rec": 67.0,
+            "rec_yd": 707.0,
+            "rec_td": 4.0
+          }
+        },
+        "kimanividal|RB": {
+          "name": "Kimani Vidal",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 332.0,
+            "rush_td": 2.0,
+            "rec": 16.0,
+            "rec_yd": 145.0,
+            "rec_td": 1.0
+          }
+        },
+        "jackendries|TE": {
+          "name": "Jack Endries",
+          "pos": "TE",
+          "stats": {
+            "rec": 13.0,
+            "rec_yd": 123.0,
+            "rec_td": 1.0
+          }
+        },
+        "jaxonsmithnjigba|WR": {
+          "name": "Jaxon Smith-Njigba",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 36.0,
+            "rec": 111.0,
+            "rec_yd": 1620.0,
+            "rec_td": 12.0,
+            "fumbles": 1.0
+          }
+        },
+        "isaiahdavis|RB": {
+          "name": "Isaiah Davis",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 171.0,
+            "rush_td": 1.0,
+            "rec": 7.0,
+            "rec_yd": 61.0
+          }
+        },
+        "jaylenwaddle|WR": {
+          "name": "Jaylen Waddle",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 25.0,
+            "rec": 74.0,
+            "rec_yd": 995.0,
+            "rec_td": 6.0
+          }
+        },
+        "jahdaewalker|WR": {
+          "name": "Jahdae Walker",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 7.0,
+            "rec": 32.0,
+            "rec_yd": 430.0,
+            "rec_td": 5.0
+          }
+        },
+        "justinjoly|TE": {
+          "name": "Justin Joly",
+          "pos": "TE",
+          "stats": {
+            "rec": 12.0,
+            "rec_yd": 105.0,
+            "rec_td": 1.0
+          }
+        },
+        "danieljones|QB": {
+          "name": "Daniel Jones",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3846.0,
+            "pass_td": 30.0,
+            "pass_int": 11.0,
+            "rush_yd": 167.0,
+            "rush_td": 3.0,
+            "fumbles": 3.0
+          }
+        },
+        "eliraridon|TE": {
+          "name": "Eli Raridon",
+          "pos": "TE",
+          "stats": {
+            "rec": 22.0,
+            "rec_yd": 240.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "tjhockenson|TE": {
+          "name": "T.J. Hockenson",
+          "pos": "TE",
+          "stats": {
+            "rec": 55.0,
+            "rec_yd": 516.0,
+            "rec_td": 4.0
+          }
+        },
+        "treveyonhenderson|RB": {
+          "name": "TreVeyon Henderson",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 884.0,
+            "rush_td": 7.0,
+            "rec": 33.0,
+            "rec_yd": 207.0,
+            "rec_td": 1.0,
+            "fumbles": 1.0
+          }
+        },
+        "isaacteslaa|WR": {
+          "name": "Isaac TeSlaa",
+          "pos": "WR",
+          "stats": {
+            "rec": 27.0,
+            "rec_yd": 404.0,
+            "rec_td": 5.0
+          }
+        },
+        "dandreswift|RB": {
+          "name": "D'Andre Swift",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1120.0,
+            "rush_td": 9.0,
+            "rec": 36.0,
+            "rec_yd": 325.0,
+            "rec_td": 1.0,
+            "fumbles": 1.0
+          }
+        },
+        "genosmith|QB": {
+          "name": "Geno Smith",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 2944.0,
+            "pass_td": 25.0,
+            "pass_int": 16.0,
+            "rush_yd": 255.0,
+            "rush_td": 1.0,
+            "fumbles": 1.0
+          }
+        },
+        "tuatagovailoa|QB": {
+          "name": "Tua Tagovailoa",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 1436.0,
+            "pass_td": 10.0,
+            "pass_int": 4.0,
+            "rush_yd": 24.0,
+            "fumbles": 1.0
+          }
+        },
+        "jalenhurts|QB": {
+          "name": "Jalen Hurts",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3377.0,
+            "pass_td": 26.0,
+            "pass_int": 6.0,
+            "rush_yd": 490.0,
+            "rush_td": 8.0,
+            "fumbles": 4.0
+          }
+        },
+        "elijahmitchell|RB": {
+          "name": "Elijah Mitchell",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 159.0,
+            "rush_td": 1.0,
+            "rec": 2.0,
+            "rec_yd": 22.0
+          }
+        },
+        "laddmcconkey|WR": {
+          "name": "Ladd McConkey",
+          "pos": "WR",
+          "stats": {
+            "rec": 82.0,
+            "rec_yd": 1035.0,
+            "rec_td": 8.0
+          }
+        },
+        "brianrobinson|RB": {
+          "name": "Brian Robinson",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 529.0,
+            "rush_td": 4.0,
+            "rec": 4.0,
+            "rec_yd": 23.0,
+            "fumbles": 1.0
+          }
+        },
+        "romeodunze|WR": {
+          "name": "Rome Odunze",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 4.0,
+            "rec": 63.0,
+            "rec_yd": 916.0,
+            "rec_td": 8.0
+          }
+        },
+        "michaelwilson|WR": {
+          "name": "Michael Wilson",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 2.0,
+            "rec": 66.0,
+            "rec_yd": 837.0,
+            "rec_td": 6.0
+          }
+        },
+        "jordanlove|QB": {
+          "name": "Jordan Love",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3692.0,
+            "pass_td": 29.0,
+            "pass_int": 10.0,
+            "rush_yd": 215.0,
+            "rush_td": 1.0,
+            "fumbles": 2.0
+          }
+        },
+        "chrisgodwin|WR": {
+          "name": "Chris Godwin",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 1.0,
+            "rec": 75.0,
+            "rec_yd": 842.0,
+            "rec_td": 6.0
+          }
+        },
+        "dawsonknox|TE": {
+          "name": "Dawson Knox",
+          "pos": "TE",
+          "stats": {
+            "rec": 35.0,
+            "rec_yd": 401.0,
+            "rec_td": 3.0
+          }
+        },
+        "isiahpacheco|RB": {
+          "name": "Isiah Pacheco",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 618.0,
+            "rush_td": 3.0,
+            "rec": 26.0,
+            "rec_yd": 156.0,
+            "rec_td": 1.0,
+            "fumbles": 1.0
+          }
+        },
+        "kirkcousins|QB": {
+          "name": "Kirk Cousins",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 666.0,
+            "pass_td": 5.0,
+            "pass_int": 4.0,
+            "rush_yd": 9.0,
+            "fumbles": 1.0
+          }
+        },
+        "jakeferguson|TE": {
+          "name": "Jake Ferguson",
+          "pos": "TE",
+          "stats": {
+            "rec": 78.0,
+            "rec_yd": 636.0,
+            "rec_td": 7.0,
+            "fumbles": 2.0
+          }
+        },
+        "isaiahlikely|TE": {
+          "name": "Isaiah Likely",
+          "pos": "TE",
+          "stats": {
+            "rec": 70.0,
+            "rec_yd": 897.0,
+            "rec_td": 7.0,
+            "fumbles": 2.0
+          }
+        },
+        "patrickmahomes|QB": {
+          "name": "Patrick Mahomes",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3687.0,
+            "pass_td": 29.0,
+            "pass_int": 12.0,
+            "rush_yd": 437.0,
+            "rush_td": 4.0,
+            "fumbles": 1.0
+          }
+        },
+        "demarcusrobinson|WR": {
+          "name": "Demarcus Robinson",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 5.0,
+            "rec": 32.0,
+            "rec_yd": 459.0,
+            "rec_td": 3.0
+          }
+        },
+        "shedeursanders|QB": {
+          "name": "Shedeur Sanders",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 663.0,
+            "pass_td": 4.0,
+            "pass_int": 3.0,
+            "rush_yd": 65.0,
+            "fumbles": 1.0
+          }
+        },
+        "jamarrchase|WR": {
+          "name": "Ja'Marr Chase",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 19.0,
+            "rec": 128.0,
+            "rec_yd": 1551.0,
+            "rec_td": 10.0,
+            "fumbles": 1.0
+          }
+        },
+        "grantcalcaterra|TE": {
+          "name": "Grant Calcaterra",
+          "pos": "TE",
+          "stats": {
+            "rec": 22.0,
+            "rec_yd": 230.0,
+            "rec_td": 2.0
+          }
+        },
+        "justinherbert|QB": {
+          "name": "Justin Herbert",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3772.0,
+            "pass_td": 28.0,
+            "pass_int": 13.0,
+            "rush_yd": 517.0,
+            "rush_td": 2.0,
+            "fumbles": 2.0
+          }
+        },
+        "teehiggins|WR": {
+          "name": "Tee Higgins",
+          "pos": "WR",
+          "stats": {
+            "rec": 74.0,
+            "rec_yd": 1034.0,
+            "rec_td": 11.0
+          }
+        },
+        "samlaporta|TE": {
+          "name": "Sam LaPorta",
+          "pos": "TE",
+          "stats": {
+            "rec": 72.0,
+            "rec_yd": 910.0,
+            "rec_td": 6.0
+          }
+        },
+        "jalennailor|WR": {
+          "name": "Jalen Nailor",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 7.0,
+            "rec": 43.0,
+            "rec_yd": 568.0,
+            "rec_td": 5.0
+          }
+        },
+        "lutherburden|WR": {
+          "name": "Luther Burden",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 32.0,
+            "rec": 73.0,
+            "rec_yd": 1055.0,
+            "rec_td": 6.0
+          }
+        },
+        "dontayvionwicks|WR": {
+          "name": "Dontayvion Wicks",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 5.0,
+            "rec": 38.0,
+            "rec_yd": 399.0,
+            "rec_td": 3.0
+          }
+        },
+        "brashardsmith|RB": {
+          "name": "Brashard Smith",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 179.0,
+            "rush_td": 1.0,
+            "rec": 21.0,
+            "rec_yd": 142.0,
+            "rec_td": 1.0
+          }
+        },
+        "lamarjackson|QB": {
+          "name": "Lamar Jackson",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3365.0,
+            "pass_td": 33.0,
+            "pass_int": 11.0,
+            "rush_yd": 604.0,
+            "rush_td": 3.0,
+            "fumbles": 4.0
+          }
+        },
+        "elistowers|TE": {
+          "name": "Eli Stowers",
+          "pos": "TE",
+          "stats": {
+            "rec": 31.0,
+            "rec_yd": 322.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "jalenmcmillan|WR": {
+          "name": "Jalen McMillan",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 29.0,
+            "rec": 46.0,
+            "rec_yd": 626.0,
+            "rec_td": 4.0
+          }
+        },
+        "jeremymcnichols|RB": {
+          "name": "Jeremy McNichols",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 88.0,
+            "rush_td": 1.0,
+            "rec": 7.0,
+            "rec_yd": 53.0
+          }
+        },
+        "davanteadams|WR": {
+          "name": "Davante Adams",
+          "pos": "WR",
+          "stats": {
+            "rec": 68.0,
+            "rec_yd": 851.0,
+            "rec_td": 10.0
+          }
+        },
+        "aaronrodgers|QB": {
+          "name": "Aaron Rodgers",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3035.0,
+            "pass_td": 22.0,
+            "pass_int": 9.0,
+            "rush_yd": 68.0,
+            "rush_td": 1.0,
+            "fumbles": 2.0
+          }
+        },
+        "deebosamuel|WR": {
+          "name": "Deebo Samuel",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 115.0,
+            "rush_td": 1.0,
+            "rec": 65.0,
+            "rec_yd": 647.0,
+            "rec_td": 5.0
+          }
+        },
+        "brentonstrange|TE": {
+          "name": "Brenton Strange",
+          "pos": "TE",
+          "stats": {
+            "rec": 70.0,
+            "rec_yd": 814.0,
+            "rec_td": 5.0
+          }
+        },
+        "tylershough|QB": {
+          "name": "Tyler Shough",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 4013.0,
+            "pass_td": 24.0,
+            "pass_int": 14.0,
+            "rush_yd": 328.0,
+            "rush_td": 4.0,
+            "fumbles": 4.0
+          }
+        },
+        "bakermayfield|QB": {
+          "name": "Baker Mayfield",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3949.0,
+            "pass_td": 29.0,
+            "pass_int": 15.0,
+            "rush_yd": 398.0,
+            "rush_td": 2.0,
+            "fumbles": 3.0
+          }
+        },
+        "jamesconner|RB": {
+          "name": "James Conner",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 307.0,
+            "rush_td": 3.0,
+            "rec": 36.0,
+            "rec_yd": 276.0,
+            "rec_td": 2.0
+          }
+        },
+        "jeremyruckert|TE": {
+          "name": "Jeremy Ruckert",
+          "pos": "TE",
+          "stats": {
+            "rec": 27.0,
+            "rec_yd": 196.0,
+            "rec_td": 2.0
+          }
+        },
+        "tylerwarren|TE": {
+          "name": "Tyler Warren",
+          "pos": "TE",
+          "stats": {
+            "rec": 74.0,
+            "rec_yd": 905.0,
+            "rec_td": 6.0
+          }
+        },
+        "kenyonsadiq|TE": {
+          "name": "Kenyon Sadiq",
+          "pos": "TE",
+          "stats": {
+            "rec": 47.0,
+            "rec_yd": 528.0,
+            "rec_td": 6.0,
+            "fumbles": 1.0
+          }
+        },
+        "seantucker|RB": {
+          "name": "Sean Tucker",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 145.0,
+            "rush_td": 2.0,
+            "rec": 1.0,
+            "rec_yd": 6.0
+          }
+        },
+        "christianwatson|WR": {
+          "name": "Christian Watson",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 13.0,
+            "rec": 53.0,
+            "rec_yd": 898.0,
+            "rec_td": 8.0
+          }
+        },
+        "willlevis|QB": {
+          "name": "Will Levis",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 136.0,
+            "pass_td": 1.0,
+            "rush_yd": 19.0
+          }
+        },
+        "jakobimeyers|WR": {
+          "name": "Jakobi Meyers",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 17.0,
+            "rec": 68.0,
+            "rec_yd": 814.0,
+            "rec_td": 5.0,
+            "fumbles": 1.0
+          }
+        },
+        "isaacguerendo|RB": {
+          "name": "Isaac Guerendo",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 160.0,
+            "rush_td": 1.0,
+            "rec": 4.0,
+            "rec_yd": 37.0
+          }
+        },
+        "carsonbeck|QB": {
+          "name": "Carson Beck",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 115.0,
+            "pass_td": 1.0,
+            "rush_yd": 7.0
+          }
+        },
+        "tylerhigbee|TE": {
+          "name": "Tyler Higbee",
+          "pos": "TE",
+          "stats": {
+            "rec": 40.0,
+            "rec_yd": 499.0,
+            "rec_td": 4.0
+          }
+        },
+        "emekaegbuka|WR": {
+          "name": "Emeka Egbuka",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 10.0,
+            "rec": 72.0,
+            "rec_yd": 1120.0,
+            "rec_td": 8.0
+          }
+        },
+        "nicocollins|WR": {
+          "name": "Nico Collins",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 13.0,
+            "rush_td": 1.0,
+            "rec": 82.0,
+            "rec_yd": 1232.0,
+            "rec_td": 8.0,
+            "fumbles": 1.0
+          }
+        },
+        "bryceyoung|QB": {
+          "name": "Bryce Young",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3383.0,
+            "pass_td": 26.0,
+            "pass_int": 14.0,
+            "rush_yd": 283.0,
+            "rush_td": 4.0,
+            "fumbles": 2.0
+          }
+        },
+        "terranceferguson|TE": {
+          "name": "Terrance Ferguson",
+          "pos": "TE",
+          "stats": {
+            "rec": 29.0,
+            "rec_yd": 530.0,
+            "rec_td": 5.0
+          }
+        },
+        "josholiver|TE": {
+          "name": "Josh Oliver",
+          "pos": "TE",
+          "stats": {
+            "rec": 22.0,
+            "rec_yd": 244.0,
+            "rec_td": 4.0
+          }
+        },
+        "jordanmason|RB": {
+          "name": "Jordan Mason",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 906.0,
+            "rush_td": 7.0,
+            "rec": 18.0,
+            "rec_yd": 82.0,
+            "fumbles": 1.0
+          }
+        },
+        "calebdouglas|WR": {
+          "name": "Caleb Douglas",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 11.0,
+            "rec": 35.0,
+            "rec_yd": 433.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "ricodowdle|RB": {
+          "name": "Rico Dowdle",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 834.0,
+            "rush_td": 7.0,
+            "rec": 36.0,
+            "rec_yd": 253.0,
+            "rec_td": 1.0,
+            "fumbles": 1.0
+          }
+        },
+        "tylerhuntley|QB": {
+          "name": "Tyler Huntley",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 133.0,
+            "pass_td": 1.0,
+            "rush_yd": 28.0
+          }
+        },
+        "georgepickens|WR": {
+          "name": "George Pickens",
+          "pos": "WR",
+          "stats": {
+            "rec": 94.0,
+            "rec_yd": 1388.0,
+            "rec_td": 10.0
+          }
+        },
+        "tommytremble|TE": {
+          "name": "Tommy Tremble",
+          "pos": "TE",
+          "stats": {
+            "rec": 23.0,
+            "rec_yd": 202.0,
+            "rec_td": 2.0
+          }
+        },
+        "tuckerkraft|TE": {
+          "name": "Tucker Kraft",
+          "pos": "TE",
+          "stats": {
+            "rec": 54.0,
+            "rec_yd": 776.0,
+            "rec_td": 10.0
+          }
+        },
+        "theojohnson|TE": {
+          "name": "Theo Johnson",
+          "pos": "TE",
+          "stats": {
+            "rec": 34.0,
+            "rec_yd": 390.0,
+            "rec_td": 5.0
+          }
+        },
+        "braelonallen|RB": {
+          "name": "Braelon Allen",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 550.0,
+            "rush_td": 6.0,
+            "rec": 15.0,
+            "rec_yd": 111.0,
+            "rec_td": 1.0,
+            "fumbles": 3.0
+          }
+        },
+        "garrettwilson|WR": {
+          "name": "Garrett Wilson",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 2.0,
+            "rec": 89.0,
+            "rec_yd": 956.0,
+            "rec_td": 9.0,
+            "fumbles": 1.0
+          }
+        },
+        "austinekeler|RB": {
+          "name": "Austin Ekeler",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 150.0,
+            "rush_td": 1.0,
+            "rec": 6.0,
+            "rec_yd": 61.0
+          }
+        },
+        "keatonmitchell|RB": {
+          "name": "Keaton Mitchell",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 473.0,
+            "rush_td": 2.0,
+            "rec": 11.0,
+            "rec_yd": 72.0,
+            "fumbles": 1.0
+          }
+        },
+        "chrisbell|WR": {
+          "name": "Chris Bell",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 11.0,
+            "rec": 47.0,
+            "rec_yd": 582.0,
+            "rec_td": 4.0,
+            "fumbles": 1.0
+          }
+        },
+        "nateboerkircher|TE": {
+          "name": "Nate Boerkircher",
+          "pos": "TE",
+          "stats": {
+            "rec": 22.0,
+            "rec_yd": 240.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "blakecorum|RB": {
+          "name": "Blake Corum",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 822.0,
+            "rush_td": 6.0,
+            "rec": 6.0,
+            "rec_yd": 35.0,
+            "fumbles": 1.0
+          }
+        },
+        "danielbellinger|TE": {
+          "name": "Daniel Bellinger",
+          "pos": "TE",
+          "stats": {
+            "rec": 26.0,
+            "rec_yd": 332.0,
+            "rec_td": 3.0
+          }
+        },
+        "woodymarks|RB": {
+          "name": "Woody Marks",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 560.0,
+            "rush_td": 3.0,
+            "rec": 21.0,
+            "rec_yd": 177.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "mikeevans|WR": {
+          "name": "Mike Evans",
+          "pos": "WR",
+          "stats": {
+            "rec": 76.0,
+            "rec_yd": 988.0,
+            "rec_td": 8.0
+          }
+        },
+        "tylerallgeier|RB": {
+          "name": "Tyler Allgeier",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 466.0,
+            "rush_td": 6.0,
+            "rec": 16.0,
+            "rec_yd": 96.0,
+            "fumbles": 1.0
+          }
+        },
+        "rjharvey|RB": {
+          "name": "RJ Harvey",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 530.0,
+            "rush_td": 6.0,
+            "rec": 45.0,
+            "rec_yd": 332.0,
+            "rec_td": 4.0,
+            "fumbles": 1.0
+          }
+        },
+        "sethmcgowan|RB": {
+          "name": "Seth McGowan",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 141.0,
+            "rush_td": 2.0,
+            "rec": 2.0,
+            "rec_yd": 25.0
+          }
+        },
+        "bensinnott|TE": {
+          "name": "Ben Sinnott",
+          "pos": "TE",
+          "stats": {
+            "rec": 11.0,
+            "rec_yd": 122.0,
+            "rec_td": 2.0
+          }
+        },
+        "derrickhenry|RB": {
+          "name": "Derrick Henry",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1654.0,
+            "rush_td": 15.0,
+            "rec": 17.0,
+            "rec_yd": 171.0,
+            "rec_td": 1.0,
+            "fumbles": 2.0
+          }
+        },
+        "camward|QB": {
+          "name": "Cam Ward",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3341.0,
+            "pass_td": 24.0,
+            "pass_int": 10.0,
+            "rush_yd": 148.0,
+            "rush_td": 3.0,
+            "fumbles": 6.0
+          }
+        },
+        "pukanacua|WR": {
+          "name": "Puka Nacua",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 109.0,
+            "rush_td": 2.0,
+            "rec": 129.0,
+            "rec_yd": 1699.0,
+            "rec_td": 9.0,
+            "fumbles": 1.0
+          }
+        },
+        "andreiiosivas|WR": {
+          "name": "Andrei Iosivas",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 11.0,
+            "rec": 35.0,
+            "rec_yd": 470.0,
+            "rec_td": 3.0
+          }
+        },
+        "calvinridley|WR": {
+          "name": "Calvin Ridley",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 23.0,
+            "rush_td": 1.0,
+            "rec": 50.0,
+            "rec_yd": 847.0,
+            "rec_td": 3.0
+          }
+        },
+        "dezhaunstribling|WR": {
+          "name": "De'Zhaun Stribling",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 13.0,
+            "rec": 59.0,
+            "rec_yd": 852.0,
+            "rec_td": 5.0,
+            "fumbles": 2.0
+          }
+        },
+        "darnellwashington|TE": {
+          "name": "Darnell Washington",
+          "pos": "TE",
+          "stats": {
+            "rec": 35.0,
+            "rec_yd": 383.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "chimeredike|WR": {
+          "name": "Chimere Dike",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 17.0,
+            "rec": 45.0,
+            "rec_yd": 431.0,
+            "rec_td": 6.0,
+            "fumbles": 1.0
+          }
+        },
+        "marlinklein|TE": {
+          "name": "Marlin Klein",
+          "pos": "TE",
+          "stats": {
+            "rec": 35.0,
+            "rec_yd": 349.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "ajbrown|WR": {
+          "name": "A.J. Brown",
+          "pos": "WR",
+          "stats": {
+            "rec": 91.0,
+            "rec_yd": 1325.0,
+            "rec_td": 9.0
+          }
+        },
+        "christianmccaffrey|RB": {
+          "name": "Christian McCaffrey",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1009.0,
+            "rush_td": 8.0,
+            "rec": 74.0,
+            "rec_yd": 679.0,
+            "rec_td": 5.0,
+            "fumbles": 1.0
+          }
+        },
+        "justinfields|QB": {
+          "name": "Justin Fields",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 148.0,
+            "pass_td": 1.0,
+            "pass_int": 1.0,
+            "rush_yd": 21.0
+          }
+        },
+        "saquonbarkley|RB": {
+          "name": "Saquon Barkley",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1376.0,
+            "rush_td": 7.0,
+            "rec": 40.0,
+            "rec_yd": 313.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "tonypollard|RB": {
+          "name": "Tony Pollard",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 993.0,
+            "rush_td": 6.0,
+            "rec": 34.0,
+            "rec_yd": 215.0,
+            "fumbles": 3.0
+          }
+        },
+        "tretucker|WR": {
+          "name": "Tre Tucker",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 52.0,
+            "rec": 52.0,
+            "rec_yd": 605.0,
+            "rec_td": 5.0
+          }
+        },
+        "treymcbride|TE": {
+          "name": "Trey McBride",
+          "pos": "TE",
+          "stats": {
+            "rec": 115.0,
+            "rec_yd": 1135.0,
+            "rec_td": 8.0
+          }
+        },
+        "jadarianprice|RB": {
+          "name": "Jadarian Price",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 980.0,
+            "rush_td": 9.0,
+            "rec": 21.0,
+            "rec_yd": 222.0,
+            "rec_td": 1.0,
+            "fumbles": 3.0
+          }
+        },
+        "alecpierce|WR": {
+          "name": "Alec Pierce",
+          "pos": "WR",
+          "stats": {
+            "rec": 49.0,
+            "rec_yd": 1067.0,
+            "rec_td": 9.0
+          }
+        },
+        "hunterhenry|TE": {
+          "name": "Hunter Henry",
+          "pos": "TE",
+          "stats": {
+            "rec": 56.0,
+            "rec_yd": 699.0,
+            "rec_td": 6.0
+          }
+        },
+        "trevorlawrence|QB": {
+          "name": "Trevor Lawrence",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3845.0,
+            "pass_td": 31.0,
+            "pass_int": 15.0,
+            "rush_yd": 330.0,
+            "rush_td": 6.0,
+            "fumbles": 3.0
+          }
+        },
+        "jaxsondart|QB": {
+          "name": "Jaxson Dart",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3519.0,
+            "pass_td": 26.0,
+            "pass_int": 14.0,
+            "rush_yd": 531.0,
+            "rush_td": 7.0,
+            "fumbles": 2.0
+          }
+        },
+        "evanengram|TE": {
+          "name": "Evan Engram",
+          "pos": "TE",
+          "stats": {
+            "rec": 56.0,
+            "rec_yd": 479.0,
+            "rec_td": 3.0
+          }
+        },
+        "jacorycroskeymerritt|RB": {
+          "name": "Jacory Croskey-Merritt",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 859.0,
+            "rush_td": 8.0,
+            "rec": 9.0,
+            "rec_yd": 71.0,
+            "fumbles": 2.0
+          }
+        },
+        "jjmccarthy|QB": {
+          "name": "J.J. McCarthy",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 137.0,
+            "pass_td": 1.0,
+            "pass_int": 1.0,
+            "rush_yd": 19.0
+          }
+        },
+        "rashidshaheed|WR": {
+          "name": "Rashid Shaheed",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 91.0,
+            "rec": 57.0,
+            "rec_yd": 865.0,
+            "rec_td": 4.0,
+            "fumbles": 1.0
+          }
+        },
+        "olamidezaccheaus|WR": {
+          "name": "Olamide Zaccheaus",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 17.0,
+            "rec": 42.0,
+            "rec_yd": 364.0,
+            "rec_td": 2.0
+          }
+        },
+        "ashtonjeanty|RB": {
+          "name": "Ashton Jeanty",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 876.0,
+            "rush_td": 8.0,
+            "rec": 49.0,
+            "rec_yd": 300.0,
+            "rec_td": 5.0,
+            "fumbles": 1.0
+          }
+        },
+        "rileyleonard|QB": {
+          "name": "Riley Leonard",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 161.0,
+            "pass_td": 1.0,
+            "rush_yd": 20.0,
+            "fumbles": 1.0
+          }
+        },
+        "mitchellevans|TE": {
+          "name": "Mitchell Evans",
+          "pos": "TE",
+          "stats": {
+            "rec": 16.0,
+            "rec_yd": 143.0,
+            "rec_td": 2.0
+          }
+        },
+        "chrisrodriguez|RB": {
+          "name": "Chris Rodriguez",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 694.0,
+            "rush_td": 8.0,
+            "rec": 2.0,
+            "rec_yd": 23.0,
+            "fumbles": 1.0
+          }
+        },
+        "djmoore|WR": {
+          "name": "DJ Moore",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 81.0,
+            "rush_td": 1.0,
+            "rec": 70.0,
+            "rec_yd": 815.0,
+            "rec_td": 8.0,
+            "fumbles": 1.0
+          }
+        },
+        "dallasgoedert|TE": {
+          "name": "Dallas Goedert",
+          "pos": "TE",
+          "stats": {
+            "rec": 68.0,
+            "rec_yd": 717.0,
+            "rec_td": 11.0
+          }
+        },
+        "kaelonblack|RB": {
+          "name": "Kaelon Black",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 594.0,
+            "rush_td": 5.0,
+            "rec": 13.0,
+            "rec_yd": 127.0,
+            "rec_td": 1.0,
+            "fumbles": 2.0
+          }
+        },
+        "tyronetracy|RB": {
+          "name": "Tyrone Tracy",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 567.0,
+            "rush_td": 3.0,
+            "rec": 31.0,
+            "rec_yd": 241.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "rasheerice|WR": {
+          "name": "Rashee Rice",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 34.0,
+            "rush_td": 2.0,
+            "rec": 105.0,
+            "rec_yd": 1052.0,
+            "rec_td": 13.0
+          }
+        },
+        "devonachane|RB": {
+          "name": "De'Von Achane",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1131.0,
+            "rush_td": 7.0,
+            "rec": 75.0,
+            "rec_yd": 550.0,
+            "rec_td": 6.0,
+            "fumbles": 1.0
+          }
+        },
+        "michaelpenix|QB": {
+          "name": "Michael Penix",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 2155.0,
+            "pass_td": 15.0,
+            "pass_int": 6.0,
+            "rush_yd": 66.0,
+            "rush_td": 1.0,
+            "fumbles": 2.0
+          }
+        },
+        "carnelltate|WR": {
+          "name": "Carnell Tate",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 9.0,
+            "rec": 56.0,
+            "rec_yd": 772.0,
+            "rec_td": 4.0,
+            "fumbles": 2.0
+          }
+        },
+        "mikegesicki|TE": {
+          "name": "Mike Gesicki",
+          "pos": "TE",
+          "stats": {
+            "rec": 49.0,
+            "rec_yd": 540.0,
+            "rec_td": 3.0
+          }
+        },
+        "troyfranklin|WR": {
+          "name": "Troy Franklin",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 11.0,
+            "rec": 56.0,
+            "rec_yd": 589.0,
+            "rec_td": 6.0,
+            "fumbles": 1.0
+          }
+        },
+        "jammiller|RB": {
+          "name": "Jam Miller",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 145.0,
+            "rush_td": 1.0,
+            "rec": 2.0,
+            "rec_yd": 25.0
+          }
+        },
+        "jeremiyahlove|RB": {
+          "name": "Jeremiyah Love",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 997.0,
+            "rush_td": 8.0,
+            "rec": 43.0,
+            "rec_yd": 382.0,
+            "rec_td": 2.0,
+            "fumbles": 3.0
+          }
+        },
+        "adamtrautman|TE": {
+          "name": "Adam Trautman",
+          "pos": "TE",
+          "stats": {
+            "rec": 27.0,
+            "rec_yd": 281.0,
+            "rec_td": 2.0
+          }
+        },
+        "bijanrobinson|RB": {
+          "name": "Bijan Robinson",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1402.0,
+            "rush_td": 9.0,
+            "rec": 72.0,
+            "rec_yd": 701.0,
+            "rec_td": 4.0,
+            "fumbles": 2.0
+          }
+        },
+        "devontasmith|WR": {
+          "name": "DeVonta Smith",
+          "pos": "WR",
+          "stats": {
+            "rec": 90.0,
+            "rec_yd": 1153.0,
+            "rec_td": 6.0
+          }
+        },
+        "devinneal|RB": {
+          "name": "Devin Neal",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 180.0,
+            "rush_td": 2.0,
+            "rec": 5.0,
+            "rec_yd": 35.0
+          }
+        },
+        "willhoward|QB": {
+          "name": "Will Howard",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 101.0,
+            "pass_td": 1.0,
+            "rush_yd": 8.0
+          }
+        },
+        "bhayshultuten|RB": {
+          "name": "Bhayshul Tuten",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 890.0,
+            "rush_td": 11.0,
+            "rec": 16.0,
+            "rec_yd": 128.0,
+            "rec_td": 3.0,
+            "fumbles": 3.0
+          }
+        },
+        "drakelondon|WR": {
+          "name": "Drake London",
+          "pos": "WR",
+          "stats": {
+            "rec": 94.0,
+            "rec_yd": 1257.0,
+            "rec_td": 12.0,
+            "fumbles": 1.0
+          }
+        },
+        "maliknabers|WR": {
+          "name": "Malik Nabers",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 2.0,
+            "rec": 77.0,
+            "rec_yd": 1037.0,
+            "rec_td": 11.0
+          }
+        },
+        "marquisebrown|WR": {
+          "name": "Marquise Brown",
+          "pos": "WR",
+          "stats": {
+            "rec": 44.0,
+            "rec_yd": 546.0,
+            "rec_td": 5.0
+          }
+        },
+        "anthonyrichardson|QB": {
+          "name": "Anthony Richardson",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 109.0,
+            "pass_td": 1.0,
+            "rush_yd": 20.0
+          }
+        },
+        "joeburrow|QB": {
+          "name": "Joe Burrow",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 4264.0,
+            "pass_td": 34.0,
+            "pass_int": 14.0,
+            "rush_yd": 165.0,
+            "rush_td": 1.0,
+            "fumbles": 1.0
+          }
+        },
+        "xavierworthy|WR": {
+          "name": "Xavier Worthy",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 146.0,
+            "rush_td": 1.0,
+            "rec": 53.0,
+            "rec_yd": 644.0,
+            "rec_td": 4.0
+          }
+        },
+        "davisallen|TE": {
+          "name": "Davis Allen",
+          "pos": "TE",
+          "stats": {
+            "rec": 26.0,
+            "rec_yd": 241.0,
+            "rec_td": 3.0
+          }
+        },
+        "joshuadobbs|QB": {
+          "name": "Joshua Dobbs",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 180.0,
+            "pass_td": 1.0,
+            "rush_yd": 9.0
+          }
+        },
+        "elicayomanor|WR": {
+          "name": "Elic Ayomanor",
+          "pos": "WR",
+          "stats": {
+            "rec": 42.0,
+            "rec_yd": 570.0,
+            "rec_td": 6.0
+          }
+        },
+        "zavierscott|RB": {
+          "name": "Zavier Scott",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 108.0,
+            "rec": 6.0,
+            "rec_yd": 46.0,
+            "rec_td": 1.0
+          }
+        },
+        "jahmyrgibbs|RB": {
+          "name": "Jahmyr Gibbs",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1353.0,
+            "rush_td": 15.0,
+            "rec": 74.0,
+            "rec_yd": 625.0,
+            "rec_td": 5.0,
+            "fumbles": 1.0
+          }
+        },
+        "jaredgoff|QB": {
+          "name": "Jared Goff",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 4249.0,
+            "pass_td": 34.0,
+            "pass_int": 10.0,
+            "rush_yd": 45.0,
+            "fumbles": 4.0
+          }
+        },
+        "cooperkupp|WR": {
+          "name": "Cooper Kupp",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 3.0,
+            "rec": 57.0,
+            "rec_yd": 698.0,
+            "rec_td": 4.0,
+            "fumbles": 1.0
+          }
+        },
+        "treylance|QB": {
+          "name": "Trey Lance",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 149.0,
+            "pass_td": 1.0,
+            "pass_int": 1.0,
+            "rush_yd": 19.0
+          }
+        },
+        "fostermoreau|TE": {
+          "name": "Foster Moreau",
+          "pos": "TE",
+          "stats": {
+            "rec": 11.0,
+            "rec_yd": 132.0,
+            "rec_td": 2.0
+          }
+        },
+        "jamesonwilliams|WR": {
+          "name": "Jameson Williams",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 39.0,
+            "rush_td": 1.0,
+            "rec": 63.0,
+            "rec_yd": 1082.0,
+            "rec_td": 7.0
+          }
+        },
+        "georgekittle|TE": {
+          "name": "George Kittle",
+          "pos": "TE",
+          "stats": {
+            "rec": 77.0,
+            "rec_yd": 898.0,
+            "rec_td": 8.0
+          }
+        },
+        "marvinharrison|WR": {
+          "name": "Marvin Harrison",
+          "pos": "WR",
+          "stats": {
+            "rec": 69.0,
+            "rec_yd": 997.0,
+            "rec_td": 7.0
+          }
+        },
+        "jameiswinston|QB": {
+          "name": "Jameis Winston",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 144.0,
+            "pass_td": 1.0,
+            "pass_int": 1.0,
+            "rush_yd": 22.0,
+            "fumbles": 1.0
+          }
+        },
+        "keenanallen|WR": {
+          "name": "Keenan Allen",
+          "pos": "WR",
+          "stats": {
+            "rec": 62.0,
+            "rec_yd": 675.0,
+            "rec_td": 5.0
+          }
+        },
+        "tysimpson|QB": {
+          "name": "Ty Simpson",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 450.0,
+            "pass_td": 4.0,
+            "pass_int": 1.0,
+            "rush_yd": 32.0
+          }
+        },
+        "brockpurdy|QB": {
+          "name": "Brock Purdy",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 4130.0,
+            "pass_td": 30.0,
+            "pass_int": 16.0,
+            "rush_yd": 350.0,
+            "rush_td": 5.0,
+            "fumbles": 5.0
+          }
+        },
+        "brockwright|TE": {
+          "name": "Brock Wright",
+          "pos": "TE",
+          "stats": {
+            "rec": 34.0,
+            "rec_yd": 303.0,
+            "rec_td": 4.0
+          }
+        },
+        "fernandomendoza|QB": {
+          "name": "Fernando Mendoza",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 2608.0,
+            "pass_td": 18.0,
+            "pass_int": 16.0,
+            "rush_yd": 257.0,
+            "rush_td": 1.0,
+            "fumbles": 2.0
+          }
+        },
+        "brevynspannford|TE": {
+          "name": "Brevyn Spann-Ford",
+          "pos": "TE",
+          "stats": {
+            "rec": 11.0,
+            "rec_yd": 106.0,
+            "rec_td": 1.0
+          }
+        },
+        "quinshonjudkins|RB": {
+          "name": "Quinshon Judkins",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 975.0,
+            "rush_td": 10.0,
+            "rec": 37.0,
+            "rec_yd": 243.0,
+            "fumbles": 1.0
+          }
+        },
+        "kaytronallen|RB": {
+          "name": "Kaytron Allen",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 171.0,
+            "rush_td": 1.0,
+            "rec": 2.0,
+            "rec_yd": 22.0
+          }
+        },
+        "kennethwalker|RB": {
+          "name": "Kenneth Walker",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1160.0,
+            "rush_td": 8.0,
+            "rec": 47.0,
+            "rec_yd": 361.0,
+            "fumbles": 1.0
+          }
+        },
+        "daltonkincaid|TE": {
+          "name": "Dalton Kincaid",
+          "pos": "TE",
+          "stats": {
+            "rec": 60.0,
+            "rec_yd": 778.0,
+            "rec_td": 7.0
+          }
+        },
+        "amonrastbrown|WR": {
+          "name": "Amon-Ra St. Brown",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 8.0,
+            "rec": 115.0,
+            "rec_yd": 1370.0,
+            "rec_td": 11.0
+          }
+        },
+        "lukemusgrave|TE": {
+          "name": "Luke Musgrave",
+          "pos": "TE",
+          "stats": {
+            "rec": 26.0,
+            "rec_yd": 253.0,
+            "rec_td": 2.0
+          }
+        },
+        "jordyntyson|WR": {
+          "name": "Jordyn Tyson",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 7.0,
+            "rec": 40.0,
+            "rec_yd": 574.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "marshawnlloyd|RB": {
+          "name": "MarShawn Lloyd",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 747.0,
+            "rush_td": 6.0,
+            "rec": 12.0,
+            "rec_yd": 112.0,
+            "rec_td": 1.0,
+            "fumbles": 2.0
+          }
+        },
+        "cadeklubnik|QB": {
+          "name": "Cade Klubnik",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 90.0,
+            "pass_td": 1.0,
+            "rush_yd": 9.0
+          }
+        },
+        "samajeperine|RB": {
+          "name": "Samaje Perine",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 443.0,
+            "rush_td": 4.0,
+            "rec": 17.0,
+            "rec_yd": 132.0,
+            "fumbles": 3.0
+          }
+        },
+        "jaylinnoel|WR": {
+          "name": "Jaylin Noel",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 13.0,
+            "rec": 40.0,
+            "rec_yd": 451.0,
+            "rec_td": 4.0
+          }
+        },
+        "colekmet|TE": {
+          "name": "Cole Kmet",
+          "pos": "TE",
+          "stats": {
+            "rec": 22.0,
+            "rec_yd": 229.0,
+            "rec_td": 2.0
+          }
+        },
+        "tetairoamcmillan|WR": {
+          "name": "Tetairoa McMillan",
+          "pos": "WR",
+          "stats": {
+            "rec": 82.0,
+            "rec_yd": 1174.0,
+            "rec_td": 8.0,
+            "fumbles": 1.0
+          }
+        },
+        "omarcooper|WR": {
+          "name": "Omar Cooper",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 13.0,
+            "rec": 44.0,
+            "rec_yd": 521.0,
+            "rec_td": 4.0,
+            "fumbles": 1.0
+          }
+        },
+        "bonix|QB": {
+          "name": "Bo Nix",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3507.0,
+            "pass_td": 27.0,
+            "pass_int": 10.0,
+            "rush_yd": 306.0,
+            "rush_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "stefondiggs|WR": {
+          "name": "Stefon Diggs",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 2.0,
+            "rec": 68.0,
+            "rec_yd": 749.0,
+            "rec_td": 4.0
+          }
+        },
+        "travisetienne|RB": {
+          "name": "Travis Etienne",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 988.0,
+            "rush_td": 5.0,
+            "rec": 47.0,
+            "rec_yd": 358.0,
+            "rec_td": 5.0,
+            "fumbles": 1.0
+          }
+        },
+        "drewsample|TE": {
+          "name": "Drew Sample",
+          "pos": "TE",
+          "stats": {
+            "rec": 13.0,
+            "rec_yd": 100.0,
+            "rec_td": 1.0
+          }
+        },
+        "tyjaespears|RB": {
+          "name": "Tyjae Spears",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 348.0,
+            "rush_td": 4.0,
+            "rec": 50.0,
+            "rec_yd": 327.0,
+            "rec_td": 1.0,
+            "fumbles": 1.0
+          }
+        },
+        "rasheenali|RB": {
+          "name": "Rasheen Ali",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 47.0,
+            "rec": 7.0,
+            "rec_yd": 53.0,
+            "rec_td": 1.0
+          }
+        },
+        "kylemonangai|RB": {
+          "name": "Kyle Monangai",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 854.0,
+            "rush_td": 5.0,
+            "rec": 23.0,
+            "rec_yd": 208.0,
+            "fumbles": 1.0
+          }
+        },
+        "emmettjohnson|RB": {
+          "name": "Emmett Johnson",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 126.0,
+            "rush_td": 1.0,
+            "rec": 3.0,
+            "rec_yd": 23.0
+          }
+        },
+        "brianthomas|WR": {
+          "name": "Brian Thomas",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 30.0,
+            "rush_td": 1.0,
+            "rec": 61.0,
+            "rec_yd": 942.0,
+            "rec_td": 6.0
+          }
+        },
+        "davidmontgomery|RB": {
+          "name": "David Montgomery",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1012.0,
+            "rush_td": 9.0,
+            "rec": 27.0,
+            "rec_yd": 211.0,
+            "fumbles": 2.0
+          }
+        },
+        "jonathonbrooks|RB": {
+          "name": "Jonathon Brooks",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 878.0,
+            "rush_td": 7.0,
+            "rec": 24.0,
+            "rec_yd": 200.0,
+            "rec_td": 1.0,
+            "fumbles": 2.0
+          }
+        },
+        "kyleallen|QB": {
+          "name": "Kyle Allen",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 96.0,
+            "pass_td": 1.0,
+            "rush_yd": 2.0
+          }
+        },
+        "toryhorton|WR": {
+          "name": "Tory Horton",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 6.0,
+            "rec": 39.0,
+            "rec_yd": 504.0,
+            "rec_td": 7.0,
+            "fumbles": 1.0
+          }
+        },
+        "dylansampson|RB": {
+          "name": "Dylan Sampson",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 290.0,
+            "rush_td": 2.0,
+            "rec": 44.0,
+            "rec_yd": 351.0,
+            "rec_td": 3.0,
+            "fumbles": 2.0
+          }
+        },
+        "charliewoerner|TE": {
+          "name": "Charlie Woerner",
+          "pos": "TE",
+          "stats": {
+            "rec": 23.0,
+            "rec_yd": 196.0,
+            "rec_td": 1.0
+          }
+        },
+        "gunnarhelm|TE": {
+          "name": "Gunnar Helm",
+          "pos": "TE",
+          "stats": {
+            "rec": 44.0,
+            "rec_yd": 378.0,
+            "rec_td": 3.0
+          }
+        },
+        "rashodbateman|WR": {
+          "name": "Rashod Bateman",
+          "pos": "WR",
+          "stats": {
+            "rec": 40.0,
+            "rec_yd": 583.0,
+            "rec_td": 8.0
+          }
+        },
+        "terrymclaurin|WR": {
+          "name": "Terry McLaurin",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 1.0,
+            "rec": 65.0,
+            "rec_yd": 926.0,
+            "rec_td": 10.0
+          }
+        },
+        "aaronjones|RB": {
+          "name": "Aaron Jones",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 662.0,
+            "rush_td": 3.0,
+            "rec": 38.0,
+            "rec_yd": 290.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "christiankirk|WR": {
+          "name": "Christian Kirk",
+          "pos": "WR",
+          "stats": {
+            "rec": 55.0,
+            "rec_yd": 633.0,
+            "rec_td": 4.0
+          }
+        },
+        "jalencoker|WR": {
+          "name": "Jalen Coker",
+          "pos": "WR",
+          "stats": {
+            "rec": 60.0,
+            "rec_yd": 747.0,
+            "rec_td": 6.0,
+            "fumbles": 1.0
+          }
+        },
+        "masontaylor|TE": {
+          "name": "Mason Taylor",
+          "pos": "TE",
+          "stats": {
+            "rec": 56.0,
+            "rec_yd": 461.0,
+            "rec_td": 4.0
+          }
+        },
+        "camskattebo|RB": {
+          "name": "Cam Skattebo",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 907.0,
+            "rush_td": 9.0,
+            "rec": 41.0,
+            "rec_yd": 352.0,
+            "rec_td": 4.0,
+            "fumbles": 2.0
+          }
+        },
+        "xavierhutchinson|WR": {
+          "name": "Xavier Hutchinson",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 16.0,
+            "rec": 43.0,
+            "rec_yd": 509.0,
+            "rec_td": 3.0
+          }
+        },
+        "tankbigsby|RB": {
+          "name": "Tank Bigsby",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 649.0,
+            "rush_td": 5.0,
+            "rec": 4.0,
+            "rec_yd": 35.0,
+            "fumbles": 1.0
+          }
+        },
+        "zavionthomas|WR": {
+          "name": "Zavion Thomas",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 13.0,
+            "rec": 34.0,
+            "rec_yd": 456.0,
+            "rec_td": 3.0,
+            "fumbles": 2.0
+          }
+        },
+        "ajbarner|TE": {
+          "name": "AJ Barner",
+          "pos": "TE",
+          "stats": {
+            "rec": 47.0,
+            "rec_yd": 473.0,
+            "rec_td": 7.0
+          }
+        },
+        "kendremiller|RB": {
+          "name": "Kendre Miller",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 140.0,
+            "rush_td": 2.0,
+            "rec": 2.0,
+            "rec_yd": 11.0
+          }
+        },
+        "rhamondrestevenson|RB": {
+          "name": "Rhamondre Stevenson",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 694.0,
+            "rush_td": 7.0,
+            "rec": 33.0,
+            "rec_yd": 332.0,
+            "rec_td": 2.0,
+            "fumbles": 3.0
+          }
+        },
+        "kyrenwilliams|RB": {
+          "name": "Kyren Williams",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1113.0,
+            "rush_td": 10.0,
+            "rec": 34.0,
+            "rec_yd": 250.0,
+            "rec_td": 3.0,
+            "fumbles": 2.0
+          }
+        },
+        "romeodoubs|WR": {
+          "name": "Romeo Doubs",
+          "pos": "WR",
+          "stats": {
+            "rec": 61.0,
+            "rec_yd": 808.0,
+            "rec_td": 6.0
+          }
+        },
+        "patfreiermuth|TE": {
+          "name": "Pat Freiermuth",
+          "pos": "TE",
+          "stats": {
+            "rec": 46.0,
+            "rec_yd": 511.0,
+            "rec_td": 5.0
+          }
+        },
+        "emaridemercado|RB": {
+          "name": "Emari Demercado",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 599.0,
+            "rush_td": 2.0,
+            "rec": 17.0,
+            "rec_yd": 131.0,
+            "rec_td": 1.0,
+            "fumbles": 3.0
+          }
+        },
+        "malikwillis|QB": {
+          "name": "Malik Willis",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3101.0,
+            "pass_td": 25.0,
+            "pass_int": 17.0,
+            "rush_yd": 725.0,
+            "rush_td": 5.0,
+            "fumbles": 6.0
+          }
+        },
+        "jaylenwarren|RB": {
+          "name": "Jaylen Warren",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 837.0,
+            "rush_td": 5.0,
+            "rec": 40.0,
+            "rec_yd": 317.0,
+            "rec_td": 1.0,
+            "fumbles": 1.0
+          }
+        },
+        "spencerrattler|QB": {
+          "name": "Spencer Rattler",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 160.0,
+            "pass_td": 1.0,
+            "pass_int": 1.0,
+            "rush_yd": 17.0
+          }
+        },
+        "gardnerminshew|QB": {
+          "name": "Gardner Minshew",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 154.0,
+            "pass_td": 1.0,
+            "rush_yd": 16.0
+          }
+        },
+        "jarrettstidham|QB": {
+          "name": "Jarrett Stidham",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 143.0,
+            "pass_td": 1.0,
+            "rush_yd": 19.0
+          }
+        },
+        "tannerkoziol|TE": {
+          "name": "Tanner Koziol",
+          "pos": "TE",
+          "stats": {
+            "rec": 10.0,
+            "rec_yd": 111.0,
+            "rec_td": 1.0
+          }
+        },
+        "noahfant|TE": {
+          "name": "Noah Fant",
+          "pos": "TE",
+          "stats": {
+            "rec": 44.0,
+            "rec_yd": 423.0,
+            "rec_td": 2.0,
+            "fumbles": 3.0
+          }
+        },
+        "quinnewers|QB": {
+          "name": "Quinn Ewers",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 124.0,
+            "pass_td": 1.0,
+            "pass_int": 1.0,
+            "rush_yd": 19.0
+          }
+        },
+        "chasebrown|RB": {
+          "name": "Chase Brown",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1008.0,
+            "rush_td": 9.0,
+            "rec": 72.0,
+            "rec_yd": 471.0,
+            "rec_td": 5.0,
+            "fumbles": 1.0
+          }
+        },
+        "markandrews|TE": {
+          "name": "Mark Andrews",
+          "pos": "TE",
+          "stats": {
+            "rec": 60.0,
+            "rec_yd": 594.0,
+            "rec_td": 10.0
+          }
+        },
+        "austinhooper|TE": {
+          "name": "Austin Hooper",
+          "pos": "TE",
+          "stats": {
+            "rec": 23.0,
+            "rec_yd": 250.0,
+            "rec_td": 1.0
+          }
+        },
+        "justinjefferson|WR": {
+          "name": "Justin Jefferson",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 6.0,
+            "rec": 91.0,
+            "rec_yd": 1269.0,
+            "rec_td": 7.0
+          }
+        },
+        "jatavionsanders|TE": {
+          "name": "Ja'Tavion Sanders",
+          "pos": "TE",
+          "stats": {
+            "rec": 25.0,
+            "rec_yd": 192.0,
+            "rec_td": 1.0
+          }
+        },
+        "tannermckee|QB": {
+          "name": "Tanner McKee",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 129.0,
+            "pass_td": 1.0,
+            "rush_yd": 16.0
+          }
+        },
+        "quentinjohnston|WR": {
+          "name": "Quentin Johnston",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 7.0,
+            "rec": 58.0,
+            "rec_yd": 787.0,
+            "rec_td": 9.0,
+            "fumbles": 1.0
+          }
+        },
+        "adonaimitchell|WR": {
+          "name": "Adonai Mitchell",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": -1.0,
+            "rec": 38.0,
+            "rec_yd": 480.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "germiebernard|WR": {
+          "name": "Germie Bernard",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 10.0,
+            "rec": 42.0,
+            "rec_yd": 512.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "jordanjames|RB": {
+          "name": "Jordan James",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 494.0,
+            "rush_td": 4.0,
+            "rec": 24.0,
+            "rec_yd": 232.0,
+            "rec_td": 1.0,
+            "fumbles": 2.0
+          }
+        },
+        "chrisolave|WR": {
+          "name": "Chris Olave",
+          "pos": "WR",
+          "stats": {
+            "rec": 99.0,
+            "rec_yd": 1242.0,
+            "rec_td": 10.0
+          }
+        },
+        "mikewashington|RB": {
+          "name": "Mike Washington",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 612.0,
+            "rush_td": 4.0,
+            "rec": 27.0,
+            "rec_yd": 227.0,
+            "rec_td": 1.0,
+            "fumbles": 2.0
+          }
+        },
+        "joshallen|QB": {
+          "name": "Josh Allen",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3717.0,
+            "pass_td": 30.0,
+            "pass_int": 13.0,
+            "rush_yd": 611.0,
+            "rush_td": 11.0,
+            "fumbles": 4.0
+          }
+        },
+        "joshdowns|WR": {
+          "name": "Josh Downs",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 2.0,
+            "rec": 68.0,
+            "rec_yd": 711.0,
+            "rec_td": 6.0,
+            "fumbles": 1.0
+          }
+        },
+        "tyjohnson|RB": {
+          "name": "Ty Johnson",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 225.0,
+            "rush_td": 2.0,
+            "rec": 24.0,
+            "rec_yd": 280.0,
+            "rec_td": 3.0
+          }
+        },
+        "lequintallen|RB": {
+          "name": "LeQuint Allen",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 218.0,
+            "rush_td": 1.0,
+            "rec": 9.0,
+            "rec_yd": 50.0
+          }
+        },
+        "zayflowers|WR": {
+          "name": "Zay Flowers",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 60.0,
+            "rush_td": 1.0,
+            "rec": 83.0,
+            "rec_yd": 1184.0,
+            "rec_td": 8.0,
+            "fumbles": 2.0
+          }
+        },
+        "gregdulcich|TE": {
+          "name": "Greg Dulcich",
+          "pos": "TE",
+          "stats": {
+            "rec": 58.0,
+            "rec_yd": 674.0,
+            "rec_td": 4.0,
+            "fumbles": 2.0
+          }
+        },
+        "haroldfannin|TE": {
+          "name": "Harold Fannin",
+          "pos": "TE",
+          "stats": {
+            "rec": 87.0,
+            "rec_yd": 876.0,
+            "rec_td": 9.0,
+            "fumbles": 1.0
+          }
+        },
+        "jonnusmith|TE": {
+          "name": "Jonnu Smith",
+          "pos": "TE",
+          "stats": {
+            "rec": 28.0,
+            "rec_yd": 252.0,
+            "rec_td": 3.0
+          }
+        },
+        "denzelboston|WR": {
+          "name": "Denzel Boston",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 10.0,
+            "rec": 69.0,
+            "rec_yd": 846.0,
+            "rec_td": 4.0,
+            "fumbles": 2.0
+          }
+        },
+        "wandalerobinson|WR": {
+          "name": "Wan'Dale Robinson",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 6.0,
+            "rec": 84.0,
+            "rec_yd": 797.0,
+            "rec_td": 4.0
+          }
+        },
+        "lucaskrull|TE": {
+          "name": "Lucas Krull",
+          "pos": "TE",
+          "stats": {
+            "rec": 12.0,
+            "rec_yd": 89.0,
+            "rec_td": 1.0
+          }
+        },
+        "jonahcoleman|RB": {
+          "name": "Jonah Coleman",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 134.0,
+            "rush_td": 1.0,
+            "rec": 3.0,
+            "rec_yd": 23.0
+          }
+        },
+        "jakobilane|WR": {
+          "name": "Ja'Kobi Lane",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 17.0,
+            "rec": 44.0,
+            "rec_yd": 654.0,
+            "rec_td": 7.0,
+            "fumbles": 1.0
+          }
+        },
+        "courtlandsutton|WR": {
+          "name": "Courtland Sutton",
+          "pos": "WR",
+          "stats": {
+            "rec": 70.0,
+            "rec_yd": 910.0,
+            "rec_td": 7.0
+          }
+        },
+        "chubahubbard|RB": {
+          "name": "Chuba Hubbard",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 711.0,
+            "rush_td": 5.0,
+            "rec": 34.0,
+            "rec_yd": 211.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "devaughnvele|WR": {
+          "name": "Devaughn Vele",
+          "pos": "WR",
+          "stats": {
+            "rec": 45.0,
+            "rec_yd": 591.0,
+            "rec_td": 4.0
+          }
+        },
+        "charliekolar|TE": {
+          "name": "Charlie Kolar",
+          "pos": "TE",
+          "stats": {
+            "rec": 25.0,
+            "rec_yd": 333.0,
+            "rec_td": 4.0
+          }
+        },
+        "najeeharris|RB": {
+          "name": "Najee Harris",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 352.0,
+            "rush_td": 3.0,
+            "rec": 9.0,
+            "rec_yd": 75.0
+          }
+        },
+        "michaelmayer|TE": {
+          "name": "Michael Mayer",
+          "pos": "TE",
+          "stats": {
+            "rec": 40.0,
+            "rec_yd": 345.0,
+            "rec_td": 2.0
+          }
+        },
+        "malikdavis|RB": {
+          "name": "Malik Davis",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 554.0,
+            "rush_td": 4.0,
+            "rec": 9.0,
+            "rec_yd": 75.0,
+            "fumbles": 1.0
+          }
+        },
+        "maxklare|TE": {
+          "name": "Max Klare",
+          "pos": "TE",
+          "stats": {
+            "rec": 12.0,
+            "rec_yd": 127.0,
+            "rec_td": 1.0
+          }
+        },
+        "roschonjohnson|RB": {
+          "name": "Roschon Johnson",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 116.0,
+            "rush_td": 3.0,
+            "rec": 3.0,
+            "rec_yd": 18.0
+          }
+        },
+        "calebwilliams|QB": {
+          "name": "Caleb Williams",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3907.0,
+            "pass_td": 30.0,
+            "pass_int": 10.0,
+            "rush_yd": 402.0,
+            "rush_td": 2.0,
+            "fumbles": 2.0
+          }
+        },
+        "willkacmarek|TE": {
+          "name": "Will Kacmarek",
+          "pos": "TE",
+          "stats": {
+            "rec": 35.0,
+            "rec_yd": 327.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "alvinkamara|RB": {
+          "name": "Alvin Kamara",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 441.0,
+            "rush_td": 3.0,
+            "rec": 31.0,
+            "rec_yd": 228.0,
+            "fumbles": 1.0
+          }
+        },
+        "oscardelp|TE": {
+          "name": "Oscar Delp",
+          "pos": "TE",
+          "stats": {
+            "rec": 11.0,
+            "rec_yd": 116.0,
+            "rec_td": 1.0
+          }
+        },
+        "lukeschoonmaker|TE": {
+          "name": "Luke Schoonmaker",
+          "pos": "TE",
+          "stats": {
+            "rec": 15.0,
+            "rec_yd": 133.0,
+            "rec_td": 1.0
+          }
+        },
+        "emanuelwilson|RB": {
+          "name": "Emanuel Wilson",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 533.0,
+            "rush_td": 3.0,
+            "rec": 14.0,
+            "rec_yd": 94.0,
+            "fumbles": 1.0
+          }
+        },
+        "jacobybrissett|QB": {
+          "name": "Jacoby Brissett",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3773.0,
+            "pass_td": 24.0,
+            "pass_int": 12.0,
+            "rush_yd": 255.0,
+            "rush_td": 2.0,
+            "fumbles": 6.0
+          }
+        },
+        "cjstroud|QB": {
+          "name": "C.J. Stroud",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3924.0,
+            "pass_td": 28.0,
+            "pass_int": 12.0,
+            "rush_yd": 249.0,
+            "rush_td": 1.0,
+            "fumbles": 3.0
+          }
+        },
+        "elijahhiggins|TE": {
+          "name": "Elijah Higgins",
+          "pos": "TE",
+          "stats": {
+            "rec": 23.0,
+            "rec_yd": 221.0,
+            "rec_td": 1.0,
+            "fumbles": 1.0
+          }
+        },
+        "masonrudolph|QB": {
+          "name": "Mason Rudolph",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 135.0,
+            "pass_td": 1.0,
+            "rush_yd": 17.0
+          }
+        },
+        "nateadkins|TE": {
+          "name": "Nate Adkins",
+          "pos": "TE",
+          "stats": {
+            "rec": 16.0,
+            "rec_yd": 108.0,
+            "rec_td": 3.0
+          }
+        },
+        "tankdell|WR": {
+          "name": "Tank Dell",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 53.0,
+            "rec": 50.0,
+            "rec_yd": 639.0,
+            "rec_td": 4.0
+          }
+        },
+        "marcusmariota|QB": {
+          "name": "Marcus Mariota",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 342.0,
+            "pass_td": 3.0,
+            "pass_int": 1.0,
+            "rush_yd": 6.0
+          }
+        },
+        "traviskelce|TE": {
+          "name": "Travis Kelce",
+          "pos": "TE",
+          "stats": {
+            "rec": 79.0,
+            "rec_yd": 815.0,
+            "rec_td": 6.0
+          }
+        },
+        "dariusslayton|WR": {
+          "name": "Darius Slayton",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 5.0,
+            "rec": 40.0,
+            "rec_yd": 613.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "deshaunwatson|QB": {
+          "name": "Deshaun Watson",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 2652.0,
+            "pass_td": 17.0,
+            "pass_int": 11.0,
+            "rush_yd": 256.0,
+            "rush_td": 2.0,
+            "fumbles": 5.0
+          }
+        },
+        "nickmullens|QB": {
+          "name": "Nick Mullens",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 102.0,
+            "pass_td": 1.0,
+            "rush_yd": 4.0
+          }
+        },
+        "malikbenson|WR": {
+          "name": "Malik Benson",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 8.0,
+            "rec": 47.0,
+            "rec_yd": 551.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "jawharjordan|RB": {
+          "name": "Jawhar Jordan",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 382.0,
+            "rush_td": 2.0,
+            "rec": 22.0,
+            "rec_yd": 172.0,
+            "rec_td": 1.0,
+            "fumbles": 1.0
+          }
+        },
+        "jalenmilroe|QB": {
+          "name": "Jalen Milroe",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 90.0,
+            "pass_td": 1.0,
+            "rush_yd": 15.0
+          }
+        },
+        "darrenwaller|TE": {
+          "name": "Darren Waller",
+          "pos": "TE",
+          "stats": {
+            "rec": 46.0,
+            "rec_yd": 469.0,
+            "rec_td": 6.0
+          }
+        },
+        "tysonbagent|QB": {
+          "name": "Tyson Bagent",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 158.0,
+            "pass_td": 1.0,
+            "rush_yd": 14.0
+          }
+        },
+        "tedhurst|WR": {
+          "name": "Ted Hurst",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 13.0,
+            "rec": 35.0,
+            "rec_yd": 485.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "joshjacobs|RB": {
+          "name": "Josh Jacobs",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1008.0,
+            "rush_td": 11.0,
+            "rec": 32.0,
+            "rec_yd": 253.0,
+            "rec_td": 1.0,
+            "fumbles": 1.0
+          }
+        },
+        "zachcharbonnet|RB": {
+          "name": "Zach Charbonnet",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 507.0,
+            "rush_td": 7.0,
+            "rec": 20.0,
+            "rec_yd": 161.0,
+            "fumbles": 1.0
+          }
+        },
+        "macjones|QB": {
+          "name": "Mac Jones",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 167.0,
+            "pass_td": 1.0,
+            "pass_int": 1.0,
+            "rush_yd": 18.0
+          }
+        },
+        "drewallar|QB": {
+          "name": "Drew Allar",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 101.0,
+            "pass_td": 1.0,
+            "rush_yd": 8.0
+          }
+        },
+        "brockbowers|TE": {
+          "name": "Brock Bowers",
+          "pos": "TE",
+          "stats": {
+            "rec": 88.0,
+            "rec_yd": 982.0,
+            "rec_td": 9.0
+          }
+        },
+        "jaydendaniels|QB": {
+          "name": "Jayden Daniels",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3418.0,
+            "pass_td": 26.0,
+            "pass_int": 12.0,
+            "rush_yd": 746.0,
+            "rush_td": 5.0,
+            "fumbles": 2.0
+          }
+        },
+        "samroush|TE": {
+          "name": "Sam Roush",
+          "pos": "TE",
+          "stats": {
+            "rec": 10.0,
+            "rec_yd": 111.0,
+            "rec_td": 1.0
+          }
+        },
+        "daltonschultz|TE": {
+          "name": "Dalton Schultz",
+          "pos": "TE",
+          "stats": {
+            "rec": 71.0,
+            "rec_yd": 683.0,
+            "rec_td": 4.0
+          }
+        },
+        "jaylenwright|RB": {
+          "name": "Jaylen Wright",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 384.0,
+            "rush_td": 2.0,
+            "rec": 7.0,
+            "rec_yd": 49.0,
+            "fumbles": 2.0
+          }
+        },
+        "jacksonhawes|TE": {
+          "name": "Jackson Hawes",
+          "pos": "TE",
+          "stats": {
+            "rec": 10.0,
+            "rec_yd": 120.0,
+            "rec_td": 2.0
+          }
+        },
+        "jordanaddison|WR": {
+          "name": "Jordan Addison",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 78.0,
+            "rush_td": 1.0,
+            "rec": 50.0,
+            "rec_yd": 736.0,
+            "rec_td": 6.0
+          }
+        },
+        "davidnjoku|TE": {
+          "name": "David Njoku",
+          "pos": "TE",
+          "stats": {
+            "rec": 42.0,
+            "rec_yd": 404.0,
+            "rec_td": 6.0
+          }
+        },
+        "kcconcepcion|WR": {
+          "name": "KC Concepcion",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 10.0,
+            "rec": 71.0,
+            "rec_yd": 878.0,
+            "rec_td": 5.0,
+            "fumbles": 2.0
+          }
+        },
+        "kylermurray|QB": {
+          "name": "Kyler Murray",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3478.0,
+            "pass_td": 28.0,
+            "pass_int": 20.0,
+            "rush_yd": 492.0,
+            "rush_td": 4.0,
+            "fumbles": 4.0
+          }
+        },
+        "michaelpittman|WR": {
+          "name": "Michael Pittman",
+          "pos": "WR",
+          "stats": {
+            "rec": 77.0,
+            "rec_yd": 678.0,
+            "rec_td": 6.0
+          }
+        },
+        "juwanjohnson|TE": {
+          "name": "Juwan Johnson",
+          "pos": "TE",
+          "stats": {
+            "rec": 71.0,
+            "rec_yd": 870.0,
+            "rec_td": 4.0,
+            "fumbles": 2.0
+          }
+        },
+        "philmafah|RB": {
+          "name": "Phil Mafah",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 142.0,
+            "rush_td": 2.0,
+            "rec": 4.0,
+            "rec_yd": 34.0
+          }
+        },
+        "dkmetcalf|WR": {
+          "name": "DK Metcalf",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 10.0,
+            "rush_td": 1.0,
+            "rec": 61.0,
+            "rec_yd": 893.0,
+            "rec_td": 6.0
+          }
+        },
+        "breecehall|RB": {
+          "name": "Breece Hall",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1014.0,
+            "rush_td": 6.0,
+            "rec": 40.0,
+            "rec_yd": 370.0,
+            "rec_td": 2.0,
+            "fumbles": 2.0
+          }
+        },
+        "johnbates|TE": {
+          "name": "John Bates",
+          "pos": "TE",
+          "stats": {
+            "rec": 20.0,
+            "rec_yd": 204.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "ashtondulin|WR": {
+          "name": "Ashton Dulin",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 66.0,
+            "rec": 25.0,
+            "rec_yd": 551.0,
+            "rec_td": 2.0
+          }
+        },
+        "jkdobbins|RB": {
+          "name": "J.K. Dobbins",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1137.0,
+            "rush_td": 7.0,
+            "rec": 21.0,
+            "rec_yd": 77.0,
+            "fumbles": 1.0
+          }
+        },
+        "jonathantaylor|RB": {
+          "name": "Jonathan Taylor",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1578.0,
+            "rush_td": 15.0,
+            "rec": 42.0,
+            "rec_yd": 345.0,
+            "rec_td": 2.0,
+            "fumbles": 2.0
+          }
+        },
+        "drakemaye|QB": {
+          "name": "Drake Maye",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 3844.0,
+            "pass_td": 28.0,
+            "pass_int": 11.0,
+            "rush_yd": 514.0,
+            "rush_td": 4.0,
+            "fumbles": 6.0
+          }
+        },
+        "devinculp|TE": {
+          "name": "Devin Culp",
+          "pos": "TE",
+          "stats": {
+            "rec": 11.0,
+            "rec_yd": 118.0,
+            "rec_td": 2.0
+          }
+        },
+        "javontewilliams|RB": {
+          "name": "Javonte Williams",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 1089.0,
+            "rush_td": 10.0,
+            "rec": 29.0,
+            "rec_yd": 141.0,
+            "rec_td": 1.0,
+            "fumbles": 2.0
+          }
+        },
+        "cadestover|TE": {
+          "name": "Cade Stover",
+          "pos": "TE",
+          "stats": {
+            "rec": 15.0,
+            "rec_yd": 122.0,
+            "rec_td": 1.0
+          }
+        },
+        "tyquanthornton|WR": {
+          "name": "Tyquan Thornton",
+          "pos": "WR",
+          "stats": {
+            "rec": 27.0,
+            "rec_yd": 575.0,
+            "rec_td": 4.0
+          }
+        },
+        "colbyparkinson|TE": {
+          "name": "Colby Parkinson",
+          "pos": "TE",
+          "stats": {
+            "rec": 41.0,
+            "rec_yd": 435.0,
+            "rec_td": 6.0,
+            "fumbles": 1.0
+          }
+        },
+        "makailemon|WR": {
+          "name": "Makai Lemon",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 13.0,
+            "rec": 53.0,
+            "rec_yd": 735.0,
+            "rec_td": 4.0,
+            "fumbles": 2.0
+          }
+        },
+        "matthewgolden|WR": {
+          "name": "Matthew Golden",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 66.0,
+            "rec": 46.0,
+            "rec_yd": 670.0,
+            "rec_td": 4.0
+          }
+        },
+        "kennypickett|QB": {
+          "name": "Kenny Pickett",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 135.0,
+            "pass_td": 1.0,
+            "pass_int": 1.0,
+            "rush_yd": 22.0
+          }
+        },
+        "kennethgainwell|RB": {
+          "name": "Kenneth Gainwell",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 536.0,
+            "rush_td": 4.0,
+            "rec": 60.0,
+            "rec_yd": 439.0,
+            "rec_td": 2.0,
+            "fumbles": 1.0
+          }
+        },
+        "chigoziemokonkwo|TE": {
+          "name": "Chigoziem Okonkwo",
+          "pos": "TE",
+          "stats": {
+            "rec": 53.0,
+            "rec_yd": 629.0,
+            "rec_td": 3.0
+          }
+        },
+        "desmondridder|QB": {
+          "name": "Desmond Ridder",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 151.0,
+            "pass_td": 1.0,
+            "rush_yd": 21.0
+          }
+        },
+        "shanebuechele|QB": {
+          "name": "Shane Buechele",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 151.0,
+            "pass_td": 1.0,
+            "rush_yd": 20.0
+          }
+        },
+        "mitchtrubisky|QB": {
+          "name": "Mitch Trubisky",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 123.0,
+            "pass_td": 1.0,
+            "rush_yd": 7.0
+          }
+        },
+        "drewlock|QB": {
+          "name": "Drew Lock",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 159.0,
+            "pass_td": 1.0,
+            "pass_int": 1.0,
+            "rush_yd": 21.0
+          }
+        },
+        "garrettnussmeier|QB": {
+          "name": "Garrett Nussmeier",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 111.0,
+            "pass_td": 1.0,
+            "rush_yd": 8.0
+          }
+        },
+        "behrenmorton|QB": {
+          "name": "Behren Morton",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 118.0,
+            "pass_td": 1.0,
+            "rush_yd": 9.0
+          }
+        },
+        "jakebrowning|QB": {
+          "name": "Jake Browning",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 152.0,
+            "pass_td": 1.0,
+            "pass_int": 1.0,
+            "rush_yd": 26.0
+          }
+        },
+        "adrianmartinez|QB": {
+          "name": "Adrian Martinez",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 115.0,
+            "pass_td": 1.0,
+            "rush_yd": 7.0
+          }
+        },
+        "colepayton|QB": {
+          "name": "Cole Payton",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 105.0,
+            "pass_td": 1.0,
+            "rush_yd": 10.0
+          }
+        },
+        "chrisoladokun|QB": {
+          "name": "Chris Oladokun",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 148.0,
+            "pass_td": 1.0,
+            "rush_yd": 18.0,
+            "fumbles": 1.0
+          }
+        },
+        "bradycook|QB": {
+          "name": "Brady Cook",
+          "pos": "QB",
+          "stats": {
+            "pass_yd": 120.0,
+            "pass_td": 1.0,
+            "pass_int": 1.0,
+            "rush_yd": 21.0
+          }
+        },
+        "ajdillon|RB": {
+          "name": "AJ Dillon",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 532.0,
+            "rush_td": 3.0,
+            "rec": 18.0,
+            "rec_yd": 146.0,
+            "rec_td": 1.0,
+            "fumbles": 5.0
+          }
+        },
+        "christopherbrooks|RB": {
+          "name": "Christopher Brooks",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 254.0,
+            "rush_td": 1.0,
+            "rec": 10.0,
+            "rec_yd": 69.0
+          }
+        },
+        "jeromeford|RB": {
+          "name": "Jerome Ford",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 194.0,
+            "rush_td": 1.0,
+            "rec": 8.0,
+            "rec_yd": 46.0
+          }
+        },
+        "trayveonwilliams|RB": {
+          "name": "Trayveon Williams",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 138.0,
+            "rush_td": 1.0,
+            "rec": 9.0,
+            "rec_yd": 77.0
+          }
+        },
+        "frankgore|RB": {
+          "name": "Frank Gore",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 175.0,
+            "rush_td": 2.0,
+            "rec": 3.0,
+            "rec_yd": 26.0
+          }
+        },
+        "salvonahmed|RB": {
+          "name": "Salvon Ahmed",
+          "pos": "RB",
+          "stats": {
+            "rush_yd": 153.0,
+            "rush_td": 1.0,
+            "rec": 1.0,
+            "rec_yd": 12.0
+          }
+        },
+        "bubmeans|WR": {
+          "name": "Bub Means",
+          "pos": "WR",
+          "stats": {
+            "rush_yd": 7.0,
+            "rec": 38.0,
+            "rec_yd": 519.0,
+            "rec_td": 3.0,
+            "fumbles": 1.0
+          }
+        },
+        "joshpalmer|WR": {
+          "name": "Josh Palmer",
+          "pos": "WR",
+          "stats": {
+            "rec": 35.0,
+            "rec_yd": 479.0,
+            "rec_td": 2.0
+          }
+        },
+        "erickall|TE": {
+          "name": "Erick All",
+          "pos": "TE",
+          "stats": {
+            "rec": 35.0,
+            "rec_yd": 301.0,
+            "rec_td": 2.0
+          }
+        },
+        "bensims|TE": {
+          "name": "Ben Sims",
+          "pos": "TE",
+          "stats": {
+            "rec": 32.0,
+            "rec_yd": 304.0,
+            "rec_td": 2.0
+          }
+        },
+        "nickvannett|TE": {
+          "name": "Nick Vannett",
+          "pos": "TE",
+          "stats": {
+            "rec": 10.0,
+            "rec_yd": 95.0,
+            "rec_td": 2.0
+          }
+        },
+        "hunterlong|TE": {
+          "name": "Hunter Long",
+          "pos": "TE",
+          "stats": {
+            "rec": 10.0,
+            "rec_yd": 90.0,
+            "rec_td": 2.0
+          }
+        },
+        "zackkuntz|TE": {
+          "name": "Zack Kuntz",
+          "pos": "TE",
+          "stats": {
+            "rec": 12.0,
+            "rec_yd": 128.0,
+            "rec_td": 1.0
+          }
+        },
+        "willmallory|TE": {
+          "name": "Will Mallory",
+          "pos": "TE",
+          "stats": {
+            "rec": 11.0,
+            "rec_yd": 125.0,
+            "rec_td": 1.0
+          }
+        },
+        "rivaldofairweather|TE": {
+          "name": "Rivaldo Fairweather",
+          "pos": "TE",
+          "stats": {
+            "rec": 12.0,
+            "rec_yd": 109.0,
+            "rec_td": 1.0
+          }
+        },
+        "travisvokolek|TE": {
+          "name": "Travis Vokolek",
+          "pos": "TE",
+          "stats": {
+            "rec": 12.0,
+            "rec_yd": 109.0,
+            "rec_td": 1.0
+          }
+        },
+        "haydenrucci|TE": {
+          "name": "Hayden Rucci",
+          "pos": "TE",
+          "stats": {
+            "rec": 12.0,
+            "rec_yd": 118.0,
+            "rec_td": 1.0
+          }
+        },
+        "anthonyfirkser|TE": {
+          "name": "Anthony Firkser",
+          "pos": "TE",
+          "stats": {
+            "rec": 12.0,
+            "rec_yd": 103.0,
+            "rec_td": 1.0
+          }
+        },
+        "dallenbentley|TE": {
+          "name": "Dallen Bentley",
+          "pos": "TE",
+          "stats": {
+            "rec": 12.0,
+            "rec_yd": 105.0,
+            "rec_td": 1.0
+          }
+        },
+        "teaganquitoriano|TE": {
+          "name": "Teagan Quitoriano",
+          "pos": "TE",
+          "stats": {
+            "rec": 12.0,
+            "rec_yd": 109.0,
+            "rec_td": 1.0
+          }
+        },
+        "camgrandy|TE": {
+          "name": "Cam Grandy",
+          "pos": "TE",
+          "stats": {
+            "rec": 13.0,
+            "rec_yd": 100.0,
+            "rec_td": 1.0
+          }
+        },
+        "bauersharp|TE": {
+          "name": "Bauer Sharp",
+          "pos": "TE",
+          "stats": {
+            "rec": 11.0,
+            "rec_yd": 113.0,
+            "rec_td": 1.0
+          }
+        },
+        "zairemitchellpaden|TE": {
+          "name": "Zaire Mitchell-Paden",
+          "pos": "TE",
+          "stats": {
+            "rec": 11.0,
+            "rec_yd": 108.0,
+            "rec_td": 1.0
+          }
+        },
+        "tannermclachlan|TE": {
+          "name": "Tanner McLachlan",
+          "pos": "TE",
+          "stats": {
+            "rec": 11.0,
+            "rec_yd": 111.0,
+            "rec_td": 1.0
+          }
+        },
+        "tannerconner|TE": {
+          "name": "Tanner Conner",
+          "pos": "TE",
+          "stats": {
+            "rec": 10.0,
+            "rec_yd": 113.0,
+            "rec_td": 1.0
+          }
+        }
+      }
     }
   }
 }

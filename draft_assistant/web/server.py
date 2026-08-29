@@ -1191,6 +1191,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     teams=body.get("teams"),
                     adp_format=body.get("adpFormat"),
                     include_fftoday=not body.get("skipFftoday", False),
+                    include_cbs=not body.get("skipCbs", False),
                     espn_league_id=body.get("espnLeagueId"),
                     history_seasons=body.get("history"),
                 )
@@ -1240,6 +1241,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     config=config,
                     stats_season=body.get("statsSeason"),
                     include_fftoday=not body.get("skipFftoday", False),
+                    include_cbs=not body.get("skipCbs", False),
                     espn_league_id=body.get("espnLeagueId"),
                 )
                 # Same history accumulation as the free pull — a full collect

@@ -295,6 +295,7 @@ def main() -> None:
             teams=args.teams,
             adp_format=args.adp_format,
             include_fftoday=not args.skip_fftoday,
+            include_cbs=not args.skip_cbs,
             espn_league_id=args.espn_league_id,
         )
         out_json = args.out or paths.projections_path
@@ -332,6 +333,7 @@ def main() -> None:
     p_free.add_argument("--adp-format", choices=["standard", "half-ppr", "ppr"], default=None)
     p_free.add_argument("--espn-league-id", type=str, default=None, help="Optional public ESPN league id")
     p_free.add_argument("--skip-fftoday", action="store_true", help="Skip FFToday scraping")
+    p_free.add_argument("--skip-cbs", action="store_true", help="Skip CBS scraping")
     p_free.add_argument("--out", type=str, default=None)
     p_free.add_argument("--csv", type=str, default=None)
     p_free.set_defaults(func=cmd_pull_free_data)
@@ -403,6 +405,7 @@ def main() -> None:
             skip_adp=args.skip_adp,
             stats_season=args.stats_season,
             include_fftoday=not args.skip_fftoday,
+            include_cbs=not args.skip_cbs,
             espn_league_id=args.espn_league_id,
         )
         if not players:
@@ -424,6 +427,8 @@ def main() -> None:
     p_ca.add_argument("--out", type=str, default=None)
     p_ca.add_argument("--skip-sleeper", action="store_true")
     p_ca.add_argument("--skip-adp", action="store_true")
+    p_ca.add_argument("--skip-cbs", action="store_true",
+                      help="Skip CBS scraping during the free pull")
     p_ca.add_argument("--skip-fftoday", action="store_true",
         help="skip the FFToday scrape during the free-source step")
     p_ca.add_argument("--espn-league-id", type=str, default=None,

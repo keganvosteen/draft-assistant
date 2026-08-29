@@ -1,120 +1,20 @@
 from __future__ import annotations
-import re
-import json
-import time
-from html.parser import HTMLParser
-from typing import Dict, List, Optional, Tuple
-from urllib.request import urlopen, Request
+from typing import Dict, List, Optional
 
 from ..models import Player
+from . import _scrape
+from ._scrape import TableParser as _TableParser, norm as _norm, to_float as _to_float
 
 
-class _TableFrame:
-    """In-progress rows for one open <table> (one frame per nesting level)."""
-    __slots__ = ("rows", "row", "cell")
-
-    def __init__(self) -> None:
-        self.rows: List[List[str]] = []
-        self.row: Optional[List[str]] = None
-        self.cell: Optional[str] = None
-
-
-class _TableParser(HTMLParser):
-    """Collect every <table> as rows of cell text.
-
-    FFToday uses old-school *nested* layout tables, so a single in-progress
-    buffer gets scrambled (an inner <table> resets it and its </table> closes
-    the outer one). We keep a stack of frames — one per open table — so each
-    table's rows are captured independently regardless of nesting.
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.tables: List[List[List[str]]] = []
-        self._stack: List[_TableFrame] = []
-
-    def _top(self) -> Optional[_TableFrame]:
-        return self._stack[-1] if self._stack else None
-
-    def handle_starttag(self, tag: str, attrs):
-        frame = self._top()
-        if tag == "table":
-            self._stack.append(_TableFrame())
-        elif tag == "tr" and frame is not None:
-            frame.row = []
-        elif tag in ("td", "th") and frame is not None and frame.row is not None:
-            frame.cell = ""
-
-    def handle_endtag(self, tag: str):
-        frame = self._top()
-        if frame is None:
-            return
-        if tag in ("td", "th") and frame.cell is not None:
-            frame.row.append(self._clean(frame.cell))
-            frame.cell = None
-        elif tag == "tr" and frame.row is not None:
-            frame.rows.append(frame.row)
-            frame.row = None
-        elif tag == "table":
-            done = self._stack.pop()
-            if done.rows:
-                self.tables.append(done.rows)
-
-    def handle_data(self, data: str):
-        frame = self._top()
-        if frame is not None and frame.cell is not None:
-            frame.cell += data
-
-    def _clean(self, s: str) -> str:
-        return re.sub(r"\s+", " ", s).strip()
-
-
+# The table parser, HTTP fetch and number/name helpers are shared with the other
+# scraped sources — see _scrape.py. The indirection through a module-level
+# _fetch_once is deliberate: it keeps this module's fetcher patchable in tests.
 def _fetch(url: str, attempts: int = 3) -> str:
-    # FFToday is the one source pulled by scraping web pages, and its server
-    # drops connections transiently; a single hiccup used to silently cost the
-    # whole source (and with it consensus projections), so retry with a short
-    # backoff before giving up.
-    last_exc: Optional[Exception] = None
-    for attempt in range(attempts):
-        if attempt:
-            time.sleep(2 * attempt)
-        try:
-            return _fetch_once(url)
-        except Exception as exc:
-            last_exc = exc
-    raise last_exc
+    return _scrape.retry(lambda: _fetch_once(url), attempts=attempts)
 
 
 def _fetch_once(url: str) -> str:
-    req = Request(url, headers={
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Cache-Control": "no-cache",
-    })
-    with urlopen(req, timeout=20) as resp:
-        data = resp.read()
-        try:
-            return data.decode("utf-8")
-        except Exception:
-            try:
-                return data.decode("latin-1")
-            except Exception:
-                return data.decode("utf-8", errors="ignore")
-
-
-def _norm(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
-
-
-def _to_float(s: str) -> float:
-    try:
-        s = s.replace(",", "").strip()
-        if s in ("", "-"):
-            return 0.0
-        return float(s)
-    except Exception:
-        return 0.0
+    return _scrape.fetch_once(url)
 
 
 def _select_projection_table(html: str) -> Optional[List[List[str]]]:

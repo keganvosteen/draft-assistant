@@ -15,6 +15,7 @@ from ..models import LeagueConfig, Player
 from ..platform_sync import SyncedRosterPlayer, SyncedRosterTeam
 from ..projection_archive import record_snapshot
 from ..scoring import fantasy_points
+from .cbs import fetch_all_cbs
 from .fftoday import fetch_all_fftoday
 
 
@@ -123,6 +124,7 @@ def pull_free_data(
     teams: Optional[int] = None,
     adp_format: Optional[str] = None,
     include_fftoday: bool = True,
+    include_cbs: bool = True,
     espn_league_id: Optional[str] = None,
     history_seasons: Optional[int] = 1,
 ) -> FreeDataResult:
@@ -189,6 +191,14 @@ def pull_free_data(
         except Exception as exc:
             reports.append(SourceReport("FFToday projections", ok=False, detail=str(exc)))
 
+    if include_cbs:
+        try:
+            cbs_players = fetch_all_cbs(season)
+            _merge_many(merged, cbs_players, "cbs", proj_samples)
+            reports.append(SourceReport("CBS projections", len(cbs_players), detail=str(season)))
+        except Exception as exc:
+            reports.append(SourceReport("CBS projections", ok=False, detail=str(exc)))
+
     # ESPN needs no configuration: without a league id it reads the same
     # projections through ESPN's stock league default. It used to be skipped
     # entirely unless a league was linked, which is why a board could sit on
@@ -226,15 +236,20 @@ def pull_free_data(
         for r in reports:
             if r.source == "Sleeper projections" and not r.ok:
                 causes.append(f"Sleeper projections failed: {r.detail}")
-            elif r.source == "FFToday projections":
+            elif r.source in ("FFToday projections", "CBS projections"):
+                site = r.source.split()[0]
                 if not r.ok:
-                    causes.append(f"FFToday failed: {r.detail}")
+                    causes.append(f"{site} failed: {r.detail}")
                 elif not r.records:
-                    causes.append("FFToday returned no players")
+                    # A scraped site that returns zero rows has usually been
+                    # redesigned; it fails silently rather than raising.
+                    causes.append(f"{site} returned no players")
             elif r.source == "ESPN Fantasy API" and not r.ok:
                 causes.append(f"ESPN failed: {r.detail}")
         if not include_fftoday:
             causes.append("FFToday was skipped")
+        if not include_cbs:
+            causes.append("CBS was skipped")
         detail = f" ({'; '.join(causes)})" if causes else ""
         warnings.append(
             "Projections are single-source: no player carries a consensus of "
