@@ -226,6 +226,7 @@ def collect_all_result(
     config: Optional[LeagueConfig] = None,
     stats_season: Optional[int] = None,
     include_fftoday: bool = True,
+    include_cbs: bool = True,
     espn_league_id: Optional[str] = None,
     skip_free_sources: bool = False,
 ) -> FreeDataResult:
@@ -247,6 +248,7 @@ def collect_all_result(
         config: League whose scoring orders the board; synthesized if omitted.
         stats_season: Most recent completed season for the free pull's stats.
         include_fftoday: Scrape FFToday projections during the free pull.
+        include_cbs: Scrape CBS projections during the free pull.
         espn_league_id: Public ESPN league to fold into the consensus.
         skip_free_sources: Enrichment sources only (for offline/testing).
 
@@ -272,6 +274,7 @@ def collect_all_result(
                 teams=teams,
                 adp_format=scoring_format,
                 include_fftoday=include_fftoday,
+                include_cbs=include_cbs,
                 espn_league_id=espn_league_id,
                 history_seasons=history_seasons,
             )
@@ -349,6 +352,7 @@ def collect_all(
     config: Optional[LeagueConfig] = None,
     stats_season: Optional[int] = None,
     include_fftoday: bool = True,
+    include_cbs: bool = True,
     espn_league_id: Optional[str] = None,
     skip_free_sources: bool = False,
 ) -> List[Player]:
@@ -363,6 +367,7 @@ def collect_all(
         config=config,
         stats_season=stats_season,
         include_fftoday=include_fftoday,
+        include_cbs=include_cbs,
         espn_league_id=espn_league_id,
         skip_free_sources=skip_free_sources,
     ).players

@@ -4,7 +4,6 @@ import csv
 import io
 import json
 import re
-import statistics
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -16,6 +15,7 @@ from ..models import LeagueConfig, Player
 from ..platform_sync import SyncedRosterPlayer, SyncedRosterTeam
 from ..projection_archive import record_snapshot
 from ..scoring import fantasy_points
+from .cbs import fetch_all_cbs
 from .fftoday import fetch_all_fftoday
 
 
@@ -124,6 +124,7 @@ def pull_free_data(
     teams: Optional[int] = None,
     adp_format: Optional[str] = None,
     include_fftoday: bool = True,
+    include_cbs: bool = True,
     espn_league_id: Optional[str] = None,
     history_seasons: Optional[int] = 1,
 ) -> FreeDataResult:
@@ -190,15 +191,26 @@ def pull_free_data(
         except Exception as exc:
             reports.append(SourceReport("FFToday projections", ok=False, detail=str(exc)))
 
-    if espn_league_id:
+    if include_cbs:
         try:
-            espn_players = _fetch_espn_players(season, espn_league_id, adp_format)
-            _merge_many(merged, espn_players, "espn", proj_samples)
-            reports.append(SourceReport("ESPN Fantasy API", len(espn_players), detail=str(espn_league_id)))
+            cbs_players = fetch_all_cbs(season)
+            _merge_many(merged, cbs_players, "cbs", proj_samples)
+            reports.append(SourceReport("CBS projections", len(cbs_players), detail=str(season)))
         except Exception as exc:
-            reports.append(SourceReport("ESPN Fantasy API", ok=False, detail=str(exc)))
-    else:
-        reports.append(SourceReport("ESPN Fantasy API", 0, ok=False, detail="skipped; pass --espn-league-id for a public league"))
+            reports.append(SourceReport("CBS projections", ok=False, detail=str(exc)))
+
+    # ESPN needs no configuration: without a league id it reads the same
+    # projections through ESPN's stock league default. It used to be skipped
+    # entirely unless a league was linked, which is why a board could sit on
+    # Sleeper alone and call itself a consensus.
+    try:
+        espn_players = _fetch_espn_players(season, espn_league_id, adp_format)
+        _merge_many(merged, espn_players, "espn", proj_samples)
+        reports.append(SourceReport(
+            "ESPN Fantasy API", len(espn_players),
+            detail=str(espn_league_id) if espn_league_id else "league default"))
+    except Exception as exc:
+        reports.append(SourceReport("ESPN Fantasy API", ok=False, detail=str(exc)))
 
     # Combine projection sources by per-stat median (scoring-agnostic). For a
     # player only one source projected, that source stands; where two or more
@@ -206,7 +218,7 @@ def pull_free_data(
     for key, player in merged.items():
         samples = proj_samples.get(key)
         if samples and len(samples) > 1:
-            player.projections = _consensus_projection(samples)
+            player.projections = _consensus_projection(samples, player.position)
             player.metadata["projection_source"] = "consensus"
             player.metadata["projection_sources_n"] = len(samples)
 
@@ -224,17 +236,20 @@ def pull_free_data(
         for r in reports:
             if r.source == "Sleeper projections" and not r.ok:
                 causes.append(f"Sleeper projections failed: {r.detail}")
-            elif r.source == "FFToday projections":
+            elif r.source in ("FFToday projections", "CBS projections"):
+                site = r.source.split()[0]
                 if not r.ok:
-                    causes.append(f"FFToday failed: {r.detail}")
+                    causes.append(f"{site} failed: {r.detail}")
                 elif not r.records:
-                    causes.append("FFToday returned no players")
-            elif r.source == "ESPN Fantasy API" and espn_league_id and not r.ok:
+                    # A scraped site that returns zero rows has usually been
+                    # redesigned; it fails silently rather than raising.
+                    causes.append(f"{site} returned no players")
+            elif r.source == "ESPN Fantasy API" and not r.ok:
                 causes.append(f"ESPN failed: {r.detail}")
         if not include_fftoday:
             causes.append("FFToday was skipped")
-        if not espn_league_id:
-            causes.append("no ESPN league linked")
+        if not include_cbs:
+            causes.append("CBS was skipped")
         detail = f" ({'; '.join(causes)})" if causes else ""
         warnings.append(
             "Projections are single-source: no player carries a consensus of "
@@ -540,21 +555,42 @@ ESPN_STAT_IDS = {
 }
 
 
-def _fetch_espn_players(season: int, league_id: str, adp_format: str) -> List[Player]:
-    """Pull a public ESPN league's player projections for ``season``.
+#: ESPN's stock scoring profile, used when no league id is supplied. ESPN's
+#: projections are global -- the raw stat lines under statSourceId=1 are the same
+#: whichever league you read them through, because a league only decides how
+#: those stats are *scored*. Reading them from a league default means the source
+#: works for everyone, and (unlike a personal league, which 401s for seasons
+#: before it existed) it reaches every season back to 2019 -- which is what makes
+#: ESPN gradeable against past outcomes at all. 3 is the standard PPR default.
+ESPN_DEFAULT_LEAGUE_SEGMENT = "leaguedefaults/3"
+
+
+def _espn_player_url(season: int, league_id: Optional[str]) -> str:
+    base = ("https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
+            f"{_seg(season)}/segments/0/")
+    if league_id:
+        return f"{base}leagues/{_seg(league_id)}?view=kona_player_info"
+    return f"{base}{ESPN_DEFAULT_LEAGUE_SEGMENT}?view=kona_player_info"
+
+
+def _fetch_espn_players(
+    season: int, league_id: Optional[str], adp_format: str, limit: int = 600
+) -> List[Player]:
+    """Pull ESPN's player projections for ``season``.
 
     ``kona_player_info`` returns an arbitrary handful of (mostly empty) players
     unless an ``x-fantasy-filter`` header asks for a sorted slice — so we request
-    the ~500 most-owned (the draftable universe). Projections arrive as numeric
-    stat IDs (see ESPN_STAT_IDS); K/DST use a different set and are left to
-    Sleeper. Works for public leagues with just the id; private leagues would
-    additionally need espn_s2 / SWID cookies (not handled here).
+    the most-owned (the draftable universe). Projections arrive as numeric stat
+    IDs (see ESPN_STAT_IDS); K/DST use a different set and are left to Sleeper.
+
+    ``league_id`` is optional and only selects which league the numbers are read
+    through; omitting it uses ESPN's stock league default, which returns the same
+    projections without any configuration. A public league works with just its
+    id; private leagues would additionally need espn_s2 / SWID cookies (not
+    handled here).
     """
-    url = (
-        "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
-        f"{_seg(season)}/segments/0/leagues/{_seg(league_id)}?view=kona_player_info"
-    )
-    flt = json.dumps({"players": {"limit": 500,
+    url = _espn_player_url(season, league_id)
+    flt = json.dumps({"players": {"limit": int(limit),
                                   "sortPercOwned": {"sortPriority": 1, "sortAsc": False}}})
     data = _fetch_json(url, timeout=45, extra_headers={"x-fantasy-filter": flt})
     rows = data.get("players", []) if isinstance(data, dict) else []
@@ -796,19 +832,91 @@ def _app_stats_from_nflverse(row: dict, position: str) -> Dict[str, float]:
     return {k: v for k, v in stats.items() if v}
 
 
-def _consensus_projection(samples: List[Tuple[str, Dict[str, float]]]) -> Dict[str, float]:
-    """Per-stat median across projection sources (Sleeper / FFToday / ESPN).
+#: How much each source's number counts, per position, when sources disagree.
+#: Anything unlisted weighs :data:`DEFAULT_SOURCE_WEIGHT`, so a new source starts
+#: neutral and an unmeasured one stays neutral.
+#:
+#: Derived by ``backtest.calibrate_source_weights`` over 2019-2022 and 2024-2025
+#: (ESPN's 2023 projections are a stub), blending stat lines and scoring across
+#: standard/half/PPR so the weights do not encode one league's rules. Only
+#: players *both* sources projected are compared: this asks whose number is
+#: better when they disagree, not who covers more players.
+#:
+#: Leave-one-season-out said the tilt only earns its keep at RB (+0.016 Spearman
+#: over an even split, 4 seasons of 6) and TE (+0.013, 5 of 6). At QB (-0.007)
+#: and WR (-0.004) weighting actively *hurt*, so both stay even. ESPN's much
+#: larger apparent WR edge in a raw source-vs-source comparison is coverage --
+#: it projects ~59 receivers to FFToday's ~38 -- and coverage already pays off
+#: by ESPN being in the pool at all. It is not a reason to trust its number more.
+#:
+#: The optimum was a boundary (w=1.0, i.e. ignore FFToday entirely at RB/TE) on
+#: six seasons with two of them negative. Taking that literally would be
+#: overfitting, so this shrinks toward even: 2:1 keeps most of the validated
+#: gain without betting the position on one source.
+#:
+#: Caveat worth knowing before extending this: Sleeper supplies most of the
+#: board and cannot be graded at all (its archive is revised in-season), so it
+#: stays neutral, and the ESPN tilt derived against FFToday is *extrapolated*
+#: when ESPN meets Sleeper instead. Re-derive once the 2026 preseason archive
+#: makes Sleeper gradeable.
+SOURCE_WEIGHTS: Dict[str, Dict[str, float]] = {
+    "espn": {"RB": 2.0, "TE": 2.0},
+}
+DEFAULT_SOURCE_WEIGHT = 1.0
+
+
+def _source_weight(source: str, position: str) -> float:
+    return SOURCE_WEIGHTS.get(source, {}).get(position, DEFAULT_SOURCE_WEIGHT)
+
+
+def _winsorize(values: List[float]) -> List[float]:
+    """Pull the extremes in to the next value along, once there are enough.
+
+    Only meaningful from four sources up: with three you cannot tell an outlier
+    from a minority opinion, and clipping would just re-derive the median.
+    """
+    if len(values) < 4:
+        return values
+    ordered = sorted(values)
+    margin = len(ordered) // 4
+    low, high = ordered[margin], ordered[-1 - margin]
+    return [min(max(v, low), high) for v in values]
+
+
+def _consensus_projection(
+    samples: List[Tuple[str, Dict[str, float]]], position: str = "",
+) -> Dict[str, float]:
+    """Combine projection sources into one stat line, weighted by track record.
 
     Operates on STAT lines, not points, so it's scoring-agnostic — the owner runs
     two leagues with different rules, so the right product is a consensus stat
-    line that each league's scoring is then applied to. With two sources the
-    median equals their average; with three or more it's robust to one outlier.
+    line that each league's scoring is then applied to.
+
+    A source that simply doesn't carry a stat is absent from that stat's vote
+    rather than voting zero: FFToday publishes no receiving line for a converted
+    quarterback, and counting that as "0 catches" would drag the consensus down
+    on the strength of a column the site never had.
+
+    With even weights this is the mean, which for two sources is what the old
+    per-stat median already produced.
     """
-    by_stat: Dict[str, List[float]] = {}
-    for _source, proj in samples:
+    by_stat: Dict[str, List[Tuple[float, float]]] = {}
+    for source, proj in samples:
+        weight = _source_weight(source, position)
         for stat, val in proj.items():
-            by_stat.setdefault(stat, []).append(val)
-    return {stat: round(statistics.median(vals), 2) for stat, vals in by_stat.items() if vals}
+            by_stat.setdefault(stat, []).append((val, weight))
+
+    out: Dict[str, float] = {}
+    for stat, pairs in by_stat.items():
+        if not pairs:
+            continue
+        values = _winsorize([v for v, _w in pairs])
+        weights = [w for _v, w in pairs]
+        total = sum(weights)
+        if total <= 0:
+            continue
+        out[stat] = round(sum(v * w for v, w in zip(values, weights)) / total, 2)
+    return out
 
 
 def _merge_many(
