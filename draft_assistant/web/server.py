@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import socket
 import threading
 import time
 import traceback
@@ -60,6 +61,12 @@ MAX_PICKS = 1024
 MAX_TEAMS = 32
 MAX_ROSTER_SLOTS = 50
 MAX_WEB_SIMS = 96
+
+# Bounds on the lingering close (see DraftAPIHandler._linger_close). Big
+# enough to swallow a rejected request in one pass, small enough that a
+# client which sends and then stalls cannot pin the worker thread.
+LINGER_BYTES = 64 * 1024
+LINGER_SECONDS = 0.5
 
 
 class PayloadTooLarge(ValueError):
@@ -500,6 +507,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         if length < 0:
             raise ValueError("invalid Content-Length")
         if length <= 0:
+            self._body_drained = True
             return {}
         # Cap the read: Content-Length is attacker-controlled, and allocating
         # whatever it claims is a free way to exhaust memory. The largest real
@@ -509,7 +517,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         def reject_constant(value):
             raise ValueError(f"non-finite JSON number {value!r} is not allowed")
 
-        data = json.loads(self.rfile.read(length), parse_constant=reject_constant)
+        raw = self.rfile.read(length)
+        self._body_drained = True
+        data = json.loads(raw, parse_constant=reject_constant)
         if not isinstance(data, dict):
             raise ValueError("JSON body must be an object")
         return data
@@ -522,6 +532,75 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             raise ValueError(
                 f"picks must be a list of at most {MAX_PICKS} short player key strings")
         return value
+
+    # ── connection teardown ───────────────────────────────────────────────
+
+    def handle_one_request(self):
+        # Per-request state, reset explicitly rather than relying on one
+        # request per handler instance (true only while this stays HTTP/1.0).
+        self._request_body = None
+        self._body_drained = False
+        super().handle_one_request()
+
+    def _has_unread_body(self) -> bool:
+        if getattr(self, "_body_drained", False):
+            return False
+        headers = getattr(self, "headers", None)
+        if headers is None:
+            return False
+        try:
+            return int(headers.get("Content-Length", 0) or 0) > 0
+        except (TypeError, ValueError):
+            # An unparseable length still means the client sent something.
+            return True
+
+    def _linger_close(self):
+        """Drain the unread request body so the socket closes in order.
+
+        Windows aborts a connection (RST) when a socket is closed with
+        received-but-unread bytes still buffered, and an RST makes the peer
+        throw away whatever it has not read yet — including the reply we just
+        wrote. Every early rejection (403 cross-origin, 413 oversized, 415
+        wrong content type) answers *before* touching the body, so those
+        replies were the ones going missing. Half-close first to tell the
+        client we are done, then read what is already in flight.
+        """
+        try:
+            self.wfile.flush()
+        except (OSError, ValueError):
+            return
+        conn = getattr(self, "connection", None)
+        if conn is None:
+            return
+        try:
+            conn.shutdown(socket.SHUT_WR)
+        except OSError:
+            return
+        previous = conn.gettimeout()
+        deadline = time.monotonic() + LINGER_SECONDS
+        try:
+            drained = 0
+            while drained < LINGER_BYTES:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                conn.settimeout(remaining)
+                chunk = conn.recv(min(8192, LINGER_BYTES - drained))
+                if not chunk:
+                    break
+                drained += len(chunk)
+        except OSError:
+            pass
+        finally:
+            try:
+                conn.settimeout(previous)
+            except OSError:
+                pass
+
+    def finish(self):
+        if self._has_unread_body():
+            self._linger_close()
+        super().finish()
 
     def end_headers(self):
         self.send_header("X-Content-Type-Options", "nosniff")
