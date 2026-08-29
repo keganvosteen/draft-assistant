@@ -8,6 +8,7 @@ from unittest.mock import patch
 from draft_assistant.models import LeagueConfig, Player
 from draft_assistant.importers.free_sources import (
     _consensus_projection,
+    _source_weight,
     _fill_missing_byes,
     _merge_many,
     _merge_player,
@@ -112,6 +113,64 @@ class TestConsensusProjection(unittest.TestCase):
         ])
         self.assertEqual(out["rush_yd"], 1050.0)
         self.assertEqual(out["fumbles"], -2.0)
+
+
+class TestWeightedConsensus(unittest.TestCase):
+    """Sources are weighted by measured track record, per position.
+
+    calibrate_source_weights found ESPN worth a 2:1 tilt over FFToday at RB and
+    TE and nothing at QB or WR, so the weighting has to be position-aware and
+    has to leave unmeasured sources alone.
+    """
+
+    def test_unweighted_positions_are_a_plain_mean(self):
+        out = _consensus_projection(
+            [("espn", {"rec_yd": 1000.0}), ("fftoday", {"rec_yd": 900.0})], "WR")
+        self.assertEqual(out["rec_yd"], 950.0)
+
+    def test_weighted_position_pulls_toward_the_better_source(self):
+        # ESPN 2.0 vs FFToday 1.0 at RB: (1200*2 + 900*1) / 3
+        out = _consensus_projection(
+            [("espn", {"rush_yd": 1200.0}), ("fftoday", {"rush_yd": 900.0})], "RB")
+        self.assertEqual(out["rush_yd"], 1100.0)
+
+    def test_an_unknown_source_stays_neutral(self):
+        # A new scraper must not silently outrank a calibrated source.
+        self.assertEqual(_source_weight("some_new_site", "RB"), 1.0)
+        out = _consensus_projection(
+            [("some_new_site", {"rush_yd": 1000.0}), ("fftoday", {"rush_yd": 900.0})], "RB")
+        self.assertEqual(out["rush_yd"], 950.0)
+
+    def test_sleeper_is_neutral_because_it_cannot_be_graded(self):
+        self.assertEqual(_source_weight("sleeper_projections", "RB"), 1.0)
+
+    def test_missing_stat_is_an_abstention_not_a_zero(self):
+        # FFToday publishes no receiving line for some players; counting that as
+        # "0 catches" would drag the consensus down on a column it never had.
+        out = _consensus_projection(
+            [("espn", {"rush_yd": 1000.0, "rec": 40.0}), ("fftoday", {"rush_yd": 900.0})], "WR")
+        self.assertEqual(out["rec"], 40.0)
+        self.assertEqual(out["rush_yd"], 950.0)
+
+    def test_single_source_stands_alone(self):
+        out = _consensus_projection([("espn", {"rush_yd": 1000.0})], "RB")
+        self.assertEqual(out["rush_yd"], 1000.0)
+
+    def test_one_broken_source_cannot_dominate_four(self):
+        # Winsorization only kicks in once there are enough opinions to tell an
+        # outlier from a minority view.
+        samples = [
+            ("a", {"rec_yd": 1000.0}), ("b", {"rec_yd": 1050.0}),
+            ("c", {"rec_yd": 950.0}), ("d", {"rec_yd": 99999.0}),
+        ]
+        out = _consensus_projection(samples, "WR")
+        self.assertLess(out["rec_yd"], 1100.0)
+
+    def test_position_without_a_calibrated_tilt_is_unaffected(self):
+        # Same numbers, QB instead of RB: no tilt, so a plain mean.
+        out = _consensus_projection(
+            [("espn", {"pass_yd": 4400.0}), ("fftoday", {"pass_yd": 4000.0})], "QB")
+        self.assertEqual(out["pass_yd"], 4200.0)
 
 
 class TestMergeCollectsProjectionSamples(unittest.TestCase):
@@ -256,7 +315,7 @@ class TestSingleSourceWarning(unittest.TestCase):
         os.chdir(self._orig)
         shutil.rmtree(self._tmp, ignore_errors=True)
 
-    def _pull(self, fftoday_result, include_fftoday=True):
+    def _pull(self, fftoday_result, include_fftoday=True, espn_result=None):
         from draft_assistant.importers import free_sources as fs
         config = LeagueConfig(teams=12, roster={}, scoring={"rec": 1.0}, provider={})
         sleeper_meta = {"1": {"position": "RB", "full_name": "Star RB", "team": "DET"}}
@@ -267,7 +326,15 @@ class TestSingleSourceWarning(unittest.TestCase):
                 raise fftoday_result
             return fftoday_result
 
-        with patch.object(fs, "_fetch_sleeper_players", return_value=sleeper_meta), \
+        def espn(season, league_id, adp_format, *args, **kwargs):
+            # ESPN needs no league id now, so it runs on every pull and has to be
+            # stubbed here or these tests would reach the network.
+            if isinstance(espn_result, Exception):
+                raise espn_result
+            return espn_result or []
+
+        with patch.object(fs, "_fetch_espn_players", side_effect=espn), \
+             patch.object(fs, "_fetch_sleeper_players", return_value=sleeper_meta), \
              patch.object(fs, "_fetch_sleeper_projection_rows", return_value=sleeper_rows), \
              patch.object(fs, "_fetch_ffc_adp_players", side_effect=RuntimeError("offline")), \
              patch.object(fs, "_fetch_nflverse_players", side_effect=RuntimeError("offline")), \
@@ -281,7 +348,20 @@ class TestSingleSourceWarning(unittest.TestCase):
         self.assertEqual(len(result.warnings), 1)
         self.assertIn("single-source", result.warnings[0])
         self.assertIn("FFToday failed: QB: connection dropped", result.warnings[0])
-        self.assertIn("no ESPN league linked", result.warnings[0])
+
+    def test_espn_failure_is_named_as_a_cause(self):
+        result = self._pull(RuntimeError("QB: connection dropped"),
+                            espn_result=RuntimeError("502 from ESPN"))
+        self.assertIn("ESPN failed: 502 from ESPN", result.warnings[0])
+
+    def test_espn_alone_is_enough_for_a_consensus(self):
+        # ESPN no longer needs configuring, so losing FFToday is not on its own
+        # a single-source board any more.
+        espn = [Player(id="espn:1", name="Star RB", position="RB",
+                       projections={"rush_yd": 1200.0})]
+        result = self._pull(RuntimeError("FFToday down"), espn_result=espn)
+        self.assertEqual(result.consensus_players, 1)
+        self.assertEqual(result.warnings, [])
 
     def test_fftoday_skipped_yields_warning(self):
         result = self._pull([], include_fftoday=False)

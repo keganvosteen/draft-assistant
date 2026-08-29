@@ -10,7 +10,12 @@ Validity notes (read these — they shape what's a fair comparison):
                 numbers (it "projected" rookie Puka Nacua at 87 catches in 2023),
                 so it is flagged CONTAMINATED: shown for reference only, NOT a
                 fair preseason test (it will look unfairly good).
-  * ESPN      — needs a league id; not included here.
+  * ESPN      — preseason projections read through ESPN's stock league default,
+                so no league id and every season back to 2019 (2023 excepted:
+                ESPN serves a stub there, ~86 players against ~430). Treated as
+                clean: it projected Jonathon Brooks at 129 points in the season
+                he tore an ACL and scored 6, and it loses to FFToday at TE —
+                neither of which a source revised in-season would do.
 Baselines computed from nflverse actuals (clean), as sanity benchmarks any real
 projection should beat:
   * prior_year — last season's actual points ("just use last year").
@@ -36,6 +41,7 @@ import pandas as pd
 
 from .importers.free_sources import (
     _app_stats_from_nflverse,
+    _fetch_espn_players,
     _fetch_nflverse_players,
     _fetch_nflverse_stats_rows,
     _fetch_sleeper_players,
@@ -110,6 +116,41 @@ def fftoday_proj(season: int, scoring: dict) -> Dict[str, float]:
             for p in fetch_all_fftoday(season)
         }
     return _cache(f"fftoday_{season}_{_scoring_tag(scoring)}.json", build)
+
+
+#: ESPN's 2023 projections are a stub -- 86 players against ~430 in every other
+#: season, through both a real league and the league default. Calibrating on it
+#: would weight a position off a couple of dozen players.
+ESPN_SPARSE_SEASONS = {2023}
+
+
+def espn_proj(season: int, scoring: dict) -> Dict[str, float]:
+    """ESPN's preseason projections, read through their stock league default.
+
+    Clean, unlike Sleeper's: ESPN projected Jonathon Brooks at 129 points in
+    2024, the season he tore an ACL and scored 6, and it loses to FFToday at TE
+    -- neither of which a source revised in-season would do. Its rank
+    correlations sit in the same 0.34-0.75 band as FFToday, nowhere near the 0.93
+    that marks Sleeper's archive as contaminated.
+    """
+    def build():
+        return {
+            _nkey(p.name, p.position): round(fantasy_points(p.projections, scoring), 2)
+            for p in _fetch_espn_players(season, None, "half-ppr")
+            if p.position in POSITIONS
+        }
+    return _cache(f"espn_{season}_{_scoring_tag(scoring)}.json", build)
+
+
+def espn_stats(season: int) -> Dict[str, list]:
+    """{nkey: [pos, stat_dict]} — the stat-line form, for weight calibration."""
+    def build():
+        return {
+            _nkey(p.name, p.position): [p.position, p.projections]
+            for p in _fetch_espn_players(season, None, "half-ppr")
+            if p.position in POSITIONS
+        }
+    return _cache(f"espnstats_{season}.json", build)
 
 
 def sleeper_proj(season: int, scoring: dict, players_map: dict) -> Dict[str, float]:
@@ -196,6 +237,11 @@ def evaluate(seasons: List[int], scoring: dict, include_sleeper: bool = True) ->
             "prior_year": _pts_only(actuals(season - 1, scoring)),
             "trend_3yr": trend_3yr(season, scoring),
         }
+        if season not in ESPN_SPARSE_SEASONS:
+            try:
+                srcs["espn"] = espn_proj(season, scoring)
+            except Exception as exc:  # pragma: no cover - network
+                print(f"  espn {season}: unavailable ({exc})")
         srcs.update({k: v for k, v in archived_proj(season, scoring).items() if v})
         if include_sleeper:
             srcs["sleeper*"] = sleeper_proj(season, scoring, players_map)
@@ -358,6 +404,82 @@ def calibrate_blend(seasons: List[int]) -> Dict[str, float]:
         validation_df = pd.DataFrame(validation)
         print("=== leave-one-season-out validation ===")
         print(validation_df.groupby("pos")[["chosen_w", "spearman"]].mean().to_string())
+        print()
+    return best
+
+
+def calibrate_source_weights(seasons: List[int]) -> Dict[str, float]:
+    """Sweep ESPN's share of the projection consensus, per position.
+
+    consensus_stat = w*ESPN + (1-w)*FFToday  (w=1 -> all ESPN, 0 -> all FFToday).
+    Blends STAT LINES and scores across all three scorings, exactly like
+    :func:`calibrate_blend`, so the weights stay league-rule-agnostic. Only
+    players both sources projected are used: this measures whose number to trust
+    when they disagree, not who covers more players.
+
+    Returns {pos: best_w}. Read it beside the leave-one-season-out table -- a
+    position where the two sources are tied should be left at 0.5 rather than
+    handed whichever way the mean happened to fall.
+    """
+    grid = [i / 10 for i in range(11)]
+    usable = [s for s in seasons if s not in ESPN_SPARSE_SEASONS]
+    rows: List[dict] = []
+    for season in usable:
+        es, ff, act = espn_stats(season), fftoday_stats(season), actual_stats(season)
+        for pos in POSITIONS:
+            keys = [k for k, (p, _s) in ff.items()
+                    if p == pos and k in es and k in act]
+            if len(keys) < 8:
+                continue
+            for w in grid:
+                for sc_name, sc in SCORINGS.items():
+                    proj_pts, act_pts = [], []
+                    for k in keys:
+                        e, f = es[k][1], ff[k][1]
+                        stats = set(e) | set(f)
+                        blended = {s: w * e.get(s, 0.0) + (1 - w) * f.get(s, 0.0)
+                                   for s in stats}
+                        proj_pts.append(fantasy_points(blended, sc))
+                        act_pts.append(fantasy_points(act[k][1], sc))
+                    rows.append({
+                        "season": season, "pos": pos, "scoring": sc_name,
+                        "w": w, "spearman": _spearman(proj_pts, act_pts),
+                    })
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return {}
+    table = df.groupby(["pos", "w"])["spearman"].mean().unstack("w")
+    print("=== source calibration: mean Spearman by ESPN weight w (per position) ===")
+    print(f"seasons: {', '.join(str(s) for s in usable)}")
+    print(table.to_string())
+    best = {pos: float(table.loc[pos].idxmax()) for pos in table.index}
+    print(f"\nOptimal ESPN weight w per position (rest = FFToday):\n  {best}\n")
+
+    # Same discipline as calibrate_blend: choose w on every other season, then
+    # score only the held-out one. A weight that only wins in-sample is noise.
+    validation: List[dict] = []
+    unique_seasons = sorted(df["season"].unique())
+    if len(unique_seasons) >= 2:
+        for held_out in unique_seasons:
+            training = df[df["season"] != held_out]
+            held = df[df["season"] == held_out]
+            for pos in sorted(df["pos"].unique()):
+                train_pos = training[training["pos"] == pos]
+                if train_pos.empty:
+                    continue
+                chosen = float(train_pos.groupby("w")["spearman"].mean().idxmax())
+                picked = held[(held["pos"] == pos) & (held["w"] == chosen)]["spearman"].mean()
+                even = held[(held["pos"] == pos) & (held["w"] == 0.5)]["spearman"].mean()
+                validation.append({
+                    "season": held_out, "pos": pos, "chosen_w": chosen,
+                    "spearman": picked, "vs_even": picked - even,
+                })
+    if validation:
+        vdf = pd.DataFrame(validation)
+        print("=== leave-one-season-out validation (vs_even > 0 means weighting beat 50/50) ===")
+        print(vdf.groupby("pos")[["chosen_w", "spearman", "vs_even"]].mean().to_string())
+        print("\nper-season held-out gain over 50/50:")
+        print(vdf.pivot_table(index="season", columns="pos", values="vs_even").to_string())
         print()
     return best
 
