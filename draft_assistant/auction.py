@@ -102,19 +102,28 @@ class AuctionTracker:
         players: List[Player],
         my_roster: Dict[str, List[Player]],
     ) -> List[Tuple[Player, float, float]]:
-        """Return players sorted by value minus estimated cost.
+        """Return players sorted by value minus estimated market cost.
 
         Returns: [(player, dollar_value, surplus)]
-        where surplus = dollar_value - adp-based estimated price.
+
+        Market price is estimated from the dollar-value curve at the
+        player's ADP rank: the room tends to pay roughly what the Nth-best
+        player is worth for the player drafted Nth. ADP is a draft
+        position, not a dollar amount, so it can't be subtracted directly.
         """
         values = compute_dollar_values(self.config, players, self.budget_per_team)
+        price_curve = sorted(values.values(), reverse=True)
+
+        def _market_price(p: Player) -> float:
+            if not p.adp or p.adp <= 0 or not price_curve:
+                return values.get(p.key(), 1.0)
+            idx = min(max(int(round(p.adp)) - 1, 0), len(price_curve) - 1)
+            return price_curve[idx]
 
         results: List[Tuple[Player, float, float]] = []
         for p in players:
             val = values.get(p.key(), 1.0)
-            # Use ADP as a rough proxy for market price if available
-            est_price = p.adp if p.adp and p.adp > 0 else val
-            surplus = val - est_price
+            surplus = round(val - _market_price(p), 1)
             results.append((p, val, surplus))
 
         results.sort(key=lambda t: t[2], reverse=True)

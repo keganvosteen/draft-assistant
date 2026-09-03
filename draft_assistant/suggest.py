@@ -127,7 +127,11 @@ def suggest_players(
             p.position, needs, config, my_roster, total_picks, total_rounds,
         )
         bye_pen = _bye_week_penalty(p, my_roster)
-        score = round(item.score * need_mult - bye_pen, 2)
+        # Multiplying a negative base by a <1 "filled position" multiplier
+        # would *promote* unneeded players; divide instead so the need
+        # signal points the same direction on both sides of zero.
+        scaled = item.score * need_mult if item.score >= 0 else item.score / need_mult
+        score = round(scaled - bye_pen, 2)
         ranked.append((p, item.points, item.vor, score))
 
     ranked.sort(key=lambda t: (t[3], t[2], t[1]), reverse=True)

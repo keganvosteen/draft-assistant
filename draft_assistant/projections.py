@@ -30,12 +30,19 @@ def compute_points(
     return pts
 
 
-def _allocate_flex_baseline(points_by_pos: Dict[str, List[Tuple[str, float]]], flex_slots: int) -> Dict[str, int]:
-    # Merge top candidates across eligible positions and allocate flex to those with
-    # highest points, then count how many per position.
+def _allocate_flex_baseline(
+    points_by_pos: Dict[str, List[Tuple[str, float]]],
+    flex_slots: int,
+    starters: Dict[str, int],
+) -> Dict[str, int]:
+    # FLEX slots are filled by the best players *after* each position's
+    # dedicated starters are taken, so pool only the post-starter tail —
+    # pooling everyone just re-selects the elites already counted as
+    # starters and skews replacement level.
     pool: List[Tuple[str, float, str]] = []  # (key, pts, pos)
     for pos in FLEX_ELIGIBLE:
-        for key, pts in points_by_pos.get(pos, []):
+        cutoff = starters.get(pos, 0)
+        for key, pts in points_by_pos.get(pos, [])[cutoff:]:
             pool.append((key, pts, pos))
     pool.sort(key=lambda t: t[1], reverse=True)
     alloc: Dict[str, int] = {"RB": 0, "WR": 0, "TE": 0}
@@ -68,17 +75,20 @@ def replacement_levels(
 
     # Distribute FLEX among eligible positions
     flex_slots = teams * int(roster.get("FLEX", 0))
-    flex_alloc = _allocate_flex_baseline(points_by_pos, flex_slots)
+    flex_alloc = _allocate_flex_baseline(points_by_pos, flex_slots, starters)
     starters["RB"] += flex_alloc.get("RB", 0)
     starters["WR"] += flex_alloc.get("WR", 0)
     starters["TE"] += flex_alloc.get("TE", 0)
 
     repl: Dict[str, float] = {}
     for pos, count in starters.items():
-        if count <= 0:
-            repl[pos] = 0.0
-            continue
         lst = points_by_pos.get(pos, [])
+        if count <= 0:
+            # Position isn't startable in this league: replacement is the
+            # best player at the position, so VOR <= 0 (a replacement of
+            # 0.0 would hand every K/DST their full points as VOR).
+            repl[pos] = lst[0][1] if lst else 0.0
+            continue
         idx = min(max(count - 1, 0), max(len(lst) - 1, 0))
         repl[pos] = lst[idx][1] if lst else 0.0
     return repl

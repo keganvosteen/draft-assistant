@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import traceback
+import uuid
 import webbrowser
 from functools import partial
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 
@@ -43,12 +45,21 @@ BYE_WEEKS = {
 # Tracks background tasks (pull-free-data, collect-all, etc.)
 _tasks: dict[str, dict] = {}
 _task_lock = threading.Lock()
+MAX_FINISHED_TASKS = 20
+MAX_BODY_BYTES = 5 * 1024 * 1024
+
+# Cache for /api/players keyed on the projections file's mtime (only valid
+# for the local_json provider — network providers bypass it).
+_players_cache: dict = {"key": None, "players": None, "config": None}
+_players_cache_lock = threading.Lock()
 
 
 def _player_to_js(player, config: LeagueConfig) -> dict:
     """Convert a Python Player to the JS frontend's expected format."""
     std_pts = fantasy_points(player.projections, STANDARD_SCORING)
-    rec_bonus = float(player.projections.get("rec", 0)) * 0.5
+    # Full-PPR reception points. The frontend applies the league's per-
+    # reception rate itself (ppr = std + rec, half = std + rec*0.5).
+    rec_bonus = float(player.projections.get("rec", 0)) * 1.0
     adp = player.adp if player.adp else 999
     bye = player.bye_week or BYE_WEEKS.get(player.team or "", None)
 
@@ -79,6 +90,19 @@ def _player_to_js(player, config: LeagueConfig) -> dict:
 def _load_players(profile: str):
     paths = ensure_profile(profile)
     config = load_profile_config(paths)
+
+    is_file_provider = (config.provider or {}).get("type", "local_json") == "local_json"
+    cache_key = None
+    if is_file_provider:
+        try:
+            cache_key = (paths.projections_path, os.path.getmtime(paths.projections_path))
+        except OSError:
+            cache_key = None
+        if cache_key is not None:
+            with _players_cache_lock:
+                if _players_cache["key"] == cache_key:
+                    return _players_cache["players"], _players_cache["config"]
+
     provider = build_provider(config.provider)
     players = provider.fetch_players()
     if not players:
@@ -86,6 +110,15 @@ def _load_players(profile: str):
             save_players(sample_players(), paths.projections_path)
         provider = build_provider(config.provider)
         players = provider.fetch_players()
+
+    if is_file_provider:
+        try:
+            cache_key = (paths.projections_path, os.path.getmtime(paths.projections_path))
+        except OSError:
+            cache_key = None
+        if cache_key is not None:
+            with _players_cache_lock:
+                _players_cache.update(key=cache_key, players=players, config=config)
     return players, config
 
 
@@ -98,11 +131,17 @@ def _run_task(task_id: str, fn, *args, **kwargs):
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = result
         except Exception as exc:
+            # Full traceback to the server log only; clients get the message.
+            print(f"[task {task_id}] {traceback.format_exc()}", file=sys.stderr)
             with _task_lock:
                 _tasks[task_id]["status"] = "error"
-                _tasks[task_id]["error"] = f"{exc}\n{traceback.format_exc()}"
+                _tasks[task_id]["error"] = str(exc)
 
     with _task_lock:
+        finished = [k for k, t in _tasks.items() if t["status"] != "running"]
+        if len(finished) > MAX_FINISHED_TASKS:
+            for k in finished[:-MAX_FINISHED_TASKS]:
+                del _tasks[k]
         _tasks[task_id] = {"status": "running", "result": None, "error": None}
     threading.Thread(target=_worker, daemon=True).start()
 
@@ -116,7 +155,30 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
 
     # ── routing ───────────────────────────────────────────────────────────
 
+    # ── request origin validation ─────────────────────────────────────────
+    # The server binds 127.0.0.1, but any website open in the user's browser
+    # can still send requests to localhost. Reject anything that doesn't
+    # come from our own origin (blocks DNS rebinding + cross-site calls).
+
+    def _request_allowed(self) -> bool:
+        host = (self.headers.get("Host") or "").split(":")[0].lower()
+        if host not in ("127.0.0.1", "localhost", "[::1]", "::1"):
+            return False
+        origin = self.headers.get("Origin")
+        if origin:
+            try:
+                from urllib.parse import urlparse
+                o_host = (urlparse(origin).hostname or "").lower()
+            except ValueError:
+                return False
+            if o_host not in ("127.0.0.1", "localhost", "::1"):
+                return False
+        return True
+
     def do_GET(self):
+        if not self._request_allowed():
+            self._send_json({"error": "forbidden"}, 403)
+            return
         if self.path == "/api/players":
             self._handle_players()
         elif self.path == "/api/config":
@@ -129,6 +191,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             super().do_GET()
 
     def do_POST(self):
+        if not self._request_allowed():
+            self._send_json({"error": "forbidden"}, 403)
+            return
         if self.path == "/api/state":
             self._handle_save_state()
         elif self.path == "/api/pull-free-data":
@@ -148,17 +213,18 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         else:
             self._send_json({"error": "not found"}, 404)
 
+    # The UI is served same-origin from this server: no CORS headers needed,
+    # and cross-origin preflights should fail.
     def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_response(403)
         self.end_headers()
 
     # ── helpers ────────────────────────────────────────────────────────────
 
     def _read_body(self) -> dict:
         length = int(self.headers.get("Content-Length", 0))
+        if length > MAX_BODY_BYTES:
+            raise ValueError("request body too large")
         if length:
             return json.loads(self.rfile.read(length))
         return {}
@@ -168,7 +234,6 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
@@ -243,7 +308,12 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         try:
             body = self._read_body()
             profile = self.profile
-            task_id = f"pull-free-data-{threading.get_ident()}-{id(body)}"
+            task_id = f"pull-free-data-{uuid.uuid4().hex}"
+
+            espn_id = body.get("espnLeagueId")
+            if espn_id is not None and not str(espn_id).isdigit():
+                self._send_json({"error": "espnLeagueId must be numeric"}, 400)
+                return
 
             def _do_pull():
                 from ..importers.free_sources import pull_free_data as _pull
@@ -276,7 +346,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         try:
             body = self._read_body()
             profile = self.profile
-            task_id = f"collect-all-{threading.get_ident()}-{id(body)}"
+            task_id = f"collect-all-{uuid.uuid4().hex}"
 
             def _do_collect():
                 from ..collectors.combined import collect_all
@@ -376,6 +446,15 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             players_map = body.get("playersMap", {})
             import csv
             import io
+
+            def _safe_cell(val):
+                # Neutralize spreadsheet formula injection (=, +, -, @, tab/CR
+                # prefixes) — player names come from external data sources.
+                s = str(val)
+                if s and s[0] in "=+-@\t\r":
+                    return "'" + s
+                return s
+
             buf = io.StringIO()
             w = csv.writer(buf)
             w.writerow(["pick", "round", "pick_in_round", "team", "player", "position"])
@@ -385,8 +464,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 pick_in_rd = (pick_num - 1) % num_teams + 1
                 pid = pk.get("playerId", "")
                 p = players_map.get(pid, {})
-                w.writerow([pick_num, rd, pick_in_rd, pk.get("teamNum", ""),
-                            p.get("name", pid), p.get("pos", "")])
+                w.writerow([pick_num, rd, pick_in_rd, _safe_cell(pk.get("teamNum", "")),
+                            _safe_cell(p.get("name", pid)), _safe_cell(p.get("pos", ""))])
             csv_str = buf.getvalue()
             body_bytes = csv_str.encode("utf-8")
             self.send_response(200)
@@ -408,7 +487,8 @@ def run_server(
     open_browser: bool = True,
 ) -> None:
     handler = partial(DraftAPIHandler, profile=profile)
-    server = HTTPServer(("127.0.0.1", port), handler)
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server.daemon_threads = True
     url = f"http://127.0.0.1:{port}"
     print(f"Draft Assistant web UI: {url}")
     print("Press Ctrl+C to stop.")

@@ -141,23 +141,29 @@ def collect_all(
         nfl_p = nfl_by_key.get(key)
         slp_p = sleeper_by_key.get(key)
 
-        # Try fuzzy match if exact key doesn't match
+        # Fuzzy-match when the exact normalized key misses (nicknames,
+        # suffixes, transliterations). The old loops here compared the same
+        # normalization the dict keys were built from, so they could never
+        # match anything the exact lookup hadn't already found.
         if nfl_p and not slp_p:
             name, pos = key.rsplit("|", 1)
-            for skey, sp in sleeper_by_key.items():
-                sname, spos = skey.rsplit("|", 1)
-                if spos == pos and _normalize_name(sp.name) == name:
-                    slp_p = sp
+            sleeper_names = [
+                k.rsplit("|", 1)[0] for k in sleeper_by_key
+                if k.endswith(f"|{pos}") and k not in matched_sleeper_keys
+            ]
+            hit = best_match(name, sleeper_names, max_distance=2)
+            if hit:
+                skey = f"{hit}|{pos}"
+                slp_p = sleeper_by_key.get(skey)
+                if slp_p:
                     matched_sleeper_keys.add(skey)
-                    break
 
         if slp_p and not nfl_p:
             name, pos = key.rsplit("|", 1)
-            for nkey, np in nfl_by_key.items():
-                nname, npos = nkey.rsplit("|", 1)
-                if npos == pos and _normalize_name(np.name) == name:
-                    nfl_p = np
-                    break
+            nfl_names = [k.rsplit("|", 1)[0] for k in nfl_by_key if k.endswith(f"|{pos}")]
+            hit = best_match(name, nfl_names, max_distance=2)
+            if hit:
+                nfl_p = nfl_by_key.get(f"{hit}|{pos}")
 
         # Merge: nflverse base + Sleeper projections + ADP
         if nfl_p:

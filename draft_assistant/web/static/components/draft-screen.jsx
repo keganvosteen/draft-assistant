@@ -60,8 +60,8 @@ function generateRoundHint(round, myPlayers, topAvailable, league) {
 
   if (round <= 2) {
     if (top && (top.pos === 'RB' || top.pos === 'WR'))
-      return `Round ${round}: lock in elite ${top.pos} value. ${top.name} has the highest VORP — don't pass.`;
-    return `Round ${round}: prioritize the highest VORP available. RB/WR depth tier is what wins leagues.`;
+      return `Round ${round}: lock in elite ${top.pos} value. ${top.name} tops the board by Draft Score — don't pass.`;
+    return `Round ${round}: prioritize the highest Draft Score available. RB/WR depth tier is what wins leagues.`;
   }
   if (round <= 4) {
     const rb = counts.RB || 0, wr = counts.WR || 0;
@@ -479,19 +479,22 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
     {value:'adp',        label:'ADP'},
   ];
 
-  const filtered = players
-    .filter(p => showDrafted || !p.drafted)
-    .filter(p => posFilter === 'ALL' || p.pos === posFilter)
-    .filter(p => !search ||
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.nflTeam.toLowerCase().includes(search.toLowerCase())
-    )
-    .sort((a,b) => {
-      if (sortBy === 'adp')      return a.adp - b.adp;
-      if (sortBy === 'projPts')  return b.projPts - a.projPts;
-      if (sortBy === 'vorp')     return b.vorp - a.vorp;
-      return b.draftScore - a.draftScore;
-    });
+  const filtered = React.useMemo(() => {
+    const q = search.toLowerCase();
+    return players
+      .filter(p => showDrafted || !p.drafted)
+      .filter(p => posFilter === 'ALL' || p.pos === posFilter)
+      .filter(p => !q ||
+        p.name.toLowerCase().includes(q) ||
+        p.nflTeam.toLowerCase().includes(q)
+      )
+      .sort((a,b) => {
+        if (sortBy === 'adp')      return a.adp - b.adp;
+        if (sortBy === 'projPts')  return b.projPts - a.projPts;
+        if (sortBy === 'vorp')     return b.vorp - a.vorp;
+        return b.draftScore - a.draftScore;
+      });
+  }, [players, showDrafted, posFilter, search, sortBy]);
 
   const GRID = '30px 1fr 52px 44px 44px 54px 54px 66px 78px';
 
@@ -592,7 +595,9 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
                   </div>
                 )}
                 {(!isHov || p.draftScore == null) && (
-                  <div style={{fontSize:10, color:T.mutedLight}}>ADP {p.adp}</div>
+                  <div style={{fontSize:10, color:T.mutedLight}}>
+                    ADP {p.adp >= 900 ? '—' : p.adp}
+                  </div>
                 )}
               </div>
 
@@ -716,13 +721,16 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   const [saveMsg,        setSaveMsg]        = React.useState(null);
 
   const tweakDefaults = typeof TWEAK_DEFAULTS !== 'undefined' ? TWEAK_DEFAULTS : {
-    scarcityWeight:0.60, nextPickWeight:0.25, vorWeight:0.20,
-    adpSigma:18, byePenalty:1.0, benchRBWR:0.18, benchTE:0.12, benchQB:0.08,
+    scarcityWeight:0.60, adpSigma:18, byePenalty:1.0,
+    benchRBWR:0.18, benchTE:0.12, benchQB:0.08,
   };
   const [tweaks, setTweaks] = useTweaks(tweakDefaults);
 
   const draftedIds = React.useMemo(() => new Set(picks.map(p=>p.playerId)), [picks]);
   const { round, pickInRound } = getCurrentRoundPick(picks.length, league.numTeams);
+
+  // A hint is written for a specific round — don't let it linger into the next.
+  React.useEffect(() => { setHint(''); }, [round]);
   const currentTeam = getSnakeTeam(picks.length + 1, league.numTeams);
   const isMyPick    = currentTeam === league.draftPosition;
 
@@ -758,9 +766,10 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   const oppData = React.useMemo(() => {
     if (!window.OpponentModel) return null;
     return window.OpponentModel.analyze(
-      available, picks, league, league.teamModes || {}, playersById
+      available, picks, league, league.teamModes || {}, playersById,
+      { sigma: tweaks.adpSigma }
     );
-  }, [available, picks, league, playersById]);
+  }, [available, picks, league, playersById, tweaks.adpSigma]);
 
   const setTeamMode = (teamNum, mode) => {
     onUpdateLeague({ teamModes: { ...(league.teamModes || {}), [teamNum]: mode } });
@@ -812,6 +821,12 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   const handleExportLog = () => {
     const playerMap = {};
     allPlayers.forEach(p => { playerMap[p.id] = { name: p.name, pos: p.pos }; });
+    // Player names come from external sources — strip commas and neutralize
+    // leading formula characters so the CSV can't smuggle spreadsheet code.
+    const safeCell = v => {
+      const s = String(v).replace(/,/g, ' ');
+      return /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
+    };
     const blob = new Blob([
       'pick,round,pick_in_round,team,player,position\n' +
       picks.map((pk, i) => {
@@ -819,7 +834,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
         const rd = Math.ceil(n / league.numTeams);
         const pip = ((n - 1) % league.numTeams) + 1;
         const pl = playerMap[pk.playerId] || {};
-        return `${n},${rd},${pip},${pk.teamNum},${(pl.name||pk.playerId).replace(/,/g,' ')},${pl.pos||''}`;
+        return `${n},${rd},${pip},${pk.teamNum},${safeCell(pl.name||pk.playerId)},${safeCell(pl.pos||'')}`;
       }).join('\n')
     ], { type: 'text/csv' });
     const a = document.createElement('a');
@@ -905,7 +920,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       <TweaksPanel title="Draft Tweaks">
         <TweakSection title="DRAFT SCORE">
           <TweakSlider id="scarcityWeight" label="Scarcity Weight" min={0} max={1} step={0.05} tweaks={tweaks} setTweaks={setTweaks} />
-          <TweakSlider id="adpSigma" label="ADP Noise σ" min={5} max={35} step={1} tweaks={tweaks} setTweaks={setTweaks} />
+          <TweakSlider id="adpSigma" label="Opponent Unpredictability" min={5} max={35} step={1} tweaks={tweaks} setTweaks={setTweaks} />
         </TweakSection>
         <TweakSection title="BYE PENALTY">
           <TweakSlider id="byePenalty" label="Per shared bye" min={0} max={6} step={0.5} tweaks={tweaks} setTweaks={setTweaks} />

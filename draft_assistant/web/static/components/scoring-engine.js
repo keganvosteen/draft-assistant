@@ -1,5 +1,7 @@
 // Draft Scoring Engine
 // Draft Score = (VORP * 2.5 + urgency * scarcityWeight + adpAdj) * needMult * slotMult - byePenalty
+// (negative bases divide by the multipliers instead, so a low-need player
+//  is always ranked below a high-need one regardless of sign)
 //
 // 1. VORP is the primary signal — encodes position scarcity vs replacement level.
 // 2. Urgency = dropoff to next-best at same position * P(player gone at next pick).
@@ -25,12 +27,15 @@
     return round % 2 === 1 ? pos : numTeams - pos + 1;
   }
 
+  // Picks until my NEXT turn. When it's currently my pick, this measures
+  // the gap to my following pick — "will he make it back to me?" is always
+  // a question about the next turn, not the current one.
   function picksToMyTurn(totalPicksMade, league) {
     var numTeams = league.numTeams;
     var draftPosition = league.draftPosition;
     var nextPick = totalPicksMade + 1;
-    if (snakeTeam(nextPick, numTeams) === draftPosition) return 0;
-    for (var i = 1; i <= numTeams * 2 + 2; i++) {
+    if (snakeTeam(nextPick, numTeams) === draftPosition) nextPick += 1;
+    for (var i = 0; i <= numTeams * 2 + 2; i++) {
       if (snakeTeam(nextPick + i, numTeams) === draftPosition) return i;
     }
     return numTeams;
@@ -81,8 +86,13 @@
     });
     var flexOpen = Math.max(0, flexSlots - flexUsed);
 
-    if (player.pos === 'K'   && round <= 11) return 0.20;
-    if (player.pos === 'DST' && round <= 11) return 0.25;
+    // Suppress K/DST until the last 2 rounds of the draft (matches the
+    // round-hint advice), not a hardcoded round number.
+    var totalRounds = 0;
+    Object.keys(rosterSlots).forEach(function(k) { totalRounds += rosterSlots[k] || 0; });
+    var kdstRelease = totalRounds >= 4 ? totalRounds - 2 : 11;
+    if (player.pos === 'K'   && round <= kdstRelease) return 0.20;
+    if (player.pos === 'DST' && round <= kdstRelease) return 0.25;
     if (isOneQB && player.pos === 'QB') {
       if (cnt >= 1) return round <= 9 ? 0.30 : 0.55;  // backup QB
       if (round <= 4) return 0.55;   // don't reach early
@@ -113,14 +123,13 @@
     return same * penaltyPer;
   }
 
+  // Positive when the player normally goes EARLIER than the current pick
+  // (market consensus says he's a value here); negative when taking him
+  // now would be a reach. Scaled to matter next to vorp*2.5 (~50-300).
   function computeADPAdj(player, pickNum) {
     if (player.adp >= 900) return 0; // 999 = ADP unknown, no signal
-    var diff = player.adp - pickNum;
-    if (diff >  15) return  0.8;
-    if (diff >   5) return  0.3;
-    if (diff < -15) return -1.0;
-    if (diff <  -5) return -0.3;
-    return 0;
+    var value = pickNum - player.adp; // >0 = falling to you
+    return Math.max(-6, Math.min(12, value * 0.3));
   }
 
   // survivalMap (optional): {playerId: P(still available at my next pick)}
@@ -151,14 +160,20 @@
 
       var st      = getSlotType(player, myPlayers, league.rosterSlots);
       var benchDisc = { RB: w.benchRBWR, WR: w.benchRBWR, TE: w.benchTE, QB: w.benchQB, K: 0, DST: 0 };
-      var slotMult  = st === 'starter' ? 1.0 : st === 'flex' ? 0.90 : (benchDisc[player.pos] || 0.08);
+      var bd        = benchDisc[player.pos];
+      var slotMult  = st === 'starter' ? 1.0 : st === 'flex' ? 0.90 : (bd != null ? bd : 0.08);
 
       var adj    = computeADPAdj(player, pickNum);
       var byePen = computeByePenalty(player, myPlayers, w.byePenalty);
       var nm     = computeNeedMult(player, myPlayers, league, pickNum);
 
+      // For negative bases the multipliers must push the other way:
+      // base*0.18 would make an unneeded bench player look BETTER than a
+      // needed starter once VORP goes negative (late rounds). Dividing
+      // keeps "low multiplier = less attractive" on both sides of zero.
+      var mult       = Math.max(0.05, nm * slotMult);
       var base       = vorp * 2.5 + urgency * w.scarcityWeight + adj;
-      var draftScore = base * nm * slotMult - byePen;
+      var draftScore = (base >= 0 ? base * mult : base / mult) - byePen;
 
       return Object.assign({}, player, {
         draftScore:    Math.round(draftScore * 10) / 10,

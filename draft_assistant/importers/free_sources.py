@@ -176,6 +176,23 @@ def pull_free_data(
     else:
         reports.append(SourceReport("ESPN Fantasy API", 0, ok=False, detail="skipped; pass --espn-league-id for a public league"))
 
+    # Promote merged metadata to first-class Player fields so the aging /
+    # confidence models actually see them (they read Player.age, not
+    # metadata["age"]).
+    for p in merged.values():
+        if p.age is None:
+            try:
+                age = p.metadata.get("age")
+                p.age = int(age) if age is not None else None
+            except (TypeError, ValueError):
+                pass
+        if p.experience is None:
+            try:
+                exp = p.metadata.get("years_exp") or p.metadata.get("years_of_experience")
+                p.experience = int(exp) if exp is not None else None
+            except (TypeError, ValueError):
+                pass
+
     players = sorted(
         merged.values(),
         key=lambda p: (
@@ -397,22 +414,28 @@ def _fetch_espn_players(season: int, league_id: str, adp_format: str) -> List[Pl
         if position not in {"QB", "RB", "WR", "TE", "K", "DST"}:
             continue
         stats = _espn_projection_stats(player)
-        ratings = row.get("ratings") or player.get("ratings") or {}
-        adp = _valid_adp(_nested_get(ratings, [adp_format, "positionalRanking"]) or _nested_get(row, ["draftRanksByRankType", "STANDARD", "rank"]))
+        # ESPN's draftRanksByRankType is a *rank*, not an ADP, and the
+        # ratings lookup keys are numeric — neither is an ADP board.
+        # Keep the rank as metadata; never let it pose as ADP.
+        espn_rank = _valid_adp(_nested_get(row, ["draftRanksByRankType", "STANDARD", "rank"]))
         players.append(Player(
             id=f"espn:{player.get('id') or player.get('fullName')}",
             name=player.get("fullName") or player.get("name") or "",
             position=position,
             team=_espn_team(player.get("proTeamId")),
-            adp=adp,
+            adp=None,
             projections=stats,
             metadata=_clean_metadata({
                 "espn_id": player.get("id"),
+                "espn_rank": espn_rank,
                 "injury_status": player.get("injuryStatus"),
                 "sources": ["espn"],
             }),
         ))
-    return [p for p in players if p.name and (_has_projection_value(p.projections) or p.adp is not None)]
+    return [
+        p for p in players
+        if p.name and (_has_projection_value(p.projections) or p.metadata.get("espn_rank") is not None)
+    ]
 
 
 def _walk_espn_players(data: object) -> Iterable[dict]:
@@ -523,7 +546,10 @@ def _merge_player(base: Player, incoming: Player, source: str) -> None:
         base.team = incoming.team
     if not base.bye_week and incoming.bye_week:
         base.bye_week = incoming.bye_week
-    if incoming.adp is not None and (base.adp is None or incoming.adp < base.adp):
+    # First source with an ADP wins (sources merge in priority order:
+    # Sleeper, then FFC — both real format-specific ADP boards). Taking the
+    # minimum across sources would systematically drag everyone earlier.
+    if base.adp is None and incoming.adp is not None:
         base.adp = incoming.adp
     if not _has_projection_value(base.projections) and _has_projection_value(incoming.projections):
         base.projections.update(incoming.projections)

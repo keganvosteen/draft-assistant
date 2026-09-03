@@ -6,14 +6,22 @@ from typing import List
 from .models import DraftState, Player
 
 
+def _atomic_write_json(data, path: str) -> None:
+    """Write JSON via a temp file + rename so readers never see a partial
+    file (the web server reads these files from concurrent threads)."""
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
+
+
 def save_state(state: DraftState, path: str = "draft_state.json") -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({
-            "my_team_name": state.my_team_name,
-            "league_teams": state.league_teams,
-            "picks": state.picks,
-            "my_picks": state.my_picks,
-        }, f, indent=2)
+    _atomic_write_json({
+        "my_team_name": state.my_team_name,
+        "league_teams": state.league_teams,
+        "picks": state.picks,
+        "my_picks": state.my_picks,
+    }, path)
 
 
 def load_state(path: str = "draft_state.json") -> DraftState:
@@ -85,12 +93,7 @@ def _player_from_dict(raw: dict) -> Player:
 
 def save_players(players: List[Player], path: str = "data/projections.json") -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(
-            {"players": [_player_to_dict(p) for p in players]},
-            f,
-            indent=2,
-        )
+    _atomic_write_json({"players": [_player_to_dict(p) for p in players]}, path)
 
 
 def load_players(path: str = "data/projections.json") -> List[Player]:

@@ -25,11 +25,13 @@ const T = {
 };
 
 // ─── UTILITIES ────────────────────────────────────────────────────────────────
+// recPts = full-PPR reception points (1/rec) from the server; scale by the
+// league's actual per-reception rate here.
 function calcProjection(player, scoringType, customRec) {
   if (scoringType === 'standard') return player.stdPts;
   if (scoringType === 'ppr')      return player.stdPts + player.recPts;
-  if (scoringType === 'half-ppr') return Math.round(player.stdPts + player.recPts * 0.5);
-  if (scoringType === 'custom')   return Math.round(player.stdPts + player.recPts * (customRec || 0));
+  if (scoringType === 'half-ppr') return player.stdPts + player.recPts * 0.5;
+  if (scoringType === 'custom')   return player.stdPts + player.recPts * (customRec || 0);
   return player.stdPts;
 }
 
@@ -41,13 +43,15 @@ function withProjections(players, league) {
 function withVORP(players, league) {
   const { numTeams, rosterSlots } = league;
   const flex = rosterSlots.FLEX || 0;
+  // ?? not ||: a league configured with 0 slots at a position (no-K
+  // leagues etc.) must not be silently treated as 1 starter.
   const repRank = {
-    QB:  Math.floor(numTeams * (rosterSlots.QB  || 1) + 1),
-    RB:  Math.floor(numTeams * ((rosterSlots.RB  || 2) + flex * 0.5) + 1),
-    WR:  Math.floor(numTeams * ((rosterSlots.WR  || 2) + flex * 0.5) + 1),
-    TE:  Math.floor(numTeams * (rosterSlots.TE  || 1) + 1),
-    K:   Math.floor(numTeams * (rosterSlots.K   || 1) + 1),
-    DST: Math.floor(numTeams * (rosterSlots.DST || 1) + 1),
+    QB:  Math.floor(numTeams * (rosterSlots.QB  ?? 1) + 1),
+    RB:  Math.floor(numTeams * ((rosterSlots.RB  ?? 2) + flex * 0.5) + 1),
+    WR:  Math.floor(numTeams * ((rosterSlots.WR  ?? 2) + flex * 0.5) + 1),
+    TE:  Math.floor(numTeams * (rosterSlots.TE  ?? 1) + 1),
+    K:   Math.floor(numTeams * (rosterSlots.K   ?? 1) + 1),
+    DST: Math.floor(numTeams * (rosterSlots.DST ?? 1) + 1),
   };
   const byPos = {};
   players.forEach(p => { (byPos[p.pos] = byPos[p.pos] || []).push(p); });
@@ -77,12 +81,12 @@ function getRosterNeeds(myPlayers, rosterSlots) {
   myPlayers.forEach(p => { counts[p.pos] = (counts[p.pos] || 0) + 1; });
   const flex = rosterSlots.FLEX || 0;
   const maxByPos = {
-    QB:  rosterSlots.QB  || 1,
-    RB:  (rosterSlots.RB  || 2) + Math.ceil(flex * 0.6),
-    WR:  (rosterSlots.WR  || 2) + Math.ceil(flex * 0.6),
-    TE:  (rosterSlots.TE  || 1) + Math.floor(flex * 0.2),
-    K:   rosterSlots.K   || 1,
-    DST: rosterSlots.DST || 1,
+    QB:  rosterSlots.QB  ?? 1,
+    RB:  (rosterSlots.RB  ?? 2) + Math.ceil(flex * 0.6),
+    WR:  (rosterSlots.WR  ?? 2) + Math.ceil(flex * 0.6),
+    TE:  (rosterSlots.TE  ?? 1) + Math.floor(flex * 0.2),
+    K:   rosterSlots.K   ?? 1,
+    DST: rosterSlots.DST ?? 1,
   };
   // Open dedicated starting slots first, depth-only needs after.
   return Object.entries(maxByPos)
@@ -121,10 +125,11 @@ function leagueFromBackendConfig(cfg) {
   if (!cfg) return null;
   const roster = cfg.roster || {};
   const draft = cfg.draft || {};
+  // Same thresholds as adpFormatForLeague so a league maps to one format.
   let scoringType = 'standard';
   const rec = (cfg.scoring || {}).rec;
-  if (rec >= 0.9) scoringType = 'ppr';
-  else if (rec >= 0.4) scoringType = 'half-ppr';
+  if (rec >= 0.75) scoringType = 'ppr';
+  else if (rec >= 0.25) scoringType = 'half-ppr';
   return makeLeague({
     id: 'l_default',
     name: 'My League',
@@ -398,7 +403,9 @@ function PullDataModal({ league, onClose, onComplete }) {
   const [mode, setMode]         = React.useState('free');
   const [season, setSeason]     = React.useState(currentYear);
   const [statsSeason, setStats] = React.useState(currentYear - 1);
-  const [skipFf, setSkipFf]     = React.useState(false);
+  // Default ON: the FFToday table scraper has a known column-mapping bug
+  // (duplicate Att/Yard/TD headers) that produces bad QB/RB stat lines.
+  const [skipFf, setSkipFf]     = React.useState(true);
   const [history, setHistory]   = React.useState(3);
   const task = useTask();
 
@@ -518,7 +525,7 @@ function PullDataModal({ league, onClose, onComplete }) {
           {mode === 'free' && (
             <label style={{display:'flex', alignItems:'center', gap:8, fontSize:13, color:T.text, marginTop:8, cursor:'pointer'}}>
               <input type="checkbox" checked={skipFf} onChange={e => setSkipFf(e.target.checked)} />
-              Skip FFToday scraping
+              Skip FFToday scraping <span style={{color:T.muted}}>(recommended — its stat columns misalign)</span>
             </label>
           )}
 
@@ -582,6 +589,12 @@ function AuctionModal({ onClose }) {
       </div>
 
       {loading && <div style={{textAlign:'center', padding:20, color:T.muted}}>Loading...</div>}
+
+      {data && data.error && (
+        <div style={{padding:16, background:T.redLight, color:T.red, borderRadius:T.rsm, fontSize:13}}>
+          {data.error}
+        </div>
+      )}
 
       {data && data.values && (
         <div style={{maxHeight:400, overflowY:'auto'}}>
@@ -761,25 +774,39 @@ function App() {
       })
       .catch(err => setLoadError(String(err)));
 
-    setLeagues(prev => {
-      if (prev.length > 0) return prev;
+    // Seed a league from the backend config only when none exist yet.
+    // (Side effects live here in the effect body — state updaters must
+    // stay pure or StrictMode double-invokes them.)
+    if (leagues.length === 0) {
       fetch('/api/config')
         .then(r => r.json())
         .then(cfg => {
           if (cfg && !cfg.error) {
             const seed = leagueFromBackendConfig(cfg);
-            if (seed) setLeagues([seed]);
+            if (seed) setLeagues(prev => (prev.length === 0 ? [seed] : prev));
           }
         })
         .catch(() => {});
-      return prev;
-    });
+    }
   }, []);
 
   React.useEffect(() => { localStorage.setItem('fda_leagues', JSON.stringify(leagues)); }, [leagues]);
   React.useEffect(() => { localStorage.setItem('fda_picks',   JSON.stringify(picks));   }, [picks]);
 
   const saveLeague = lg => {
+    // Pick history is stored positionally (pick N -> snake team). Changing
+    // the team count or draft slot mid-draft silently reassigns every past
+    // pick to different teams — make that an explicit choice.
+    const prevLg = leagues.find(l => l.id === lg.id);
+    const lgPicks = picks[lg.id] || [];
+    if (prevLg && lgPicks.length > 0 &&
+        (prevLg.numTeams !== lg.numTeams || prevLg.draftPosition !== lg.draftPosition)) {
+      const ok = window.confirm(
+        `This league has ${lgPicks.length} recorded picks. Changing teams/draft position ` +
+        `re-maps who made every past pick and will scramble rosters.\n\nSave anyway?`
+      );
+      if (!ok) return;
+    }
     setLeagues(prev => {
       const idx = prev.findIndex(l => l.id === lg.id);
       return idx >= 0 ? prev.map(l => l.id === lg.id ? lg : l) : [...prev, lg];

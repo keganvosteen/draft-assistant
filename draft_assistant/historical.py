@@ -75,6 +75,24 @@ def age_curve_factor(position: str, age: Optional[int]) -> float:
     return 1.0
 
 
+def age_projection_factor(position: str, age: Optional[int]) -> float:
+    """Year-over-year aging multiplier: curve(age) / curve(age - 1).
+
+    Source projections (or last season's production) already reflect the
+    player's established level — multiplying by the *absolute* curve value
+    would double-penalize anyone away from peak age (a 30-year-old RB
+    would lose 34% on top of a projection that already prices in his age).
+    What aging actually predicts is the one-year delta: how much a player
+    at this age typically gains or loses vs his previous season.
+    """
+    if age is None:
+        return 1.0
+    prev = age_curve_factor(position, age - 1)
+    if prev <= 0:
+        return 1.0
+    return age_curve_factor(position, age) / prev
+
+
 def _historical_trend(
     historical: Dict[int, Dict[str, float]],
     stat: str,
@@ -121,7 +139,7 @@ def adjust_projections(player: Player, scoring: Dict[str, float]) -> Dict[str, f
     adjusted = {}
 
     has_history = bool(player.historical_stats)
-    age_factor = age_curve_factor(player.position, player.age)
+    age_factor = age_projection_factor(player.position, player.age)
 
     for stat, raw_val in raw.items():
         trend_val = _historical_trend(player.historical_stats, stat) if has_history else None

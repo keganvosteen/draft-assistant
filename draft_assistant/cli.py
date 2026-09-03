@@ -239,8 +239,9 @@ def main() -> None:
     p_import.set_defaults(func=cmd_import_fpros)
 
     def cmd_pull_fftoday(args: argparse.Namespace) -> None:
+        from datetime import date
         paths = ensure_profile(args.profile)
-        season = args.season
+        season = args.season or date.today().year
         print(f"Fetching FFToday projections for {season}...")
         players = fetch_all_fftoday(season)
         if not players:
@@ -254,7 +255,8 @@ def main() -> None:
             print(f"Also wrote CSV to {args.csv}")
 
     p_pull = sub.add_parser("pull-fftoday", help="Fetch free FFToday projections and save to JSON/CSV")
-    p_pull.add_argument("--season", type=int, default=2024)
+    p_pull.add_argument("--season", type=int, default=None,
+                        help="Defaults to the current year")
     p_pull.add_argument("--out", type=str, default=None)
     p_pull.add_argument("--csv", type=str, default=None)
     p_pull.set_defaults(func=cmd_pull_fftoday)
