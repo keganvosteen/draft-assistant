@@ -751,7 +751,10 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
     // Full Collect runs the same free-source pull and then enriches it, so both
     // modes take the identical options — sending less would shrink the board.
     const body = { season, statsSeason, history, teams, adpFormat,
-                   scoring: adpFormat, skipFftoday: skipFf, espnLeagueId };
+                   scoring: adpFormat, skipFftoday: skipFf, espnLeagueId,
+                   // Yahoo leagues get their own draft room's ADP overlaid on
+                   // the board (needs the saved Yahoo authorization).
+                   yahooLeagueKey: (league && league.yahooLeagueKey) || undefined };
     fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

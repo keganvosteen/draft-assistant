@@ -1101,6 +1101,46 @@ def _merge_key(player: Player) -> str:
     return f"{_norm_name(player.name)}|{player.position}"
 
 
+def apply_yahoo_adp(players: List[Player], rows: List[dict]) -> int:
+    """Overlay Yahoo draft-room ADP onto the pulled board.
+
+    ``rows`` come from ``yahoo.fetch_draft_analysis`` — real average picks
+    from actual Yahoo drafts, which is the board the user's own Yahoo room
+    runs on. Matched players get ``metadata["yahoo_adp"]`` and their
+    ``Player.adp`` replaced (the public FFC/Sleeper number stays available
+    in metadata as ``public_adp``). Returns how many players matched.
+    """
+    by_key: Dict[str, Player] = {}
+    for player in players:
+        by_key.setdefault(_merge_key(player), player)
+
+    matched = 0
+    for row in rows:
+        position = str(row.get("position") or "").upper()
+        if position == "DEF":
+            position = "DST"
+        stub = Player(
+            id="yahoo-adp", name=str(row.get("name") or ""),
+            position=position, team=row.get("team"), projections={},
+        )
+        player = by_key.get(_merge_key(stub))
+        if player is None:
+            continue
+        avg_pick = row.get("average_pick")
+        if not avg_pick:
+            continue
+        if player.adp is not None and player.metadata.get("yahoo_adp") is None:
+            player.metadata["public_adp"] = player.adp
+        player.metadata["yahoo_adp"] = float(avg_pick)
+        if row.get("average_cost"):
+            player.metadata["yahoo_avg_cost"] = float(row["average_cost"])
+        if row.get("percent_drafted") is not None:
+            player.metadata["yahoo_percent_drafted"] = float(row["percent_drafted"])
+        player.adp = float(avg_pick)
+        matched += 1
+    return matched
+
+
 def _team_code_or_name(player: Player) -> str:
     team = (player.team or "").strip().upper()
     if team:
