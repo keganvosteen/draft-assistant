@@ -843,14 +843,40 @@ def _parse_espn_rosters(data: dict) -> List[SyncedRosterTeam]:
     return out
 
 
+def _clean_espn_cookie(key: str, value: str) -> str:
+    """Normalize the formats people actually paste from DevTools/guides.
+
+    ESPN authenticates only the exact browser values, but users paste them
+    with the surrounding quotes DevTools displays, with a ``name=`` prefix
+    from a copied Cookie header, SWID without its braces, or espn_s2 in the
+    URL-*decoded* form some guides hand out. Every one of those silently
+    turned into a 401 ("it imported a generic league") — fix them instead.
+    """
+    value = str(value).strip().strip('"').strip("'").strip()
+    prefix = key.lower() + "="
+    if value.lower().startswith(prefix):
+        value = value[len(prefix):].strip().strip('"').strip("'").strip()
+    if key == "SWID":
+        value = value.strip("{}")
+        if value:
+            value = "{" + value + "}"
+    elif key == "espn_s2":
+        # The genuine cookie is percent-encoded (%2F etc). A value with no
+        # '%' but base64-ish '/' or '+' is the decoded form — re-encode it.
+        if value and "%" not in value and any(c in value for c in "/+"):
+            value = quote(value, safe="")
+    return value
+
+
 def _espn_cookie_headers(espn_s2: Optional[str], swid: Optional[str]) -> Dict[str, str]:
     cookies = []
     for key, value in (("espn_s2", espn_s2), ("SWID", swid)):
         if value:
-            value = str(value).strip()
+            value = _clean_espn_cookie(key, value)
             if any(ord(c) < 32 or ord(c) > 126 or c == ";" for c in value):
                 raise ValueError(f"{key} must be a single cookie value")
-            cookies.append(f"{key}={value}")
+            if value:
+                cookies.append(f"{key}={value}")
     return {"Cookie": "; ".join(cookies)} if cookies else {}
 
 
