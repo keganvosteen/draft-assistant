@@ -605,7 +605,11 @@ def _fetch_espn_players(
         stats = _espn_projection_stats(player, season)
         if not _has_projection_value(stats):
             continue
-        adp = _valid_adp(
+        # draftRanksByRankType is an ordinal *rank* (1, 2, 3, ...), not an
+        # ADP. Feeding it into Player.adp lets the min-merge drag every
+        # player's ADP toward their ESPN rank, distorting the whole board —
+        # keep it as metadata and leave ADP to real boards (Sleeper, FFC).
+        espn_rank = _valid_adp(
             _nested_get(player, ["draftRanksByRankType", "PPR", "rank"])
             or _nested_get(player, ["draftRanksByRankType", "STANDARD", "rank"])
         )
@@ -614,10 +618,11 @@ def _fetch_espn_players(
             name=player.get("fullName") or "",
             position=position,
             team=_espn_team(player.get("proTeamId")),
-            adp=adp,
+            adp=None,
             projections=stats,
             metadata=_clean_metadata({
                 "espn_id": player.get("id"),
+                "espn_rank": espn_rank,
                 "injury_status": player.get("injuryStatus"),
                 "projection_source": "ESPN",
                 "sources": ["espn"],
