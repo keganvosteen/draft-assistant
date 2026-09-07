@@ -233,30 +233,6 @@ class TestEspnProjectionStats(unittest.TestCase):
         self.assertEqual(teams[0].players[0].team, "BUF")
         self.assertEqual(teams[0].players[0].provider_id, "espn:3918298")
 
-    def test_parses_espn_rosters(self):
-        from draft_assistant.importers.free_sources import _parse_espn_rosters
-        data = {"teams": [{
-            "id": 1,
-            "name": "Team Alpha",
-            "roster": {"entries": [{
-                "playerPoolEntry": {"player": {
-                    "id": 3918298,
-                    "fullName": "Josh Allen",
-                    "defaultPositionId": 1,
-                    "proTeamId": 2,
-                }}
-            }]}
-        }]}
-
-        teams = _parse_espn_rosters(data)
-
-        self.assertEqual(len(teams), 1)
-        self.assertEqual(teams[0].name, "Team Alpha")
-        self.assertEqual(teams[0].players[0].name, "Josh Allen")
-        self.assertEqual(teams[0].players[0].position, "QB")
-        self.assertEqual(teams[0].players[0].team, "BUF")
-        self.assertEqual(teams[0].players[0].provider_id, "espn:3918298")
-
 
 class TestFftodayRetryAndFailure(unittest.TestCase):
     def test_fetch_retries_transient_failures(self):

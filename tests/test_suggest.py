@@ -1,4 +1,4 @@
-"""Tests for the suggestion engine including FLEX needs and gradient logic."""
+"""Tests for the public recommendation interface and typed FLEX needs."""
 import unittest
 
 from draft_assistant.models import LeagueConfig, Player
@@ -75,17 +75,20 @@ class TestNeedsByPosition(unittest.TestCase):
 
 
 class TestSuggestPlayers(unittest.TestCase):
-    def test_returns_ranked_list(self):
+    def test_returns_limited_rankings_with_league_points(self):
         players = [
             _make_player("QB1", "QB", {"pass_yd": 4000, "pass_td": 30}),
             _make_player("RB1", "RB", {"rush_yd": 1200, "rush_td": 10, "rec": 50, "rec_yd": 400}),
             _make_player("RB2", "RB", {"rush_yd": 900, "rush_td": 7, "rec": 30, "rec_yd": 250}),
         ]
-        ranked = suggest_players(_config(), players, {}, top_n=10)
-        self.assertGreater(len(ranked), 0)
-        # Each entry is (player, pts, vor, score)
+        ranked = suggest_players(_config(), players, {}, top_n=2)
+        self.assertEqual(len(ranked), 2)
+        self.assertEqual(len({p.key() for p, _, _, _ in ranked}), 2)
+        expected_points = {"QB1": 280.0, "RB1": 245.0, "RB2": 172.0}
         for p, pts, vor, score in ranked:
-            self.assertIsInstance(p, Player)
+            self.assertEqual(pts, expected_points[p.name])
+        scores = [score for _, _, _, score in ranked]
+        self.assertEqual(scores, sorted(scores, reverse=True))
 
     def test_flex_eligible_still_ranked_when_only_flex_is_open(self):
         # RB starter slots are full but the FLEX is open, so another RB is still

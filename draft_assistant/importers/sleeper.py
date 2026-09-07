@@ -247,14 +247,49 @@ def _parse_league(
     }
     if draft:
         out["sleeperDraftId"] = str(draft.get("draft_id") or "")
-        out["draftType"] = "auction" if draft.get("type") == "auction" else "snake"
+        out["draftType"] = _draft_type(draft)
         out["draftStatus"] = draft.get("status") or ""
         slot = _slot_for_user(draft, user_id)
         if slot:
             out["draftPosition"] = slot
     elif league.get("draft_id"):
         out["sleeperDraftId"] = str(league["draft_id"])
+    roster_rows = [r for r in rosters if isinstance(r, dict)] if isinstance(rosters, list) else []
+    seats = _slot_by_roster_id(draft)
+    if not seats:
+        order = (draft or {}).get("draft_order") or {}
+        seats = {int(r["roster_id"]): _to_int(order.get(str(r.get("owner_id"))))
+                 for r in roster_rows if r.get("roster_id") and order.get(str(r.get("owner_id")))}
+    out["draftOrderReady"] = (len(seats) == num_teams
+                               and set(seats.values()) == set(range(1, num_teams + 1)))
+    if out["draftOrderReady"]:
+        out["teamIds"] = [str(rid) for rid in sorted(seats, key=seats.get)]
+    else:
+        out["teamIds"] = [str(r["roster_id"]) for r in sorted(roster_rows, key=lambda r: int(r["roster_id"]))]
+        # Incomplete provider columns cannot be combined with roster-order IDs.
+        out["teamNames"] = _team_names_by_slot(users, rosters, None, num_teams)
     return out
+
+
+def _draft_type(draft: dict) -> str:
+    if _to_int((draft.get("settings") or {}).get("reversal_round")) not in {None, 2}:
+        return "third_round_reversal"
+    return str(draft.get("type") or "unknown")
+
+
+def draft_order_patch(draft: dict, league: dict) -> dict:
+    """Refresh seats with the small draft endpoint, reusing saved team labels."""
+    seats = _slot_by_roster_id(draft)
+    total = _to_int((draft.get("settings") or {}).get("teams")) or int(league.get("numTeams") or len(seats))
+    ready = len(seats) == total and total > 0 and set(seats.values()) == set(range(1, total + 1))
+    names = {str(rid): name for rid, name in zip(league.get("teamIds") or [], league.get("teamNames") or [])}
+    team_ids = [str(rid) for rid in sorted(seats, key=seats.get)] if ready else league.get("teamIds") or []
+    return {
+        "numTeams": total, "teamIds": team_ids,
+        "teamNames": [names.get(rid) or f"Team {rid}" for rid in team_ids],
+        "draftOrderReady": ready, "draftType": _draft_type(draft),
+        "draftStatus": draft.get("status") or "", "sleeperDraftId": str(draft.get("draft_id") or ""),
+    }
 
 
 def _parse_scoring(raw: dict) -> Dict[str, float]:
@@ -329,20 +364,24 @@ def _roster_player(player_id: str, meta: Optional[dict]) -> SyncedRosterPlayer:
 def _parse_draft_picks(raw: object, draft: Optional[dict]) -> List[SyncedDraftPick]:
     slot_by_roster = _slot_by_roster_id(draft)
     picks: List[SyncedDraftPick] = []
-    for row in raw if isinstance(raw, list) else []:
+    if not isinstance(raw, list):
+        raise ValueError("Sleeper returned an invalid draft history. Retry before replacing recorded picks.")
+    for row in raw:
         if not isinstance(row, dict):
-            continue
+            raise ValueError("Sleeper returned an invalid draft pick.")
         pick_no = _to_int(row.get("pick_no"))
         if not pick_no:
-            continue
+            raise ValueError("Sleeper returned a draft pick without a valid pick number.")
         # Auction drafts have no seat on the pick, so fall back to the roster
         # that won the player.
-        seat = _to_int(row.get("draft_slot")) or slot_by_roster.get(_to_int(row.get("roster_id")) or -1)
+        roster_id = _to_int(row.get("roster_id"))
+        seat = slot_by_roster.get(roster_id) or _to_int(row.get("draft_slot"))
         meta = row.get("metadata") or {}
         name = " ".join(part for part in [meta.get("first_name"), meta.get("last_name")] if part).strip()
         picks.append(SyncedDraftPick(
             pick_no=pick_no,
             team_num=seat or 0,
+            provider_team_id=str(roster_id) if roster_id else None,
             player=SyncedRosterPlayer(
                 name=name,
                 position=str(meta.get("position") or ""),

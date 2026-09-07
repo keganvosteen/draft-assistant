@@ -30,8 +30,10 @@ jobs:
       - run: python scripts/check_vendor_assets.py
       - run: python -m compileall -q draft_assistant tests scripts
       - run: node scripts/check_web_syntax.js
+      - run: node scripts/check_league_sync.js
+      - run: node scripts/check_workspace_store.js
       - name: Verify installed web assets
-        run: python -c "from importlib.resources import files; assert (files('draft_assistant') / 'web/static/index.html').is_file()"
+        run: python -I scripts/check_installed_assets.py
 
   windows-package:
     runs-on: windows-latest

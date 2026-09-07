@@ -9,6 +9,10 @@ from .models import LeagueConfig, Player
 from .projections import compute_points, replacement_levels
 
 
+def _draftable_slots(config: LeagueConfig) -> int:
+    return sum(max(0, int(value)) for slot, value in config.roster.items() if slot != "IR")
+
+
 def compute_dollar_values(
     config: LeagueConfig,
     players: List[Player],
@@ -18,8 +22,8 @@ def compute_dollar_values(
 
     The approach:
       1. Compute VOR for every player (only positive-VOR players have value).
-      2. Determine total roster spots that matter (starters only — bench is $1 each).
-      3. Reserve $1 per bench spot, distribute the rest proportional to VOR.
+      2. Reserve a $1 minimum bid for each draftable roster spot, excluding IR.
+      3. Distribute the remaining budget proportional to VOR.
     """
     pts_map = compute_points(players, config.scoring)
     repl = replacement_levels(
@@ -44,7 +48,7 @@ def compute_dollar_values(
     total_budget = budget_per_team * config.teams
 
     # Reserve $1 per roster slot for minimum bids
-    total_roster = sum(int(v) for v in config.roster.values())
+    total_roster = _draftable_slots(config)
     reserved = config.teams * total_roster  # $1 min per slot
     distributable = max(total_budget - reserved, 0)
 
@@ -88,9 +92,6 @@ class AuctionTracker:
             return False
         if any(player_key == won_key for wins in self.won.values() for won_key, _ in wins):
             return False
-        total_slots = sum(max(0, int(v)) for v in self.config.roster.values())
-        if len(self.won.get(team, [])) >= total_slots:
-            return False
         if price > self.max_bid(team):
             return False
         self.budgets[team] -= price
@@ -104,7 +105,7 @@ class AuctionTracker:
         """Max a team can bid, reserving $1 per remaining roster slot."""
         if team not in self.budgets:
             return 0
-        total_slots = sum(int(v) for v in self.config.roster.values())
+        total_slots = _draftable_slots(self.config)
         filled = len(self.won.get(team, []))
         open_slots = total_slots - filled
         if open_slots <= 0:

@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 
 from ..fuzzy import normalize_player_name
 from ..models import LeagueConfig, Player
-from ..platform_sync import SyncedRosterPlayer, SyncedRosterTeam
+from ..platform_sync import SyncedDraftPick, SyncedRosterPlayer, SyncedRosterTeam
 from ..projection_archive import record_snapshot
 from ..scoring import fantasy_points
 from .cbs import fetch_all_cbs
@@ -636,18 +636,29 @@ _ESPN_SLOT_TO_ROSTER = {
 }
 
 
-def fetch_espn_league(season: int, league_id: str) -> Dict[str, object]:
-    """Read a public ESPN league's settings: teams, roster, scoring, team names.
-
-    Returns a dict the web LeagueSetup can consume to auto-fill a league. Public
-    leagues need only the id; private leagues would need espn_s2 / SWID cookies.
-    """
+def _espn_league_data(season, league_id, views, espn_s2=None, swid=None, headers=None):
     url = (
         "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
-        f"{_seg(season)}/segments/0/leagues/{_seg(league_id)}?view=mSettings&view=mTeam"
+        f"{_seg(season)}/segments/0/leagues/{_seg(league_id)}?"
+        + urlencode([("view", view) for view in views])
     )
-    data = _fetch_json(url, timeout=45)
-    settings = data.get("settings", {}) if isinstance(data, dict) else {}
+    request_headers = {**_espn_cookie_headers(espn_s2, swid), **(headers or {})}
+    data = _fetch_json(url, timeout=45, extra_headers=request_headers or None)
+    if not isinstance(data, dict) or ("mSettings" in views and not isinstance(data.get("settings"), dict)):
+        raise RuntimeError("ESPN returned an invalid league response")
+    return data
+
+
+def fetch_espn_league(
+    season: int, league_id: str, espn_s2: Optional[str] = None, swid: Optional[str] = None,
+) -> Dict[str, object]:
+    """Read league settings and real seating; private leagues accept cookies."""
+    data = _espn_league_data(season, league_id, ("mSettings", "mTeam", "mDraftDetail"), espn_s2, swid)
+    return _parse_espn_league(data, league_id)
+
+
+def _parse_espn_league(data: dict, league_id: str) -> Dict[str, object]:
+    settings = data.get("settings") or {}
 
     roster: Dict[str, int] = {}
     slot_counts = (settings.get("rosterSettings") or {}).get("lineupSlotCounts") or {}
@@ -673,18 +684,120 @@ def fetch_espn_league(season: int, league_id: str) -> Dict[str, object]:
         if pts is not None:
             scoring[key] = float(pts)
 
-    team_names: List[str] = []
-    for team in data.get("teams") or []:
-        name = team.get("name") or f"{team.get('location', '')} {team.get('nickname', '')}".strip()
-        team_names.append(name or f"Team {team.get('id')}")
-
     return {
         "name": settings.get("name") or f"ESPN {league_id}",
-        "numTeams": int(settings.get("size") or len(team_names) or 10),
         "rosterSlots": roster,
         "scoring": scoring,
-        "teamNames": team_names,
+        "espnLeagueId": str(league_id),
+        "season": str(data.get("seasonId") or ""),
+        **_espn_draft_settings(data),
     }
+
+
+def _espn_draft_settings(data: dict) -> dict:
+    settings = data.get("settings") or {}
+    draft_settings = settings.get("draftSettings") or {}
+    detail = data.get("draftDetail") or {}
+    teams = {str(t["id"]): t for t in data.get("teams") or []
+             if isinstance(t, dict) and t.get("id") is not None}
+    num_teams = _to_int(settings.get("size")) or len(teams) or 10
+    order = [str(team_id) for team_id in draft_settings.get("pickOrder") or []]
+    ready = len(order) == num_teams and len(set(order)) == num_teams and set(order) == set(teams)
+    if not ready:
+        # A complete, untraded first round can recover a published draft's
+        # seating when ESPN no longer retains pickOrder. Rankings cannot.
+        first_round = sorted(
+            (p for p in detail.get("picks") or [] if _to_int(p.get("roundId")) == 1),
+            key=lambda p: _to_int(p.get("roundPickNumber")) or 0,
+        )
+        inferred = [str(p.get("teamId")) for p in first_round]
+        ready = (draft_settings.get("isTradingEnabled") is False and len(inferred) == num_teams
+                 and len(set(inferred)) == num_teams and set(inferred) == set(teams)
+                 and [_to_int(p.get("roundPickNumber")) for p in first_round] == list(range(1, num_teams + 1)))
+        order = inferred if ready else list(teams)
+    draft_type = str(draft_settings.get("type") or "unknown").lower()
+    return {
+        "numTeams": num_teams,
+        "teamIds": order,
+        "teamNames": [_espn_team_name(teams[team_id]) for team_id in order],
+        "draftOrderReady": bool(ready),
+        "draftType": draft_type,
+        "draftStatus": "complete" if detail.get("drafted") else "drafting" if detail.get("inProgress") else "pre_draft",
+    }
+
+
+def fetch_espn_draft(
+    season: int, league_id: str, espn_s2: Optional[str] = None, swid: Optional[str] = None,
+) -> Dict[str, object]:
+    """Fetch the published draft history, not ESPN's separate live-room feed.
+
+    mDraftDetail only reliably publishes picks after completion. The caller
+    must check status before replacing local picks, including an empty feed.
+    """
+    data = _espn_league_data(
+        season, league_id, ("mSettings", "mTeam", "mDraftDetail", "mRoster"), espn_s2, swid,
+    )
+    info = _espn_draft_settings(data)
+    picks = _parse_espn_draft_picks(data)
+    missing = [int(p.player.provider_id.split(":", 1)[1]) for p in picks
+               if not p.player.name and p.player.provider_id]
+    if missing and info["draftStatus"] == "complete":
+        # A player dropped after the draft is absent from mRoster; a single
+        # filtered card lookup still lets boards without ESPN IDs match them.
+        cards = _espn_league_data(season, league_id, ("kona_playercard",), espn_s2, swid, {
+            "x-fantasy-filter": json.dumps({"players": {"filterIds": {"value": sorted(set(missing))}}}),
+        })
+        data["players"] = cards.get("players") or []
+        picks = _parse_espn_draft_picks(data)
+    return {
+        **info,
+        "status": info["draftStatus"],
+        "draftPicks": picks,
+        "liveAvailable": False,
+        "liveUnavailableReason": "ESPN publishes draft results after the draft completes; its live draft room uses a separate feed that this app cannot read.",
+        "nextPickNum": max((p.pick_no for p in picks), default=0) + 1,
+    }
+
+
+def _parse_espn_draft_picks(data: dict) -> List[SyncedDraftPick]:
+    info = _espn_draft_settings(data)
+    slot_by_id = {team_id: i for i, team_id in enumerate(info["teamIds"], 1)}
+    player_by_id = {p.provider_id: p for t in _parse_espn_rosters(data) for p in t.players}
+    for row in data.get("players") or []:
+        player = row.get("player") or {}
+        if player.get("id") is not None:
+            player_by_id[f"espn:{player['id']}"] = _espn_roster_player(player)
+    picks = []
+    for row in (data.get("draftDetail") or {}).get("picks") or []:
+        pick_no = _to_int(row.get("overallPickNumber"))
+        if not pick_no:
+            round_no, in_round = _to_int(row.get("roundId")), _to_int(row.get("roundPickNumber"))
+            if round_no and in_round:
+                pick_no = (round_no - 1) * info["numTeams"] + in_round
+        if not pick_no or pick_no < 1:
+            raise RuntimeError("ESPN returned a draft pick without a valid pick number")
+        player_id = f"espn:{row['playerId']}" if row.get("playerId") not in (None, 0, -1) else None
+        team_id = str(row["teamId"]) if row.get("teamId") is not None else None
+        picks.append(SyncedDraftPick(
+            pick_no=pick_no,
+            team_num=slot_by_id.get(team_id, 0),
+            provider_team_id=team_id,
+            player=player_by_id.get(player_id) or SyncedRosterPlayer("", "", provider_id=player_id),
+        ))
+    return sorted(picks, key=lambda p: p.pick_no)
+
+
+def _espn_team_name(team: dict) -> str:
+    return team.get("name") or f"{team.get('location', '')} {team.get('nickname', '')}".strip() or f"Team {team.get('id')}"
+
+
+def _espn_roster_player(player: dict) -> SyncedRosterPlayer:
+    return SyncedRosterPlayer(
+        name=player.get("fullName") or "",
+        position=_espn_position(player.get("defaultPositionId")),
+        team=_espn_team(player.get("proTeamId")),
+        provider_id=f"espn:{player['id']}" if player.get("id") is not None else None,
+    )
 
 
 def fetch_espn_rosters(
@@ -709,7 +822,6 @@ def _parse_espn_rosters(data: dict) -> List[SyncedRosterTeam]:
     for team in teams:
         if not isinstance(team, dict):
             continue
-        name = team.get("name") or f"{team.get('location', '')} {team.get('nickname', '')}".strip()
         roster = ((team.get("roster") or {}).get("entries") or [])
         players: List[SyncedRosterPlayer] = []
         for entry in roster:
@@ -717,14 +829,9 @@ def _parse_espn_rosters(data: dict) -> List[SyncedRosterTeam]:
             position = _espn_position(player.get("defaultPositionId"))
             if not player.get("fullName") or not position:
                 continue
-            players.append(SyncedRosterPlayer(
-                name=player.get("fullName") or "",
-                position=position,
-                team=_espn_team(player.get("proTeamId")),
-                provider_id=f"espn:{player.get('id')}" if player.get("id") is not None else None,
-            ))
+            players.append(_espn_roster_player(player))
         out.append(SyncedRosterTeam(
-            name=name or f"Team {team.get('id')}",
+            name=_espn_team_name(team),
             provider_id=str(team.get("id")) if team.get("id") is not None else None,
             players=players,
         ))
@@ -733,10 +840,12 @@ def _parse_espn_rosters(data: dict) -> List[SyncedRosterTeam]:
 
 def _espn_cookie_headers(espn_s2: Optional[str], swid: Optional[str]) -> Dict[str, str]:
     cookies = []
-    if espn_s2:
-        cookies.append(f"espn_s2={espn_s2}")
-    if swid:
-        cookies.append(f"SWID={swid}")
+    for key, value in (("espn_s2", espn_s2), ("SWID", swid)):
+        if value:
+            value = str(value).strip()
+            if any(ord(c) < 32 or ord(c) > 126 or c == ";" for c in value):
+                raise ValueError(f"{key} must be a single cookie value")
+            cookies.append(f"{key}={value}")
     return {"Cookie": "; ".join(cookies)} if cookies else {}
 
 

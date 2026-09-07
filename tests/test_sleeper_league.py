@@ -218,13 +218,14 @@ class TestDraftPickSync(unittest.TestCase):
         self.assertEqual(picks[0].team_num, 4)
 
     def test_seatless_pick_falls_back_to_snake_order(self):
-        rows = [{"pick_no": 5, "player_id": "4034",
+        rows = [{"pick_no": n, "player_id": str(n), "metadata": {}} for n in range(1, 5)]
+        rows.append({"pick_no": 5, "player_id": "4034",
                  "metadata": {"first_name": "Justin", "last_name": "Jefferson",
-                              "position": "WR", "team": "MIN"}}]
+                              "position": "WR", "team": "MIN"}})
         picks = _parse_draft_picks(rows, {})
         result = synced_draft_to_picks(picks, self.players, {"numTeams": 4})
         # Pick 5 opens round 2 of a 4-team snake, which belongs to seat 4.
-        self.assertEqual(result["picks"][0]["teamNum"], 4)
+        self.assertEqual(result["picks"][4]["teamNum"], 4)
 
 
 class TestProviderIdMatching(unittest.TestCase):

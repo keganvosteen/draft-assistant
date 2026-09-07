@@ -75,6 +75,19 @@ class TestBenchMultiplier(unittest.TestCase):
 
 
 class TestRosterValue(unittest.TestCase):
+    def test_bench_selects_players_by_their_contribution(self):
+        rb = _make_player("Backup RB", "RB")
+        qb = _make_player("Backup QB", "QB")
+        kicker = _make_player("Backup K", "K")
+        points = {rb.key(): 100, qb.key(): 200, kicker.key(): 300}
+        roster = {"BN": 1}
+        initial = roster_value([rb], points, roster)
+        expanded = roster_value([rb, qb, kicker], points, roster)
+        # RB contributes 18, QB 16, K 0; adding options cannot lose RB depth.
+        self.assertEqual(expanded.bench, [rb])
+        self.assertEqual(expanded.bench_value, 18.0)
+        self.assertGreaterEqual(expanded.total_value, initial.total_value)
+
     def test_fills_starter_slots(self):
         qb = _make_player("QB1", "QB")
         rb1 = _make_player("RB1", "RB")

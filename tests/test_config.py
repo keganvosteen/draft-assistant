@@ -28,6 +28,15 @@ class TestLoadConfig(unittest.TestCase):
         cfg = load_config("definitely-not-a-real-file.json")
         self.assertEqual(cfg.teams, DEFAULT_CONFIG["teams"])
 
+    def test_default_provider_options_are_independent_between_leagues(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = os.path.join(directory, CONFIG_FILENAME)
+            first = load_config(missing)
+            first.provider["options"]["path"] = "another-league.json"
+            second = load_config(missing)
+        self.assertEqual(second.provider["options"]["path"], "data/projections.json")
+        self.assertEqual(DEFAULT_CONFIG["provider"]["options"]["path"], "data/projections.json")
+
     def test_invalid_json_falls_back_to_defaults_without_crashing(self):
         path = self._write("teams: 10\nroster:\n  QB: 1\n")  # actual YAML, not JSON
         cfg = load_config(path)

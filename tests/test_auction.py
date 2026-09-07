@@ -18,6 +18,16 @@ def _config():
 
 
 class TestDollarValues(unittest.TestCase):
+    def test_ir_slots_do_not_reduce_auction_values(self):
+        players = [_make_player("RB1", "RB", {"rush_yd": 100}),
+                   _make_player("RB2", "RB", {"rush_yd": 50})]
+        without_ir = LeagueConfig(teams=1, roster={"RB": 2}, scoring=SCORING, provider={})
+        with_ir = LeagueConfig(teams=1, roster={"RB": 2, "IR": 3}, scoring=SCORING, provider={})
+        self.assertEqual(compute_dollar_values(with_ir, players, budget_per_team=20),
+                         {"RB1|RB": 19.0})
+        self.assertEqual(compute_dollar_values(without_ir, players, budget_per_team=20),
+                         compute_dollar_values(with_ir, players, budget_per_team=20))
+
     def test_values_assigned(self):
         players = [
             _make_player("QB1", "QB", {"pass_yd": 4500, "pass_td": 35}),
@@ -77,8 +87,9 @@ class TestAuctionTracker(unittest.TestCase):
         self.assertFalse(tracker.record_win("Team 1", "QB1|QB", tracker.max_bid("Team 1") + 1))
 
     def test_full_roster_rejects_more_players(self):
-        config = LeagueConfig(teams=1, roster={"QB": 1}, scoring=SCORING, provider={})
+        config = LeagueConfig(teams=1, roster={"QB": 1, "IR": 2}, scoring=SCORING, provider={})
         tracker = AuctionTracker(config, budget_per_team=10)
+        self.assertEqual(tracker.max_bid("Team 1"), 10)
         self.assertTrue(tracker.record_win("Team 1", "QB1|QB", 1))
         self.assertEqual(tracker.max_bid("Team 1"), 0)
         self.assertFalse(tracker.record_win("Team 1", "QB2|QB", 1))

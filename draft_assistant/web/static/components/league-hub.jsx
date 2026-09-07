@@ -50,6 +50,7 @@ function LeagueHub({ league, picks, playerCount, onBack, onOpenDraft, onOpenWaiv
 
   const myPicks = picks.filter(p => p.teamNum === league.draftPosition);
   const totalSlots = rosterTotal(league.rosterSlots);
+  const draftComplete = league.pickSource !== 'rosters' && picks.length >= totalSlots * league.numTeams;
   const linkedTo = league.sleeperLeagueId ? 'Sleeper'
     : league.espnLeagueId ? 'ESPN'
       : league.yahooLeagueKey ? 'Yahoo' : null;
@@ -114,12 +115,14 @@ function LeagueHub({ league, picks, playerCount, onBack, onOpenDraft, onOpenWaiv
           <HubTile
             title="Draft room"
             accent={T.primary}
-            badge={picks.length > 0 ? <Badge label="In progress" color="blue" /> : null}
-            description="Live pick recommendations from the rest-of-draft simulation, a running pick ticker, and opponent predictions."
-            meta={picks.length > 0
+            badge={draftComplete ? <Badge label="Complete" color="green" />
+              : picks.length > 0 && league.pickSource !== 'rosters' ? <Badge label="In progress" color="blue" /> : null}
+            description={draftComplete ? 'Review the recorded picks and player ownership from your draft.'
+              : 'Track picks and get recommendations for standard snake drafts, with opponent predictions.'}
+            meta={league.pickSource === 'rosters' ? 'Roster snapshot loaded · draft order not reconstructed' : picks.length > 0
               ? `${picks.length} picks recorded · ${myPicks.length} yours`
-              : `Not started · you pick #${league.draftPosition}`}
-            cta={picks.length > 0 ? 'Resume draft' : 'Open draft room'}
+              : league.teamSelectionRequired ? 'Choose your team in League settings' : `Not started · you pick #${league.draftPosition}`}
+            cta={draftComplete ? 'Review draft' : picks.length > 0 ? 'Resume draft' : 'Open draft room'}
             onClick={onOpenDraft} />
 
           <HubTile
@@ -155,7 +158,7 @@ function LeagueHub({ league, picks, playerCount, onBack, onOpenDraft, onOpenWaiv
           }}>
             <HubFact label="Scoring" value={SCORING_LABELS[league.scoringType]} />
             <HubFact label="Teams" value={league.numTeams} />
-            <HubFact label="Draft" value={isAuction ? `Auction · $${league.auctionBudget || 200}` : `Snake · pick #${league.draftPosition}`} />
+            <HubFact label="Draft" value={isAuction ? `Auction · $${league.auctionBudget || 200}` : `${league.draftType || 'snake'} · ${league.draftPosition ? `pick #${league.draftPosition}` : 'choose your team'}`} />
             <HubFact label="Roster" value={`${totalSlots} slots`} />
           </div>
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.borderLight}`, fontSize: 12.5, color: T.muted }}>
@@ -163,10 +166,15 @@ function LeagueHub({ league, picks, playerCount, onBack, onOpenDraft, onOpenWaiv
             {league.rosterSlots.FLEX ? ` · FLEX ${league.rosterSlots.FLEX}` : ''}
             {league.rosterSlots.BN ? ` · Bench ${league.rosterSlots.BN}` : ''}
           </div>
-          {!hasNames && !isAuction && (
+          {linkedTo && <Note style={{marginTop:14}}>
+            Refresh league settings and the published draft order in <b>League settings → Draft order</b>.
+            {linkedTo === 'ESPN' && ' ESPN draft results can be synced after completion. During the draft, use Paste draft history or record picks.'}
+            {linkedTo === 'Sleeper' && ' Open the draft room and choose Go live to follow picks automatically every five seconds.'}
+            {' '}Sync rosters loads current ownership for the waiver wire; it does not recover pick order.
+          </Note>}
+          {(!hasNames || league.teamSelectionRequired) && !isAuction && (
             <Note style={{ marginTop: 14 }}>
-              Team names and draft order aren't set. The draft room works without them, but naming
-              the seats makes the pick ticker and opponent panel readable.{' '}
+              Choose your team and confirm the draft order so recommendations use the right seat.{' '}
               <button onClick={() => onEditLeague(league.id)} style={{
                 background: 'none', border: 'none', padding: 0, color: T.primary,
                 fontWeight: 700, cursor: 'pointer', textDecoration: 'underline',

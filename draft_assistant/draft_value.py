@@ -17,7 +17,6 @@ from .models import DraftState, FLEX_TYPES, LeagueConfig, Player
 
 
 LINEUP_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"]
-FLEX_ELIGIBLE = set(FLEX_TYPES["FLEX"])
 
 
 @dataclass(frozen=True)
@@ -79,7 +78,9 @@ def roster_value(players: Sequence[Player], points_map: Dict[str, float], roster
     used: Set[str] = {pkey[id(player)] for player in starters}
     bench_count = max(0, int(roster.get("BN", roster.get("BENCH", 0))))
     bench_pool = [player for player in players if pkey[id(player)] not in used]
-    bench_pool.sort(key=lambda p: pts[id(p)], reverse=True)
+    # Select by the value the bench actually contributes. Sorting raw points
+    # could let a backup kicker displace useful RB depth and LOWER roster value.
+    bench_pool.sort(key=lambda p: pts[id(p)] * _bench_multiplier(p), reverse=True)
     bench = bench_pool[:bench_count]
 
     starter_value = sum(pts[id(player)] for player in starters)
@@ -91,13 +92,6 @@ def roster_value(players: Sequence[Player], points_map: Dict[str, float], roster
         starters=starters,
         bench=bench,
     )
-
-
-def _flatten_roster(my_roster: Dict[str, List[Player]]) -> List[Player]:
-    players: List[Player] = []
-    for group in my_roster.values():
-        players.extend(group)
-    return players
 
 
 def _bench_multiplier(player: Player) -> float:
