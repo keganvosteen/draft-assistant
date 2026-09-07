@@ -358,7 +358,9 @@ class TestYahooEndpoints(_ServerFixture):
 
     def test_yahoo_exchange_needs_approval(self):
         from unittest.mock import patch
-        with patch("draft_assistant.importers.yahoo.exchange_code", return_value={"access_token": "fake"}), \
+        with patch.object(DraftAPIHandler, "_yahoo_load", return_value={"client_id": "test_id", "client_secret": "test_secret"}), \
+             patch.object(DraftAPIHandler, "_yahoo_save"), \
+             patch("draft_assistant.importers.yahoo.exchange_code", return_value={"access_token": "fake"}), \
              patch("draft_assistant.importers.yahoo.list_leagues", side_effect=RuntimeError("additional_authorization_required")):
             status, body = self.request("POST", "/api/yahoo/exchange", {"code": "auth-code"})
             self.assertEqual(status, 403)
@@ -369,7 +371,8 @@ class TestYahooEndpoints(_ServerFixture):
 
     def test_yahoo_import_needs_approval(self):
         from unittest.mock import patch
-        with patch.object(DraftAPIHandler, "_yahoo_access_token", return_value="fake-token"), \
+        with patch.object(DraftAPIHandler, "_yahoo_load", return_value={"token": {"access_token": "fake"}}), \
+             patch.object(DraftAPIHandler, "_yahoo_access_token", return_value="fake-token"), \
              patch("draft_assistant.importers.yahoo.fetch_league", side_effect=RuntimeError("additional_authorization_required")):
             status, body = self.request("POST", "/api/yahoo/import", {"leagueKey": "nfl.l.12345"})
             self.assertEqual(status, 403)
@@ -377,6 +380,7 @@ class TestYahooEndpoints(_ServerFixture):
             self.assertTrue(payload.get("needsApproval"))
             self.assertEqual(payload.get("code"), "yahoo_additional_authorization_required")
             self.assertEqual(payload.get("approvalUrl"), "https://sports.yahoo.com/developer/access/")
+
 
 
 if __name__ == "__main__":
