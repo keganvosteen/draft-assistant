@@ -1,0 +1,180 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   Draft Assistant — base stylesheet.
+
+   Inline styles (driven by the `T` token object in ui-kit.jsx) still do the
+   per-component layout work; this file owns what inline styles cannot express:
+   the font stack, focus rings, :hover/:active states on native elements,
+   scrollbars, animations, and the primitives (menus, toasts, dialogs) that
+   need real CSS. Tokens are declared once here and mirrored in `T` so both
+   layers stay on the same values.
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root {
+  --bg:            #f4f6fb;
+  --surface:       #ffffff;
+  --surface-alt:   #f7f9fd;
+  --border:        #e2e6f0;
+  --border-light:  #eef1f7;
+  --primary:       #3a5bef;
+  --primary-hover: #2d4ad4;
+  --primary-light: #eef1fd;
+  --green:         #15803d;
+  --green-light:   #dcfce7;
+  --amber:         #b45309;
+  --amber-light:   #fef3c7;
+  --red:           #dc2626;
+  --red-light:     #fee2e2;
+  --blue:          #0369a1;
+  --blue-light:    #e0f2fe;
+  --text:          #171a2b;
+  --muted:         #66708a;
+  --muted-light:   #98a1b6;
+
+  --r:    10px;
+  --r-sm: 7px;
+  --r-xs: 5px;
+
+  --shadow-sm: 0 1px 2px rgba(16, 24, 60, .06);
+  --shadow-md: 0 4px 14px rgba(16, 24, 60, .10);
+  --shadow-lg: 0 18px 48px rgba(16, 24, 60, .18);
+
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; }
+
+body {
+  font-family: var(--font);
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+button { -webkit-appearance: none; appearance: none; }
+
+/* ─── Focus ──────────────────────────────────────────────────────────────── */
+/* Inputs clear the resting outline inline; every interactive element still
+   gets a visible ring the moment it is reached by keyboard. */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offset: 0; }
+
+/* ─── Native element states inline styles can't reach ────────────────────── */
+.da-btn { transition: background .13s, border-color .13s, color .13s, box-shadow .13s; }
+.da-btn:not(:disabled):hover { filter: brightness(.97); }
+.da-btn:not(:disabled):active { transform: translateY(.5px); }
+.da-btn:disabled { cursor: not-allowed; opacity: .45; }
+
+.da-input:hover:not(:focus) { border-color: var(--muted-light); }
+.da-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+
+.da-row-hover:hover { background: var(--surface-alt); }
+
+/* ─── Scrollbars ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd2e0; border-radius: 99px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: #a8b2c6; background-clip: content-box; }
+.da-no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.da-no-scrollbar::-webkit-scrollbar { display: none; }
+
+input[type=range] { accent-color: var(--primary); }
+input[type=checkbox], input[type=radio] { accent-color: var(--primary); }
+
+/* ─── Loading ────────────────────────────────────────────────────────────── */
+.loading-screen {
+  height: 100vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 14px;
+  color: var(--muted); font-size: 14px;
+}
+.loading-spinner {
+  width: 32px; height: 32px; border: 3px solid var(--border);
+  border-top-color: var(--primary); border-radius: 50%;
+  animation: da-spin .8s linear infinite;
+}
+@keyframes da-spin { to { transform: rotate(360deg); } }
+
+/* ─── Overlays: modal / drawer / menu / toast ────────────────────────────── */
+@keyframes da-fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes da-rise { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }
+@keyframes da-slide-left { from { transform: translateX(100%) } to { transform: none } }
+
+.da-overlay { animation: da-fade .14s ease-out; }
+.da-pop     { animation: da-rise .16s cubic-bezier(.2,.8,.3,1); }
+.da-drawer  { animation: da-slide-left .2s cubic-bezier(.2,.8,.3,1); }
+
+.da-menu-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  width: 100%; text-align: left; background: none; border: none; cursor: pointer;
+  padding: 7px 10px; border-radius: var(--r-xs); font-size: 13px; color: var(--text);
+}
+.da-menu-item:hover:not(:disabled) { background: var(--surface-alt); }
+.da-menu-item:disabled { color: var(--muted-light); cursor: not-allowed; }
+.da-menu-hint { font-size: 11px; color: var(--muted-light); white-space: nowrap; }
+.da-menu-sep { height: 1px; background: var(--border-light); margin: 5px 4px; }
+.da-menu-label {
+  font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted-light); padding: 8px 10px 3px;
+}
+
+.da-toaster {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  z-index: 2000; display: flex; flex-direction: column; gap: 8px;
+  align-items: center; pointer-events: none; width: min(440px, calc(100vw - 32px));
+}
+.da-toast {
+  pointer-events: auto; width: 100%; display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px; border-radius: var(--r-sm); font-size: 13px; line-height: 1.45;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); box-shadow: var(--shadow-md);
+  animation: da-rise .18s cubic-bezier(.2,.8,.3,1);
+}
+.da-toast[data-tone="ok"]    { border-left: 3px solid var(--green); }
+.da-toast[data-tone="error"] { border-left: 3px solid var(--red); }
+.da-toast[data-tone="info"]  { border-left: 3px solid var(--primary); }
+
+/* ─── Tables ─────────────────────────────────────────────────────────────── */
+.da-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.da-table th {
+  text-align: left; padding: 8px 10px; font-size: 10px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.da-table td { padding: 9px 10px; border-bottom: 1px solid var(--border-light); vertical-align: top; }
+.da-table tbody tr:last-child td { border-bottom: none; }
+.da-table tbody tr:hover { background: var(--surface-alt); }
+.da-num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* Sortable column headers on the draft board. */
+.da-sort {
+  background: none; border: none; cursor: pointer; padding: 0; font: inherit;
+  color: inherit; display: inline-flex; align-items: center; gap: 3px;
+}
+.da-sort:hover { color: var(--text); }
+
+/* ─── Cards ──────────────────────────────────────────────────────────────── */
+.da-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); box-shadow: var(--shadow-sm);
+}
+.da-card-link {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  transition: border-color .13s, box-shadow .13s, transform .13s;
+}
+.da-card-link:hover { border-color: var(--primary); box-shadow: var(--shadow-md); }
+.da-card-link:active { transform: translateY(1px); }
+
+/* Truncation helper — used in a dozen places for player and team names. */
+.da-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

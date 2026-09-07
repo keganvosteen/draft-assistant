@@ -1,22 +1,19 @@
 """Launch Draft Assistant as a native desktop window via pywebview."""
 from __future__ import annotations
 
-import socket
 import threading
+import webbrowser
 from functools import partial
 from http.server import ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlsplit
 
 from .profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
+from .paths import resolve
 from .providers.base import build_provider
 from .sample_data import sample_players
 from .storage import save_players
 from .web.server import DraftAPIHandler
-
-
-def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 def _ensure_data(profile: str) -> None:
@@ -32,6 +29,54 @@ class DesktopAPI:
 
     def __init__(self):
         self._window = None
+        self._close_requested = False
+        self._allow_close = False
+        self._close_lock = threading.Lock()
+
+    def request_close(self):
+        """Keep the window alive until its pending league save is acknowledged."""
+        with self._close_lock:
+            if self._allow_close:
+                return None
+            if self._close_requested:
+                return False
+            self._close_requested = True
+        pending = False
+        try:
+            pending = self._window.evaluate_js("Boolean(window.__fdaHasPendingWrites?.())")
+            if not pending:
+                self._close_requested = False
+                return None
+            self._window.evaluate_js("""void window.__fdaFlushForClose()
+                .then(() => window.pywebview.api.close_after_save())
+                .catch(() => window.pywebview.api.close_save_failed());""")
+        except Exception:
+            self._close_requested = False
+            # An uninitialized/failed page has no active frontend edits.
+            if not pending:
+                return None
+        return False
+
+    def close_after_save(self) -> bool:
+        if not self._close_requested or not self._window:
+            return False
+        # A new edit can arrive after flush resolves but before this callback.
+        if self._window.evaluate_js("Boolean(window.__fdaHasPendingWrites?.())"):
+            self._close_requested = False
+            return False
+        self._allow_close = True
+        self._window.destroy()
+        return True
+
+    def close_save_failed(self) -> bool:
+        if not self._close_requested or not self._window:
+            return False
+        self._close_requested = False
+        self._allow_close = False
+        self._window.evaluate_js("""void window.toast?.(
+            'The app stayed open because changes could not be saved. Retry saving or export a backup.',
+            'error', 10000);""")
+        return False
 
     def open_file_dialog(self, title="Select CSV", file_types=("CSV files (*.csv)",)):
         if not self._window:
@@ -45,6 +90,17 @@ class DesktopAPI:
             return str(result[0])
         return None
 
+    def open_external_url(self, url: str) -> bool:
+        """Open only this project's HTTPS release links outside pywebview."""
+        parsed = urlsplit(str(url or ""))
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "github.com"
+            or not parsed.path.startswith("/keganvosteen/draft-assistant/releases/")
+        ):
+            return False
+        return bool(webbrowser.open(url))
+
 
 def run_desktop(profile: str = DEFAULT_PROFILE, debug: bool = False) -> None:
     try:
@@ -56,10 +112,9 @@ def run_desktop(profile: str = DEFAULT_PROFILE, debug: bool = False) -> None:
 
     _ensure_data(profile)
 
-    port = _find_free_port()
     handler = partial(DraftAPIHandler, profile=profile)
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
-    server.daemon_threads = True
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
@@ -74,5 +129,15 @@ def run_desktop(profile: str = DEFAULT_PROFILE, debug: bool = False) -> None:
         js_api=api,
     )
     api._window = window
-    webview.start(debug=debug)
-    server.shutdown()
+    window.events.closing += api.request_close
+    # League state is saved separately by /api/workspace. Keep browser caches
+    # and pending-write recovery across upgrades too, outside the program files.
+    browser_data = Path(resolve("webview")).resolve()
+    browser_data.mkdir(parents=True, exist_ok=True)
+    webview.settings["ALLOW_DOWNLOADS"] = True  # User-requested JSON/CSV exports.
+    try:
+        webview.start(debug=debug, private_mode=False, storage_path=str(browser_data))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

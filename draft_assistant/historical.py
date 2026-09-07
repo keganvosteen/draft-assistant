@@ -6,6 +6,7 @@ This module provides:
     trends, age expectations, and situation changes.
 """
 from __future__ import annotations
+from datetime import date
 from typing import Dict, List, Optional
 
 from .models import Player
@@ -75,17 +76,18 @@ def age_curve_factor(position: str, age: Optional[int]) -> float:
     return 1.0
 
 
-def age_projection_factor(position: str, age: Optional[int]) -> float:
-    """Year-over-year aging multiplier: curve(age) / curve(age - 1).
+def age_progression_factor(position: str, age: Optional[int]) -> float:
+    """Expected year-over-year production change going into the upcoming season.
 
-    Source projections (or last season's production) already reflect the
-    player's established level — multiplying by the *absolute* curve value
-    would double-penalize anyone away from peak age (a 30-year-old RB
-    would lose 34% on top of a projection that already prices in his age).
-    What aging actually predicts is the one-year delta: how much a player
-    at this age typically gains or loses vs his previous season.
+    Returns curve(age) / curve(age - 1). Projections (and last seasons' stats)
+    already reflect the player's established level — what they don't price is
+    the change the next year of aging brings, so only that ratio is applied.
+    Using the absolute curve value here would double-count age and, e.g., dock
+    a 30-year-old RB 34% on top of an already age-aware projection.
     """
     if age is None:
+        return 1.0
+    if not AGE_CURVES.get(position):
         return 1.0
     prev = age_curve_factor(position, age - 1)
     if prev <= 0:
@@ -97,22 +99,23 @@ def _historical_trend(
     historical: Dict[int, Dict[str, float]],
     stat: str,
 ) -> Optional[float]:
-    """Compute a weighted trend value from multiple seasons.
+    """Compute a recency-weighted trend value across all accumulated seasons.
 
-    Uses exponential recency weighting: most recent season gets weight 3,
-    prior season weight 2, earlier seasons weight 1.
-    Returns None if no historical data exists for this stat.
+    Weight decays exponentially from the most recent season
+    (1.0, 0.6, 0.36, 0.216, ...), so recent form dominates while a longer
+    history still contributes. Returns None if no data exists for this stat.
     """
     if not historical:
         return None
     years = sorted(historical.keys(), reverse=True)
+    decay = 0.6
     total_weight = 0.0
     weighted_sum = 0.0
-    for i, year in enumerate(years[:3]):
+    for i, year in enumerate(years):
         val = historical[year].get(stat)
         if val is None:
             continue
-        weight = max(3 - i, 1)
+        weight = decay ** i
         weighted_sum += val * weight
         total_weight += weight
     if total_weight == 0:
@@ -120,36 +123,94 @@ def _historical_trend(
     return weighted_sum / total_weight
 
 
+# Per-position blend weight: w = the share given to the raw PROJECTION, with
+# (1-w) given to the recency-weighted historical trend. Calibrated on 2019-2025
+# preseason-vs-actual backtests and checked with leave-one-season-out validation
+# (see draft_assistant/backtest.py): projections
+# dominate at every position — most strongly at QB, where history adds nothing —
+# while WR/TE benefit most from leaning on recent production. This replaces the
+# old uniform 0.6, which the backtest showed was too much history for QB/RB/TE.
+BLEND_WEIGHTS: Dict[str, float] = {"QB": 0.9, "RB": 0.8, "WR": 0.7, "TE": 0.6}
+DEFAULT_BLEND_WEIGHT = 0.7
+
 # Situation-change adjustments: empirical multipliers for common scenarios
 TEAM_CHANGE_PENALTY = 0.92       # Changing teams hurts ~8% on average in year 1
-COACHING_CHANGE_FACTOR = 0.97    # New OC: small uncertainty penalty
+
+# How fast a history stops speaking for a player once it stops being current.
+# A board pull collects last season for anyone who played it, so a history that
+# ends earlier is evidence the player did not play -- not evidence of nothing.
+HISTORY_STALENESS_DECAY = 0.6
 
 
-def adjust_projections(player: Player, scoring: Dict[str, float]) -> Dict[str, float]:
+def history_recency_factor(
+    historical: Dict[int, Dict[str, float]], season: Optional[int] = None
+) -> float:
+    """How much a player's history should still speak for them, in [0, 1].
+
+    1.0 when the history runs through the most recent completed season, decaying
+    by :data:`HISTORY_STALENESS_DECAY` for each season missing off the end.
+
+    This is deliberately not folded into :func:`_historical_trend`: that function
+    returns a *weighted average*, so scaling every season's weight by the same
+    factor cancels out and changes nothing. Staleness has to move the blend
+    toward the published projection instead, which is what callers do with it.
+    """
+    if not historical:
+        return 1.0
+    season = season if season is not None else date.today().year
+    gap = (season - 1) - max(int(year) for year in historical)
+    return HISTORY_STALENESS_DECAY ** max(0, gap)
+
+
+def adjust_projections(
+    player: Player, scoring: Dict[str, float], season: Optional[int] = None
+) -> Dict[str, float]:
     """Return adjusted projections blending raw projection with historical trends.
 
     Priority:
-      1. If the player has historical stats, blend with raw projection (60/40
-         raw/historical) and apply age curve.
-      2. If only age is known, apply the age curve to raw projections.
-      3. If the player changed teams, apply a small penalty.
-      4. Otherwise, return raw projections unchanged.
+      1. If the player has historical stats, blend with raw projection using the
+         position-aware BLEND_WEIGHTS, then apply the year-over-year age progression.
+      2. If only age is known, apply the age progression to raw projections.
+      3. If there is no published projection at all, fall back to the
+         recency-weighted trend aged forward one season.
+      4. If the player changed teams, apply a small penalty.
+
+    A history that stops before the most recent completed season is discounted
+    (see :func:`history_recency_factor`). Without that, a back who last played in
+    2024 kept a 1,000-yard season voting at full strength in 2026 and was ranked
+    as a draftable RB despite being out of the league.
     """
     raw = dict(player.projections)
     adjusted = {}
 
     has_history = bool(player.historical_stats)
-    age_factor = age_projection_factor(player.position, player.age)
+    age_factor = age_progression_factor(player.position, player.age)
+    weight = BLEND_WEIGHTS.get(player.position, DEFAULT_BLEND_WEIGHT)
+    recency = history_recency_factor(player.historical_stats, season)
+    # A stale history earns less of a say; the published projection takes the
+    # rest. At recency 1.0 this is exactly the old weight, so a player whose
+    # history is current is unaffected.
+    weight = weight + (1.0 - weight) * (1.0 - recency)
+
+    if not raw and has_history:
+        stat_keys = set()
+        for season_stats in player.historical_stats.values():
+            stat_keys.update(season_stats.keys())
+        for stat in sorted(stat_keys):
+            trend_val = _historical_trend(player.historical_stats, stat)
+            if trend_val is not None:
+                # Nothing to blend toward here, so damp the trend directly.
+                adjusted[stat] = round(trend_val * age_factor * recency, 2)
 
     for stat, raw_val in raw.items():
         trend_val = _historical_trend(player.historical_stats, stat) if has_history else None
         if trend_val is not None:
-            # Blend: 60% raw projection, 40% historical trend
-            blended = 0.6 * raw_val + 0.4 * trend_val
+            # Position-aware blend: w*projection + (1-w)*historical trend.
+            blended = weight * raw_val + (1 - weight) * trend_val
         else:
             blended = raw_val
 
-        # Apply age curve
+        # Expected change from one more year of aging
         blended *= age_factor
 
         adjusted[stat] = round(blended, 2)

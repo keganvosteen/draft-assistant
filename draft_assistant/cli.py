@@ -7,11 +7,12 @@ from .draft import DraftTracker
 from .export import export_players_csv
 from .importers.fantasypros import load_dst_csv, load_k_csv, load_offense_csv, merge_players
 from .importers.fftoday import fetch_all_fftoday
-from .importers.free_sources import pull_free_data
+from .importers.free_sources import merge_historical_into, pull_free_data
+from .models import FLEX_TYPES
 from .profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from .providers.base import build_provider
 from .sample_data import sample_players
-from .storage import load_state, save_players, save_state
+from .storage import load_state, save_players, save_state, update_players
 from .suggest import suggest_players
 
 
@@ -82,11 +83,18 @@ def cmd_suggest(args: argparse.Namespace) -> None:
         if args.draft_slot is not None:
             draft_settings["slot"] = args.draft_slot
         if args.sims is not None:
-            draft_settings["monte_carlo_sims"] = args.sims
+            draft_settings["rollout_sims"] = args.sims
         config.draft = draft_settings
     tracker = DraftTracker(config, state, players)
     avail = tracker.available_players()
-    ranked = suggest_players(config, avail, tracker.my_roster(), top_n=args.top, draft_state=state)
+    ranked = suggest_players(
+        config,
+        avail,
+        tracker.my_roster(),
+        top_n=args.top,
+        draft_state=state,
+        drafted_players=tracker.drafted_players(),
+    )
     print(f"Top {len(ranked)} suggestions:")
     for p, pts, vor, score in ranked:
         adp = f" ADP:{p.adp:.1f}" if p.adp else ""
@@ -134,7 +142,7 @@ def cmd_roster(args: argparse.Namespace) -> None:
 
     needs = needs_by_position(config, roster)
     print("Needs:")
-    for pos in ["QB", "RB", "WR", "TE", "FLEX", "K", "DST"]:
+    for pos in ["QB", "RB", "WR", "TE", *FLEX_TYPES.keys(), "K", "DST"]:
         print(f"- {pos}: {needs.get(pos, 0)}")
 
 
@@ -194,6 +202,23 @@ def main() -> None:
     p_suggest.add_argument("--draft-slot", type=int, default=None, help="Override snake draft slot for this run")
     p_suggest.add_argument("--sims", type=int, default=None, help="Override Monte Carlo simulation count for this run")
     p_suggest.set_defaults(func=cmd_suggest)
+
+    def cmd_simulate_strategy(args: argparse.Namespace) -> None:
+        from .slot_sim import load_league_sweeps, _print_report
+        sweeps = load_league_sweeps(
+            profile=args.profile,
+            leagues_json=args.leagues_json,
+            rollout_sims=args.sims,
+        )
+        _print_report(sweeps)
+
+    p_sim = sub.add_parser(
+        "simulate-strategy",
+        help="Compare rollout draft-score picks against ADP autodraft by draft slot",
+    )
+    p_sim.add_argument("--leagues-json", type=str, default=None, help="Optional exported web fda_leagues JSON")
+    p_sim.add_argument("--sims", type=int, default=None, help="Override rollout_sims for each pick")
+    p_sim.set_defaults(func=cmd_simulate_strategy)
 
     p_pick = sub.add_parser("pick", help="Record a league pick")
     p_pick.add_argument("player", type=str)
@@ -272,11 +297,28 @@ def main() -> None:
             teams=args.teams,
             adp_format=args.adp_format,
             include_fftoday=not args.skip_fftoday,
+            include_cbs=not args.skip_cbs,
             espn_league_id=args.espn_league_id,
         )
         out_json = args.out or paths.projections_path
-        save_players(result.players, out_json)
-        print(f"Saved {len(result.players)} players to {out_json}")
+        if args.out:
+            # An explicit --out is an export, not the live board: write it as-is.
+            save_players(result.players, out_json)
+            players = result.players
+        else:
+            # Accumulate history across pulls. A pull only fetches the seasons it
+            # was asked for, so saving it directly would discard every earlier
+            # season already banked on the board -- this path used to do exactly
+            # that, silently dropping 2023 and 2024 on a default pull. The web
+            # endpoints have always merged; the CLI has to as well.
+            players = update_players(
+                out_json,
+                lambda current: merge_historical_into(result.players, current),
+            )
+        seasons = sorted({s for p in players for s in p.historical_stats})
+        print(f"Saved {len(players)} players to {out_json}")
+        if seasons:
+            print(f"History seasons on the board: {', '.join(str(s) for s in seasons)}")
         if args.csv:
             export_players_csv(result.players, args.csv)
             print(f"Also wrote CSV to {args.csv}")
@@ -293,6 +335,7 @@ def main() -> None:
     p_free.add_argument("--adp-format", choices=["standard", "half-ppr", "ppr"], default=None)
     p_free.add_argument("--espn-league-id", type=str, default=None, help="Optional public ESPN league id")
     p_free.add_argument("--skip-fftoday", action="store_true", help="Skip FFToday scraping")
+    p_free.add_argument("--skip-cbs", action="store_true", help="Skip CBS scraping")
     p_free.add_argument("--out", type=str, default=None)
     p_free.add_argument("--csv", type=str, default=None)
     p_free.set_defaults(func=cmd_pull_free_data)
@@ -351,7 +394,7 @@ def main() -> None:
     p_collect.add_argument("--out", type=str, default=None)
     p_collect.set_defaults(func=cmd_collect)
 
-    # collect-all (nflverse + Sleeper + FFC ADP)
+    # collect-all (free sources + nfl_data_py + Sleeper archive)
     def cmd_collect_all(args: argparse.Namespace) -> None:
         paths = ensure_profile(args.profile)
         from .collectors.combined import collect_all
@@ -362,6 +405,10 @@ def main() -> None:
             teams=args.teams,
             skip_sleeper=args.skip_sleeper,
             skip_adp=args.skip_adp,
+            stats_season=args.stats_season,
+            include_fftoday=not args.skip_fftoday,
+            include_cbs=not args.skip_cbs,
+            espn_league_id=args.espn_league_id,
         )
         if not players:
             print("Collection failed or returned no players.")
@@ -371,14 +418,23 @@ def main() -> None:
         print(f"\nSaved {len(players)} fully enriched players to {out}")
 
     p_ca = sub.add_parser("collect-all",
-        help="Collect from all sources: nflverse + Sleeper + FFC ADP (requires nfl_data_py)")
+        help="Collect from every source: the free pull plus nfl_data_py and "
+             "Sleeper's stats archive (nfl_data_py optional)")
     p_ca.add_argument("--season", type=int, default=2026)
     p_ca.add_argument("--history", type=int, default=3)
+    p_ca.add_argument("--stats-season", type=int, default=None,
+        help="most recent completed season (default: last year)")
     p_ca.add_argument("--scoring", choices=["ppr", "half-ppr", "standard"], default="ppr")
     p_ca.add_argument("--teams", type=int, default=12)
     p_ca.add_argument("--out", type=str, default=None)
     p_ca.add_argument("--skip-sleeper", action="store_true")
     p_ca.add_argument("--skip-adp", action="store_true")
+    p_ca.add_argument("--skip-cbs", action="store_true",
+                      help="Skip CBS scraping during the free pull")
+    p_ca.add_argument("--skip-fftoday", action="store_true",
+        help="skip the FFToday scrape during the free-source step")
+    p_ca.add_argument("--espn-league-id", type=str, default=None,
+        help="public ESPN league whose projections join the consensus")
     p_ca.set_defaults(func=cmd_collect_all)
 
     # consensus (multi-source merge)

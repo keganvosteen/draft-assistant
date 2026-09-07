@@ -4,14 +4,18 @@ import csv
 import io
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict, Iterable, List, Optional, Tuple
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from ..fuzzy import normalize_player_name
 from ..models import LeagueConfig, Player
+from ..platform_sync import SyncedDraftPick, SyncedRosterPlayer, SyncedRosterTeam
+from ..projection_archive import record_snapshot
 from ..scoring import fantasy_points
+from .cbs import fetch_all_cbs
 from .fftoday import fetch_all_fftoday
 
 
@@ -24,7 +28,7 @@ APP_STAT_KEYS = {
     "pass_yd", "pass_td", "pass_int", "pass_2pt",
     "rush_yd", "rush_td", "rush_2pt",
     "rec", "rec_yd", "rec_td", "rec_2pt",
-    "fumbles",
+    "fumbles", "fumbles_total", "sack_taken",
     "pat_made", "fg_miss", "fg_0_39", "fg_40_49", "fg_50_59", "fg_60_plus",
     "krt_td", "prt_td", "int_ret_td", "fum_ret_td", "blk_kick_ret_td",
     "two_pt_ret", "one_pt_safety", "sack", "blk_kick", "def_int",
@@ -78,6 +82,20 @@ class SourceReport:
 class FreeDataResult:
     players: List[Player]
     reports: List[SourceReport]
+    consensus_players: int = 0
+    warnings: List[str] = field(default_factory=list)
+    #: {merge key: [(source, stat line)]} — what each vendor said on its own,
+    #: before the consensus collapsed them into one line.
+    projection_samples: Dict[str, List[Tuple[str, Dict[str, float]]]] = field(default_factory=dict)
+
+
+def _seg(value: object) -> str:
+    """Escape a value being interpolated into a request path.
+
+    ESPN league ids come from the browser; unescaped, a ``?``, ``#`` or ``../``
+    in one reshapes the request the app makes.
+    """
+    return quote(str(value or ""), safe="")
 
 
 def default_projection_season(today: Optional[date] = None) -> int:
@@ -106,15 +124,19 @@ def pull_free_data(
     teams: Optional[int] = None,
     adp_format: Optional[str] = None,
     include_fftoday: bool = True,
+    include_cbs: bool = True,
     espn_league_id: Optional[str] = None,
+    history_seasons: Optional[int] = 1,
 ) -> FreeDataResult:
     season = season or default_projection_season()
     stats_season = stats_season or default_stats_season()
+    history_seasons = max(1, int(history_seasons or 1))
     teams = int(teams or config.teams)
     adp_format = adp_format or scoring_format(config)
 
     reports: List[SourceReport] = []
     merged: Dict[str, Player] = {}
+    proj_samples: Dict[str, List[Tuple[str, Dict[str, float]]]] = {}
     sleeper_players: Dict[str, dict] = {}
     nflverse_players: Dict[str, dict] = {}
 
@@ -131,7 +153,7 @@ def pull_free_data(
             sleeper_players,
             adp_format,
         )
-        _merge_many(merged, sleeper_projection_players, "sleeper_projections")
+        _merge_many(merged, sleeper_projection_players, "sleeper_projections", proj_samples)
         reports.append(SourceReport("Sleeper projections", len(sleeper_projection_players), detail=str(season)))
     except Exception as exc:
         reports.append(SourceReport("Sleeper projections", ok=False, detail=str(exc)))
@@ -150,48 +172,93 @@ def pull_free_data(
     except Exception as exc:
         reports.append(SourceReport("nflverse players", ok=False, detail=str(exc)))
 
-    try:
-        nflverse_stats_rows = _fetch_nflverse_stats_rows(stats_season)
-        nflverse_stat_players = _players_from_nflverse_stats(nflverse_stats_rows, nflverse_players, stats_season)
-        _merge_many(merged, nflverse_stat_players, f"nflverse_stats_{stats_season}")
-        reports.append(SourceReport("nflverse season stats", len(nflverse_stat_players), detail=str(stats_season)))
-    except Exception as exc:
-        reports.append(SourceReport("nflverse season stats", ok=False, detail=str(exc)))
+    # Pull each requested stats season; _merge_player unions historical_stats
+    # per player, so one pull can carry a multi-year corpus.
+    for s in range(stats_season - history_seasons + 1, stats_season + 1):
+        try:
+            nflverse_stats_rows = _fetch_nflverse_stats_rows(s)
+            nflverse_stat_players = _players_from_nflverse_stats(nflverse_stats_rows, nflverse_players, s)
+            _merge_many(merged, nflverse_stat_players, f"nflverse_stats_{s}")
+            reports.append(SourceReport("nflverse season stats", len(nflverse_stat_players), detail=str(s)))
+        except Exception as exc:
+            reports.append(SourceReport("nflverse season stats", ok=False, detail=f"{s}: {exc}"))
 
     if include_fftoday:
         try:
             fftoday_players = fetch_all_fftoday(season)
-            _merge_many(merged, fftoday_players, "fftoday")
+            _merge_many(merged, fftoday_players, "fftoday", proj_samples)
             reports.append(SourceReport("FFToday projections", len(fftoday_players), detail=str(season)))
         except Exception as exc:
             reports.append(SourceReport("FFToday projections", ok=False, detail=str(exc)))
 
-    if espn_league_id:
+    if include_cbs:
         try:
-            espn_players = _fetch_espn_players(season, espn_league_id, adp_format)
-            _merge_many(merged, espn_players, "espn")
-            reports.append(SourceReport("ESPN Fantasy API", len(espn_players), detail=str(espn_league_id)))
+            cbs_players = fetch_all_cbs(season)
+            _merge_many(merged, cbs_players, "cbs", proj_samples)
+            reports.append(SourceReport("CBS projections", len(cbs_players), detail=str(season)))
         except Exception as exc:
-            reports.append(SourceReport("ESPN Fantasy API", ok=False, detail=str(exc)))
-    else:
-        reports.append(SourceReport("ESPN Fantasy API", 0, ok=False, detail="skipped; pass --espn-league-id for a public league"))
+            reports.append(SourceReport("CBS projections", ok=False, detail=str(exc)))
 
-    # Promote merged metadata to first-class Player fields so the aging /
-    # confidence models actually see them (they read Player.age, not
-    # metadata["age"]).
-    for p in merged.values():
-        if p.age is None:
-            try:
-                age = p.metadata.get("age")
-                p.age = int(age) if age is not None else None
-            except (TypeError, ValueError):
-                pass
-        if p.experience is None:
-            try:
-                exp = p.metadata.get("years_exp") or p.metadata.get("years_of_experience")
-                p.experience = int(exp) if exp is not None else None
-            except (TypeError, ValueError):
-                pass
+    # ESPN needs no configuration: without a league id it reads the same
+    # projections through ESPN's stock league default. It used to be skipped
+    # entirely unless a league was linked, which is why a board could sit on
+    # Sleeper alone and call itself a consensus.
+    try:
+        espn_players = _fetch_espn_players(season, espn_league_id, adp_format)
+        _merge_many(merged, espn_players, "espn", proj_samples)
+        reports.append(SourceReport(
+            "ESPN Fantasy API", len(espn_players),
+            detail=str(espn_league_id) if espn_league_id else "league default"))
+    except Exception as exc:
+        reports.append(SourceReport("ESPN Fantasy API", ok=False, detail=str(exc)))
+
+    # Combine projection sources by per-stat median (scoring-agnostic). For a
+    # player only one source projected, that source stands; where two or more
+    # overlap (e.g. Sleeper + FFToday), each stat becomes their consensus.
+    for key, player in merged.items():
+        samples = proj_samples.get(key)
+        if samples and len(samples) > 1:
+            player.projections = _consensus_projection(samples, player.position)
+            player.metadata["projection_source"] = "consensus"
+            player.metadata["projection_sources_n"] = len(samples)
+
+    # Zero consensus players means every secondary projection source dropped
+    # out, yet the pull still "succeeds" on Sleeper alone — a silent downgrade
+    # that's easy to miss until mid-draft. Surface it as an explicit warning so
+    # the UI can show a banner instead of just a green checkmark.
+    consensus_players = sum(
+        1 for p in merged.values()
+        if p.metadata.get("projection_source") == "consensus"
+    )
+    warnings: List[str] = []
+    if merged and not consensus_players:
+        causes: List[str] = []
+        for r in reports:
+            if r.source == "Sleeper projections" and not r.ok:
+                causes.append(f"Sleeper projections failed: {r.detail}")
+            elif r.source in ("FFToday projections", "CBS projections"):
+                site = r.source.split()[0]
+                if not r.ok:
+                    causes.append(f"{site} failed: {r.detail}")
+                elif not r.records:
+                    # A scraped site that returns zero rows has usually been
+                    # redesigned; it fails silently rather than raising.
+                    causes.append(f"{site} returned no players")
+            elif r.source == "ESPN Fantasy API" and not r.ok:
+                causes.append(f"ESPN failed: {r.detail}")
+        if not include_fftoday:
+            causes.append("FFToday was skipped")
+        if not include_cbs:
+            causes.append("CBS was skipped")
+        detail = f" ({'; '.join(causes)})" if causes else ""
+        warnings.append(
+            "Projections are single-source: no player carries a consensus of "
+            f"two or more projection sources{detail}. "
+            "The saved board still works, but every stat line is one site's "
+            "opinion — consider re-running Pull Data."
+        )
+
+    _fill_missing_byes(merged.values())
 
     players = sorted(
         merged.values(),
@@ -202,14 +269,74 @@ def pull_free_data(
             p.name,
         ),
     )
-    return FreeDataResult(players=players, reports=reports)
+    # Bank what each source said before any games were played. A preseason
+    # number cannot be reconstructed later, so this has to happen at pull time;
+    # it is what makes any future change to the blend measurable. Never let it
+    # break a pull -- the board is the product, the archive is bookkeeping.
+    archived: List[str] = []
+    try:
+        archived = record_snapshot(season, proj_samples, merged)
+    except Exception as exc:  # pragma: no cover - defensive
+        reports.append(SourceReport("Projection archive", 0, ok=False, detail=str(exc)))
+    else:
+        if archived:
+            reports.append(SourceReport("Projection archive", len(archived),
+                                        detail=f"{season}: {', '.join(archived)}"))
+
+    return FreeDataResult(players=players, reports=reports,
+                          consensus_players=consensus_players, warnings=warnings,
+                          projection_samples=proj_samples)
 
 
-def _fetch_json(url: str, timeout: int = 30) -> object:
-    req = Request(url, headers={
+def merge_historical_into(new_players: List[Player], existing_players: Iterable[Player]) -> List[Player]:
+    """Carry forward prior pulls' historical seasons onto a fresh pull.
+
+    The new pull defines the current player pool, projections, and ADP; only
+    each player's ``historical_stats`` are unioned from what was saved before,
+    so repeated single-season pulls accumulate a multi-year corpus instead of
+    overwriting it. Players no longer in the latest pull are dropped (they're
+    not draftable), and the new pull's value for a season always wins.
+    """
+    existing_by_key: Dict[str, Player] = {}
+    for player in existing_players:
+        existing_by_key.setdefault(_merge_key(player), player)
+    for player in new_players:
+        prior = existing_by_key.get(_merge_key(player))
+        if not prior:
+            continue
+        for season, season_stats in prior.historical_stats.items():
+            player.historical_stats.setdefault(season, season_stats)
+    return new_players
+
+
+def _fill_missing_byes(players: Iterable[Player]) -> None:
+    """Spread known bye weeks across teammates.
+
+    Only some sources carry byes per player; every teammate shares the same
+    one, so derive a team->bye map and fill the gaps. Without this the
+    engine's bye-week penalties only see the handful of players whose source
+    happened to include a bye.
+    """
+    players = list(players)
+    team_byes: Dict[str, int] = {}
+    for player in players:
+        if player.team and player.bye_week and player.team not in team_byes:
+            team_byes[player.team] = player.bye_week
+    for player in players:
+        if player.team and not player.bye_week:
+            bye = team_byes.get(player.team)
+            if bye:
+                player.bye_week = bye
+
+
+def _fetch_json(url: str, timeout: int = 30, extra_headers: Optional[dict] = None) -> object:
+    headers = {
         "User-Agent": "draft-assistant/1.0 (+https://github.com/)",
         "Accept": "application/json,text/plain,*/*",
-    })
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    req = Request(url, headers=headers)
     with urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -263,6 +390,8 @@ def _players_from_sleeper_projection_rows(
             bye_week=_to_int(meta.get("bye_week")),
             adp=adp,
             projections=projections,
+            age=_to_int(meta.get("age")),
+            experience=_to_int(meta.get("years_exp")),
             metadata=_clean_metadata({
                 "sleeper_id": player_id,
                 "gsis_id": meta.get("gsis_id"),
@@ -280,9 +409,12 @@ def _players_from_sleeper_projection_rows(
 
 def _fetch_ffc_adp_players(adp_format: str, teams: int, season: int) -> Tuple[List[Player], int]:
     errors: List[str] = []
+    # Fantasy Football Calculator only publishes ADP for up to 14-team leagues,
+    # so cap the request for larger leagues (16/18/20) to still get a board.
+    ffc_teams = min(14, int(teams or 12))
     for year in _adp_year_candidates(season):
-        query = urlencode({"teams": teams, "year": year})
-        url = f"{FFC_ADP_BASE}/{adp_format}?{query}"
+        query = urlencode({"teams": ffc_teams, "year": year})
+        url = f"{FFC_ADP_BASE}/{_seg(adp_format)}?{query}"
         data = _fetch_json(url, timeout=30)
         if not isinstance(data, dict):
             errors.append(f"{year}: unexpected response")
@@ -345,13 +477,19 @@ def _fetch_nflverse_stats_rows(season: int) -> List[dict]:
 
 
 def _players_from_nflverse_stats(rows: List[dict], player_meta: Dict[str, dict], season: int) -> List[Player]:
+    """Build players carrying last season's actuals as historical_stats.
+
+    Actuals are deliberately NOT used as projections — the engine's historical
+    layer blends them with real projections (and ages the trend forward), and
+    falls back to the trend alone for players with no published projection.
+    """
     players: List[Player] = []
     for row in rows:
         position = _normalize_position(row.get("position") or "")
         if position not in {"QB", "RB", "WR", "TE", "K"}:
             continue
-        projections = _app_stats_from_nflverse(row, position)
-        if not _has_projection_value(projections):
+        season_stats = _app_stats_from_nflverse(row, position)
+        if not _has_projection_value(season_stats):
             continue
         player_id = row.get("player_id") or row.get("gsis_id") or row.get("player_display_name")
         meta = player_meta.get(str(player_id), {})
@@ -360,11 +498,13 @@ def _players_from_nflverse_stats(rows: List[dict], player_meta: Dict[str, dict],
             name=row.get("player_display_name") or meta.get("display_name") or row.get("player_name") or str(player_id),
             position=position,
             team=row.get("recent_team") or meta.get("latest_team") or None,
-            projections=projections,
+            projections={},
+            age=_age_from_birth_date(meta.get("birth_date")),
+            experience=_to_int(meta.get("years_of_experience")),
+            historical_stats={season: season_stats},
             metadata=_clean_metadata({
                 "gsis_id": player_id,
                 "historical_stats_season": season,
-                "projection_source": f"nflverse {season} actuals",
                 "birth_date": meta.get("birth_date"),
                 "age": _age_from_birth_date(meta.get("birth_date")),
                 "status": meta.get("status"),
@@ -390,6 +530,10 @@ def _enrich_from_nflverse_players(players: Dict[str, Player], nflverse_players: 
             continue
         if not player.team and row.get("latest_team"):
             player.team = row.get("latest_team")
+        if player.age is None:
+            player.age = _age_from_birth_date(row.get("birth_date"))
+        if player.experience is None:
+            player.experience = _to_int(row.get("years_of_experience"))
         player.metadata.update(_clean_metadata({
             "birth_date": row.get("birth_date"),
             "age": player.metadata.get("age") or _age_from_birth_date(row.get("birth_date")),
@@ -403,67 +547,323 @@ def _enrich_from_nflverse_players(players: Dict[str, Player], nflverse_players: 
         _add_source(player, "nflverse_players")
 
 
-def _fetch_espn_players(season: int, league_id: str, adp_format: str) -> List[Player]:
-    query = urlencode({"view": ["kona_player_info", "mDraftDetail"]}, doseq=True)
-    url = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}/segments/0/leagues/{league_id}?{query}"
-    data = _fetch_json(url, timeout=45)
+# ESPN encodes projections as numeric stat IDs (decoded against a live league).
+ESPN_STAT_IDS = {
+    "3": "pass_yd", "4": "pass_td", "20": "pass_int", "19": "pass_2pt",
+    "24": "rush_yd", "25": "rush_td", "26": "rush_2pt",
+    "42": "rec_yd", "43": "rec_td", "53": "rec", "44": "rec_2pt",
+}
+
+
+#: ESPN's stock scoring profile, used when no league id is supplied. ESPN's
+#: projections are global -- the raw stat lines under statSourceId=1 are the same
+#: whichever league you read them through, because a league only decides how
+#: those stats are *scored*. Reading them from a league default means the source
+#: works for everyone, and (unlike a personal league, which 401s for seasons
+#: before it existed) it reaches every season back to 2019 -- which is what makes
+#: ESPN gradeable against past outcomes at all. 3 is the standard PPR default.
+ESPN_DEFAULT_LEAGUE_SEGMENT = "leaguedefaults/3"
+
+
+def _espn_player_url(season: int, league_id: Optional[str]) -> str:
+    base = ("https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
+            f"{_seg(season)}/segments/0/")
+    if league_id:
+        return f"{base}leagues/{_seg(league_id)}?view=kona_player_info"
+    return f"{base}{ESPN_DEFAULT_LEAGUE_SEGMENT}?view=kona_player_info"
+
+
+def _fetch_espn_players(
+    season: int, league_id: Optional[str], adp_format: str, limit: int = 600
+) -> List[Player]:
+    """Pull ESPN's player projections for ``season``.
+
+    ``kona_player_info`` returns an arbitrary handful of (mostly empty) players
+    unless an ``x-fantasy-filter`` header asks for a sorted slice — so we request
+    the most-owned (the draftable universe). Projections arrive as numeric stat
+    IDs (see ESPN_STAT_IDS); K/DST use a different set and are left to Sleeper.
+
+    ``league_id`` is optional and only selects which league the numbers are read
+    through; omitting it uses ESPN's stock league default, which returns the same
+    projections without any configuration. A public league works with just its
+    id; private leagues would additionally need espn_s2 / SWID cookies (not
+    handled here).
+    """
+    url = _espn_player_url(season, league_id)
+    flt = json.dumps({"players": {"limit": int(limit),
+                                  "sortPercOwned": {"sortPriority": 1, "sortAsc": False}}})
+    data = _fetch_json(url, timeout=45, extra_headers={"x-fantasy-filter": flt})
+    rows = data.get("players", []) if isinstance(data, dict) else []
     players: List[Player] = []
-    for row in _walk_espn_players(data):
-        player = row.get("player", {}) if isinstance(row, dict) else {}
-        position = _espn_position(player.get("defaultPositionId") or player.get("eligibleSlots"))
-        if position not in {"QB", "RB", "WR", "TE", "K", "DST"}:
+    for row in rows:
+        if not isinstance(row, dict):
             continue
-        stats = _espn_projection_stats(player)
-        # ESPN's draftRanksByRankType is a *rank*, not an ADP, and the
-        # ratings lookup keys are numeric — neither is an ADP board.
-        # Keep the rank as metadata; never let it pose as ADP.
-        espn_rank = _valid_adp(_nested_get(row, ["draftRanksByRankType", "STANDARD", "rank"]))
+        player = row.get("player", {})
+        position = _espn_position(player.get("defaultPositionId"))
+        if position not in {"QB", "RB", "WR", "TE"}:
+            continue
+        stats = _espn_projection_stats(player, season)
+        if not _has_projection_value(stats):
+            continue
+        adp = _valid_adp(
+            _nested_get(player, ["draftRanksByRankType", "PPR", "rank"])
+            or _nested_get(player, ["draftRanksByRankType", "STANDARD", "rank"])
+        )
         players.append(Player(
             id=f"espn:{player.get('id') or player.get('fullName')}",
-            name=player.get("fullName") or player.get("name") or "",
+            name=player.get("fullName") or "",
             position=position,
             team=_espn_team(player.get("proTeamId")),
-            adp=None,
+            adp=adp,
             projections=stats,
             metadata=_clean_metadata({
                 "espn_id": player.get("id"),
-                "espn_rank": espn_rank,
                 "injury_status": player.get("injuryStatus"),
+                "projection_source": "ESPN",
                 "sources": ["espn"],
             }),
         ))
-    return [
-        p for p in players
-        if p.name and (_has_projection_value(p.projections) or p.metadata.get("espn_rank") is not None)
-    ]
+    return [p for p in players if p.name]
 
 
-def _walk_espn_players(data: object) -> Iterable[dict]:
-    if isinstance(data, dict):
-        if isinstance(data.get("players"), list):
-            for row in data["players"]:
-                if isinstance(row, dict):
-                    yield row
-        for value in data.values():
-            yield from _walk_espn_players(value)
-    elif isinstance(data, list):
-        for item in data:
-            yield from _walk_espn_players(item)
+# ESPN lineup slot IDs -> our roster keys. Flex variants map to TYPED flex keys
+# (models.FLEX_TYPES) so eligibility is preserved — a WR/TE slot (5) must not be
+# fillable by an RB, a superflex (7) can take a QB, etc.
+_ESPN_SLOT_TO_ROSTER = {
+    0: "QB", 2: "RB", 4: "WR", 6: "TE", 16: "DST", 17: "K",
+    20: "BN", 21: "IR",
+    23: "FLEX", 3: "RBWR", 5: "WRTE", 7: "SUPERFLEX",
+}
 
 
-def _espn_projection_stats(player: dict) -> Dict[str, float]:
-    out: Dict[str, float] = {}
+def _espn_league_data(season, league_id, views, espn_s2=None, swid=None, headers=None):
+    url = (
+        "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
+        f"{_seg(season)}/segments/0/leagues/{_seg(league_id)}?"
+        + urlencode([("view", view) for view in views])
+    )
+    request_headers = {**_espn_cookie_headers(espn_s2, swid), **(headers or {})}
+    data = _fetch_json(url, timeout=45, extra_headers=request_headers or None)
+    if not isinstance(data, dict) or ("mSettings" in views and not isinstance(data.get("settings"), dict)):
+        raise RuntimeError("ESPN returned an invalid league response")
+    return data
+
+
+def fetch_espn_league(
+    season: int, league_id: str, espn_s2: Optional[str] = None, swid: Optional[str] = None,
+) -> Dict[str, object]:
+    """Read league settings and real seating; private leagues accept cookies."""
+    data = _espn_league_data(season, league_id, ("mSettings", "mTeam", "mDraftDetail"), espn_s2, swid)
+    return _parse_espn_league(data, league_id)
+
+
+def _parse_espn_league(data: dict, league_id: str) -> Dict[str, object]:
+    settings = data.get("settings") or {}
+
+    roster: Dict[str, int] = {}
+    slot_counts = (settings.get("rosterSettings") or {}).get("lineupSlotCounts") or {}
+    for slot, count in slot_counts.items():
+        key = _ESPN_SLOT_TO_ROSTER.get(_to_int(slot))
+        if key and count:
+            roster[key] = roster.get(key, 0) + int(count)
+    # Make standard editor slots explicit (0 if absent) so the imported roster
+    # overrides the form defaults rather than inheriting them — e.g. a league
+    # with no dedicated TE slot must show TE 0, not the default 1.
+    for key in ("QB", "RB", "WR", "TE", "FLEX", "K", "DST", "BN"):
+        roster.setdefault(key, 0)
+
+    scoring: Dict[str, float] = {}
+    for item in (settings.get("scoringSettings") or {}).get("scoringItems") or []:
+        key = ESPN_STAT_IDS.get(str(item.get("statId")))
+        if not key:
+            continue
+        pts = item.get("points")
+        if pts is None:
+            overrides = item.get("pointsOverrides") or {}
+            pts = next(iter(overrides.values()), None)
+        if pts is not None:
+            scoring[key] = float(pts)
+
+    return {
+        "name": settings.get("name") or f"ESPN {league_id}",
+        "rosterSlots": roster,
+        "scoring": scoring,
+        "espnLeagueId": str(league_id),
+        "season": str(data.get("seasonId") or ""),
+        **_espn_draft_settings(data),
+    }
+
+
+def _espn_draft_settings(data: dict) -> dict:
+    settings = data.get("settings") or {}
+    draft_settings = settings.get("draftSettings") or {}
+    detail = data.get("draftDetail") or {}
+    teams = {str(t["id"]): t for t in data.get("teams") or []
+             if isinstance(t, dict) and t.get("id") is not None}
+    num_teams = _to_int(settings.get("size")) or len(teams) or 10
+    order = [str(team_id) for team_id in draft_settings.get("pickOrder") or []]
+    ready = len(order) == num_teams and len(set(order)) == num_teams and set(order) == set(teams)
+    if not ready:
+        # A complete, untraded first round can recover a published draft's
+        # seating when ESPN no longer retains pickOrder. Rankings cannot.
+        first_round = sorted(
+            (p for p in detail.get("picks") or [] if _to_int(p.get("roundId")) == 1),
+            key=lambda p: _to_int(p.get("roundPickNumber")) or 0,
+        )
+        inferred = [str(p.get("teamId")) for p in first_round]
+        ready = (draft_settings.get("isTradingEnabled") is False and len(inferred) == num_teams
+                 and len(set(inferred)) == num_teams and set(inferred) == set(teams)
+                 and [_to_int(p.get("roundPickNumber")) for p in first_round] == list(range(1, num_teams + 1)))
+        order = inferred if ready else list(teams)
+    draft_type = str(draft_settings.get("type") or "unknown").lower()
+    return {
+        "numTeams": num_teams,
+        "teamIds": order,
+        "teamNames": [_espn_team_name(teams[team_id]) for team_id in order],
+        "draftOrderReady": bool(ready),
+        "draftType": draft_type,
+        "draftStatus": "complete" if detail.get("drafted") else "drafting" if detail.get("inProgress") else "pre_draft",
+    }
+
+
+def fetch_espn_draft(
+    season: int, league_id: str, espn_s2: Optional[str] = None, swid: Optional[str] = None,
+) -> Dict[str, object]:
+    """Fetch the published draft history, not ESPN's separate live-room feed.
+
+    mDraftDetail only reliably publishes picks after completion. The caller
+    must check status before replacing local picks, including an empty feed.
+    """
+    data = _espn_league_data(
+        season, league_id, ("mSettings", "mTeam", "mDraftDetail", "mRoster"), espn_s2, swid,
+    )
+    info = _espn_draft_settings(data)
+    picks = _parse_espn_draft_picks(data)
+    missing = [int(p.player.provider_id.split(":", 1)[1]) for p in picks
+               if not p.player.name and p.player.provider_id]
+    if missing and info["draftStatus"] == "complete":
+        # A player dropped after the draft is absent from mRoster; a single
+        # filtered card lookup still lets boards without ESPN IDs match them.
+        cards = _espn_league_data(season, league_id, ("kona_playercard",), espn_s2, swid, {
+            "x-fantasy-filter": json.dumps({"players": {"filterIds": {"value": sorted(set(missing))}}}),
+        })
+        data["players"] = cards.get("players") or []
+        picks = _parse_espn_draft_picks(data)
+    return {
+        **info,
+        "status": info["draftStatus"],
+        "draftPicks": picks,
+        "liveAvailable": False,
+        "liveUnavailableReason": "ESPN publishes draft results after the draft completes; its live draft room uses a separate feed that this app cannot read.",
+        "nextPickNum": max((p.pick_no for p in picks), default=0) + 1,
+    }
+
+
+def _parse_espn_draft_picks(data: dict) -> List[SyncedDraftPick]:
+    info = _espn_draft_settings(data)
+    slot_by_id = {team_id: i for i, team_id in enumerate(info["teamIds"], 1)}
+    player_by_id = {p.provider_id: p for t in _parse_espn_rosters(data) for p in t.players}
+    for row in data.get("players") or []:
+        player = row.get("player") or {}
+        if player.get("id") is not None:
+            player_by_id[f"espn:{player['id']}"] = _espn_roster_player(player)
+    picks = []
+    for row in (data.get("draftDetail") or {}).get("picks") or []:
+        pick_no = _to_int(row.get("overallPickNumber"))
+        if not pick_no:
+            round_no, in_round = _to_int(row.get("roundId")), _to_int(row.get("roundPickNumber"))
+            if round_no and in_round:
+                pick_no = (round_no - 1) * info["numTeams"] + in_round
+        if not pick_no or pick_no < 1:
+            raise RuntimeError("ESPN returned a draft pick without a valid pick number")
+        player_id = f"espn:{row['playerId']}" if row.get("playerId") not in (None, 0, -1) else None
+        team_id = str(row["teamId"]) if row.get("teamId") is not None else None
+        picks.append(SyncedDraftPick(
+            pick_no=pick_no,
+            team_num=slot_by_id.get(team_id, 0),
+            provider_team_id=team_id,
+            player=player_by_id.get(player_id) or SyncedRosterPlayer("", "", provider_id=player_id),
+        ))
+    return sorted(picks, key=lambda p: p.pick_no)
+
+
+def _espn_team_name(team: dict) -> str:
+    return team.get("name") or f"{team.get('location', '')} {team.get('nickname', '')}".strip() or f"Team {team.get('id')}"
+
+
+def _espn_roster_player(player: dict) -> SyncedRosterPlayer:
+    return SyncedRosterPlayer(
+        name=player.get("fullName") or "",
+        position=_espn_position(player.get("defaultPositionId")),
+        team=_espn_team(player.get("proTeamId")),
+        provider_id=f"espn:{player['id']}" if player.get("id") is not None else None,
+    )
+
+
+def fetch_espn_rosters(
+    season: int,
+    league_id: str,
+    espn_s2: Optional[str] = None,
+    swid: Optional[str] = None,
+) -> List[SyncedRosterTeam]:
+    """Fetch current ESPN rosters for public leagues, or private with cookies."""
+    url = (
+        "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
+        f"{_seg(season)}/segments/0/leagues/{_seg(league_id)}?view=mRoster&view=mTeam"
+    )
+    headers = _espn_cookie_headers(espn_s2, swid)
+    data = _fetch_json(url, timeout=45, extra_headers=headers or None)
+    return _parse_espn_rosters(data)
+
+
+def _parse_espn_rosters(data: dict) -> List[SyncedRosterTeam]:
+    teams = data.get("teams", []) if isinstance(data, dict) else []
+    out: List[SyncedRosterTeam] = []
+    for team in teams:
+        if not isinstance(team, dict):
+            continue
+        roster = ((team.get("roster") or {}).get("entries") or [])
+        players: List[SyncedRosterPlayer] = []
+        for entry in roster:
+            player = ((entry or {}).get("playerPoolEntry") or {}).get("player") or {}
+            position = _espn_position(player.get("defaultPositionId"))
+            if not player.get("fullName") or not position:
+                continue
+            players.append(_espn_roster_player(player))
+        out.append(SyncedRosterTeam(
+            name=_espn_team_name(team),
+            provider_id=str(team.get("id")) if team.get("id") is not None else None,
+            players=players,
+        ))
+    return out
+
+
+def _espn_cookie_headers(espn_s2: Optional[str], swid: Optional[str]) -> Dict[str, str]:
+    cookies = []
+    for key, value in (("espn_s2", espn_s2), ("SWID", swid)):
+        if value:
+            value = str(value).strip()
+            if any(ord(c) < 32 or ord(c) > 126 or c == ";" for c in value):
+                raise ValueError(f"{key} must be a single cookie value")
+            cookies.append(f"{key}={value}")
+    return {"Cookie": "; ".join(cookies)} if cookies else {}
+
+
+def _espn_projection_stats(player: dict, season: int) -> Dict[str, float]:
+    """Map ESPN's full-season projection (statSourceId=1, split=0) to app keys."""
     for stat_row in player.get("stats") or []:
         if not isinstance(stat_row, dict):
             continue
-        if stat_row.get("statSourceId") != 1:
+        if stat_row.get("statSourceId") != 1 or stat_row.get("statSplitTypeId") != 0:
             continue
-        applied = stat_row.get("appliedStats") or {}
-        if isinstance(applied, dict):
-            for key, value in applied.items():
-                if key in APP_STAT_KEYS:
-                    out[key] = _to_float(value)
-    return out
+        if stat_row.get("seasonId") != season:
+            continue
+        raw = stat_row.get("stats") or {}
+        out = {ESPN_STAT_IDS[str(k)]: _to_float(v)
+               for k, v in raw.items() if str(k) in ESPN_STAT_IDS}
+        if out:
+            return out
+    return {}
 
 
 def _github_release_asset_url(tag: str, asset_name: str) -> str:
@@ -483,14 +883,25 @@ def _read_csv_url(url: str) -> List[dict]:
 
 def _app_stats_from_sleeper(row: dict, position: str) -> Dict[str, float]:
     stats = _copy_stats(row, APP_STAT_KEYS)
-    stats["fumbles"] = _first_float(row, ["fum_lost", "fumbles_lost", "fum"])
+    # Yahoo scores "Fumbles" (any fumble) and "Fumbles Lost" separately, so keep
+    # both: `fumbles` = lost (what most formats penalize), `fumbles_total` = all.
+    stats["fumbles"] = _first_float(row, ["fum_lost", "fumbles_lost"])
+    stats["fumbles_total"] = _first_float(row, ["fum", "fumbles"])
     stats["pat_made"] = _first_float(row, ["pat_made", "xpm"])
     stats["fg_0_39"] = _first_float(row, ["fg_0_39", "fgm_0_19"]) + _first_float(row, ["fgm_20_29"]) + _first_float(row, ["fgm_30_39"])
     stats["fg_40_49"] = _first_float(row, ["fg_40_49", "fgm_40_49"])
     stats["fg_50_59"] = _first_float(row, ["fg_50_59", "fgm_50_59", "fgm_50p"])
     stats["fg_60_plus"] = _first_float(row, ["fg_60_plus", "fgm_60p"])
     stats["fg_miss"] = _first_float(row, ["fg_miss", "fgmiss", "fgmiss_0_19"]) + _first_float(row, ["fgmiss_20_29"]) + _first_float(row, ["fgmiss_30_39"]) + _first_float(row, ["fgmiss_40_49"]) + _first_float(row, ["fgmiss_50_59", "fgmiss_50p"]) + _first_float(row, ["fgmiss_60p"])
-    stats["sack"] = _first_float(row, ["sack", "sacks"])
+    # "sack" is overloaded: for a defense it's sacks recorded (a positive), for
+    # an offensive player it's times the QB was sacked (a negative). Route to
+    # distinct keys so the two never share a scoring weight.
+    sack_val = _first_float(row, ["sack", "sacks"])
+    stats.pop("sack", None)
+    if position == "DST":
+        stats["sack"] = sack_val
+    else:
+        stats["sack_taken"] = sack_val
     stats["def_int"] = _first_float(row, ["def_int", "int"])
     stats["fumble_recovery"] = _first_float(row, ["fumble_recovery", "fum_rec"])
     stats["safety"] = _first_float(row, ["safety"])
@@ -515,6 +926,8 @@ def _app_stats_from_nflverse(row: dict, position: str) -> Dict[str, float]:
         "rec_td": _to_float(row.get("receiving_tds")),
         "rec_2pt": _to_float(row.get("receiving_2pt_conversions")),
         "fumbles": _to_float(row.get("rushing_fumbles_lost")) + _to_float(row.get("receiving_fumbles_lost")) + _to_float(row.get("sack_fumbles_lost")),
+        "fumbles_total": _to_float(row.get("rushing_fumbles")) + _to_float(row.get("receiving_fumbles")) + _to_float(row.get("sack_fumbles")),
+        "sack_taken": _to_float(row.get("sacks")),
         "pat_made": _to_float(row.get("pat_made")),
         "fg_miss": _to_float(row.get("fg_missed")),
         "fg_0_39": _to_float(row.get("fg_made_0_19")) + _to_float(row.get("fg_made_20_29")) + _to_float(row.get("fg_made_30_39")),
@@ -528,11 +941,109 @@ def _app_stats_from_nflverse(row: dict, position: str) -> Dict[str, float]:
     return {k: v for k, v in stats.items() if v}
 
 
-def _merge_many(merged: Dict[str, Player], players: Iterable[Player], source: str) -> None:
+#: How much each source's number counts, per position, when sources disagree.
+#: Anything unlisted weighs :data:`DEFAULT_SOURCE_WEIGHT`, so a new source starts
+#: neutral and an unmeasured one stays neutral.
+#:
+#: Derived by ``backtest.calibrate_source_weights`` over 2019-2022 and 2024-2025
+#: (ESPN's 2023 projections are a stub), blending stat lines and scoring across
+#: standard/half/PPR so the weights do not encode one league's rules. Only
+#: players *both* sources projected are compared: this asks whose number is
+#: better when they disagree, not who covers more players.
+#:
+#: Leave-one-season-out said the tilt only earns its keep at RB (+0.016 Spearman
+#: over an even split, 4 seasons of 6) and TE (+0.013, 5 of 6). At QB (-0.007)
+#: and WR (-0.004) weighting actively *hurt*, so both stay even. ESPN's much
+#: larger apparent WR edge in a raw source-vs-source comparison is coverage --
+#: it projects ~59 receivers to FFToday's ~38 -- and coverage already pays off
+#: by ESPN being in the pool at all. It is not a reason to trust its number more.
+#:
+#: The optimum was a boundary (w=1.0, i.e. ignore FFToday entirely at RB/TE) on
+#: six seasons with two of them negative. Taking that literally would be
+#: overfitting, so this shrinks toward even: 2:1 keeps most of the validated
+#: gain without betting the position on one source.
+#:
+#: Caveat worth knowing before extending this: Sleeper supplies most of the
+#: board and cannot be graded at all (its archive is revised in-season), so it
+#: stays neutral, and the ESPN tilt derived against FFToday is *extrapolated*
+#: when ESPN meets Sleeper instead. Re-derive once the 2026 preseason archive
+#: makes Sleeper gradeable.
+SOURCE_WEIGHTS: Dict[str, Dict[str, float]] = {
+    "espn": {"RB": 2.0, "TE": 2.0},
+}
+DEFAULT_SOURCE_WEIGHT = 1.0
+
+
+def _source_weight(source: str, position: str) -> float:
+    return SOURCE_WEIGHTS.get(source, {}).get(position, DEFAULT_SOURCE_WEIGHT)
+
+
+def _winsorize(values: List[float]) -> List[float]:
+    """Pull the extremes in to the next value along, once there are enough.
+
+    Only meaningful from four sources up: with three you cannot tell an outlier
+    from a minority opinion, and clipping would just re-derive the median.
+    """
+    if len(values) < 4:
+        return values
+    ordered = sorted(values)
+    margin = len(ordered) // 4
+    low, high = ordered[margin], ordered[-1 - margin]
+    return [min(max(v, low), high) for v in values]
+
+
+def _consensus_projection(
+    samples: List[Tuple[str, Dict[str, float]]], position: str = "",
+) -> Dict[str, float]:
+    """Combine projection sources into one stat line, weighted by track record.
+
+    Operates on STAT lines, not points, so it's scoring-agnostic — the owner runs
+    two leagues with different rules, so the right product is a consensus stat
+    line that each league's scoring is then applied to.
+
+    A source that simply doesn't carry a stat is absent from that stat's vote
+    rather than voting zero: FFToday publishes no receiving line for a converted
+    quarterback, and counting that as "0 catches" would drag the consensus down
+    on the strength of a column the site never had.
+
+    With even weights this is the mean, which for two sources is what the old
+    per-stat median already produced.
+    """
+    by_stat: Dict[str, List[Tuple[float, float]]] = {}
+    for source, proj in samples:
+        weight = _source_weight(source, position)
+        for stat, val in proj.items():
+            by_stat.setdefault(stat, []).append((val, weight))
+
+    out: Dict[str, float] = {}
+    for stat, pairs in by_stat.items():
+        if not pairs:
+            continue
+        values = _winsorize([v for v, _w in pairs])
+        weights = [w for _v, w in pairs]
+        total = sum(weights)
+        if total <= 0:
+            continue
+        out[stat] = round(sum(v * w for v, w in zip(values, weights)) / total, 2)
+    return out
+
+
+def _merge_many(
+    merged: Dict[str, Player],
+    players: Iterable[Player],
+    source: str,
+    proj_samples: Optional[Dict[str, List[Tuple[str, Dict[str, float]]]]] = None,
+) -> None:
     for player in players:
         if not player.name or player.position not in {"QB", "RB", "WR", "TE", "K", "DST"}:
             continue
         key = _merge_key(player)
+        # Collect each source's raw projection so projections can be combined by
+        # per-stat median at the end, instead of first-source-wins gap-fill.
+        # The source name travels with the sample: it is what lets a snapshot be
+        # archived and graded per vendor rather than as one anonymous blend.
+        if proj_samples is not None and _has_projection_value(player.projections):
+            proj_samples.setdefault(key, []).append((source, dict(player.projections)))
         existing = merged.get(key)
         if existing is None:
             _add_source(player, source)
@@ -546,11 +1057,21 @@ def _merge_player(base: Player, incoming: Player, source: str) -> None:
         base.team = incoming.team
     if not base.bye_week and incoming.bye_week:
         base.bye_week = incoming.bye_week
-    # First source with an ADP wins (sources merge in priority order:
-    # Sleeper, then FFC — both real format-specific ADP boards). Taking the
-    # minimum across sources would systematically drag everyone earlier.
-    if base.adp is None and incoming.adp is not None:
+    if incoming.adp is not None and (base.adp is None or incoming.adp < base.adp):
         base.adp = incoming.adp
+    if base.age is None and incoming.age is not None:
+        base.age = incoming.age
+    if base.experience is None and incoming.experience is not None:
+        base.experience = incoming.experience
+    if not base.previous_team and incoming.previous_team:
+        base.previous_team = incoming.previous_team
+    if not base.draft_capital and incoming.draft_capital:
+        base.draft_capital = incoming.draft_capital
+    for injury in incoming.injury_history:
+        if injury not in base.injury_history:
+            base.injury_history.append(injury)
+    for season, season_stats in incoming.historical_stats.items():
+        base.historical_stats.setdefault(season, season_stats)
     if not _has_projection_value(base.projections) and _has_projection_value(incoming.projections):
         base.projections.update(incoming.projections)
         if incoming.metadata.get("projection_source"):
@@ -653,9 +1174,13 @@ def _to_int(value: object) -> Optional[int]:
 
 
 def _norm_name(name: str) -> str:
-    text = name.lower().replace(".", "")
-    text = re.sub(r"\b(jr|sr|ii|iii|iv|v)\b", "", text)
-    return re.sub(r"[^a-z0-9]+", "", text)
+    """Merge-key normalization — the same one the roster matcher uses.
+
+    This used to strip ``jr|sr|ii|iii|iv|v`` as words *anywhere* in the name and
+    disagreed with ``platform_sync``'s normalizer, so a player could be merged
+    under one key and looked up under another. One normalizer now serves both.
+    """
+    return normalize_player_name(name, compact=True)
 
 
 def _clean_metadata(metadata: Dict[str, object]) -> Dict[str, object]:

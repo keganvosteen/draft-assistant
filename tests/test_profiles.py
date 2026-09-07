@@ -1,9 +1,11 @@
 """Tests for profiles.py — multi-league profile management."""
+import json
 import os
 import shutil
 import tempfile
 import unittest
 
+from draft_assistant.config import LEGACY_CONFIG_FILENAME, load_config
 from draft_assistant.profiles import (
     DEFAULT_PROFILE,
     PROFILE_ROOT,
@@ -32,7 +34,7 @@ class TestNormalizeProfileName(unittest.TestCase):
 class TestGetProfilePaths(unittest.TestCase):
     def test_default_uses_root_files(self):
         paths = get_profile_paths(DEFAULT_PROFILE)
-        self.assertEqual(paths.config_path, "league.config.yaml")
+        self.assertEqual(paths.config_path, "league.config.json")
         self.assertEqual(paths.state_path, "draft_state.json")
         self.assertEqual(paths.projections_path, SHARED_PROJECTIONS_PATH)
 
@@ -63,6 +65,21 @@ class TestEnsureProfile(unittest.TestCase):
         paths1 = ensure_profile("test-league")
         paths2 = ensure_profile("test-league")
         self.assertEqual(paths1.config_path, paths2.config_path)
+
+    def test_profile_written_before_the_rename_keeps_its_settings(self):
+        # A profile created by an older build has league.config.yaml. It must
+        # be adopted, not shadowed by a freshly defaulted league.config.json.
+        paths = get_profile_paths("old-league")
+        os.makedirs(paths.base_dir, exist_ok=True)
+        legacy = os.path.join(paths.base_dir, LEGACY_CONFIG_FILENAME)
+        with open(legacy, "w", encoding="utf-8") as f:
+            json.dump({"teams": 14}, f)
+
+        ensure_profile("old-league")
+
+        self.assertFalse(os.path.exists(legacy))
+        self.assertTrue(os.path.exists(paths.config_path))
+        self.assertEqual(load_config(paths.config_path).teams, 14)
 
 
 class TestListProfiles(unittest.TestCase):

@@ -1,0 +1,14 @@
+# Shell scripts must keep LF endings. Checked out with CRLF on a Mac they fail
+# with "bad interpreter: /usr/bin/env bash^M", which is a confusing way to lose
+# an afternoon on the macOS build.
+*.sh text eol=lf
+
+# PowerShell and the Inno Setup script are Windows-only; CRLF is fine and ISCC
+# is happier with it.
+*.ps1 text eol=crlf
+*.iss text eol=crlf
+
+# Binary build inputs — never touch these.
+*.ico binary
+*.icns binary
+*.png binary

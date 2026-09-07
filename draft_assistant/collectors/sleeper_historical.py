@@ -36,7 +36,9 @@ STAT_MAP = {
     "rec_td": "rec_td",
     "rec_2pt": "rec_2pt",
     "fum_lost": "fumbles",
-    "fum": "fumbles",
+    # Offensive "sack" = times the QB was sacked; routed back to a defense's
+    # "sack" key by position in collect_players() below.
+    "sack": "sack_taken",
 }
 
 
@@ -62,6 +64,10 @@ def _extract_stats(raw_stats: Dict[str, Any]) -> Dict[str, float]:
         val = raw_stats.get(sleeper_key)
         if val is not None:
             out[our_key] = float(val)
+    # Yahoo scores lost fumbles and total fumbles separately, so keep both:
+    # `fumbles` = lost (mapped from fum_lost above), `fumbles_total` = all.
+    if raw_stats.get("fum") is not None:
+        out["fumbles_total"] = float(raw_stats["fum"])
     return out
 
 
@@ -167,7 +173,11 @@ def collect_players(
                 player_history[year] = year_stats[pid]
 
         # Current projections
-        proj = (projections or {}).get(pid, {})
+        proj = dict((projections or {}).get(pid, {}))
+        # A defense's sacks were mapped to "sack_taken" by STAT_MAP; put them
+        # back under the defensive "sack" key so DST scoring picks them up.
+        if pos == "DST" and "sack_taken" in proj:
+            proj["sack"] = proj.pop("sack_taken")
 
         # Detect team change
         previous_team = None

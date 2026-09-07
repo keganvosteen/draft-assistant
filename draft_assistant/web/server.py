@@ -6,9 +6,10 @@ React frontend can load player data from the Python backend.
 from __future__ import annotations
 
 import json
+import math
 import os
-import sys
 import threading
+import time
 import traceback
 import uuid
 import webbrowser
@@ -16,23 +17,137 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlsplit
 
-from ..models import LeagueConfig
+from .. import __version__
+from ..context import (
+    confidence_for_player,
+    context_payload,
+    default_season,
+    default_week,
+    is_candidate_eligible,
+    is_stale,
+    load_context,
+    primary_availability,
+    refresh_context,
+    save_context,
+    season_adjusted_players,
+    signal_summary,
+)
+from ..models import DraftState, FLEX_TYPES, LeagueConfig, PlayerContext
 from ..profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from ..providers.base import build_provider
+from ..free_agents import free_agent_recommendations, rank_recommendations
+from ..platform_sync import synced_draft_to_picks, synced_rosters_to_picks
+from ..rollout import rollout_values
 from ..sample_data import sample_players
 from ..scoring import fantasy_points
-from ..storage import load_state, save_players, save_state
+from ..storage import load_players, load_state, save_players, update_players, update_state
+from ..update_checker import check_for_update
+from ..workspace_state import (
+    WorkspaceConflictError, WorkspaceStorageError, WorkspaceValidationError,
+    WorkspaceVersionError, load_workspace, save_workspace,
+)
+from .scoring import STANDARD_SCORING, scoring_for_league
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-STANDARD_SCORING = {
-    "pass_yd": 0.04, "pass_td": 4, "pass_int": -2,
-    "rush_yd": 0.1, "rush_td": 6,
-    "rec_yd": 0.1, "rec_td": 6,
-    "fumbles": -2,
-}
+# Host names this server will answer API calls on (see
+# DraftAPIHandler._request_is_same_origin).
+ALLOWED_HOSTNAMES = {"127.0.0.1", "localhost", "::1"}
 
+# Ceiling on a request body. Generous next to the biggest real payload (a
+# pasted draft room log) and small enough that a bogus Content-Length can't
+# exhaust memory.
+MAX_BODY_BYTES = 8 * 1024 * 1024
+MAX_PICKS = 1024
+MAX_TEAMS = 32
+MAX_ROSTER_SLOTS = 50
+MAX_WEB_SIMS = 96
+
+
+def _espn_reference(value) -> str:
+    """Accept a league id or the ESPN league URL shown in the browser."""
+    reference = str(value or "").strip()
+    if reference.isascii() and reference.isdigit():
+        return reference
+    parsed = urlsplit(reference)
+    if parsed.scheme in {"http", "https"} and parsed.hostname in {"fantasy.espn.com", "www.espn.com"}:
+        league_id = parse_qs(parsed.query).get("leagueId", [""])[0]
+        if league_id.isascii() and league_id.isdigit():
+            return league_id
+    raise ValueError("Enter the numeric ESPN league ID or its ESPN league URL.")
+
+
+def _league_platform(league: dict) -> str:
+    if league.get("sleeperDraftId"):
+        return "sleeper"
+    for key, platform in (("sleeperLeagueId", "sleeper"), ("espnLeagueId", "espn"),
+                          ("yahooLeagueKey", "yahoo")):
+        if league.get(key):
+            return platform
+    return str(league.get("platform") or "").lower()
+
+
+def _import_scoring_type(info: dict) -> dict:
+    rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
+    return {**info, "scoringType": "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"}
+
+
+def _draft_league_patch(info: dict, league: dict) -> dict:
+    """Keep the selected team attached to its identity when seats change."""
+    patch = {key: info[key] for key in (
+        "teamNames", "teamIds", "numTeams", "draftOrderReady", "draftType",
+        "draftStatus", "sleeperDraftId",
+    ) if key in info}
+    old_ids, new_ids = league.get("teamIds") or [], info.get("teamIds") or []
+    old_names, new_names = league.get("teamNames") or [], info.get("teamNames") or []
+    slot = int(league.get("draftPosition") or 0) - 1
+    new_ids = [str(value) for value in new_ids]
+    has_id = 0 <= slot < len(old_ids) and old_ids[slot] not in (None, "")
+    if has_id and new_ids.count(str(old_ids[slot])) == 1:
+        patch["draftPosition"] = new_ids.index(str(old_ids[slot])) + 1
+    elif not has_id and 0 <= slot < len(old_names) and old_names[slot] and old_names.count(old_names[slot]) == 1 and new_names.count(old_names[slot]) == 1:
+        patch["draftPosition"] = new_names.index(old_names[slot]) + 1
+    elif "draftPosition" in info:
+        patch["draftPosition"] = info["draftPosition"]
+    else:
+        patch.update(draftPosition=None, teamSelectionRequired=True)
+    if patch.get("draftPosition"):
+        patch["teamSelectionRequired"] = False
+    return patch
+
+
+class PayloadTooLarge(ValueError):
+    pass
+
+
+def _bounded_int(value, label: str, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be an integer")
+    try:
+        result = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be an integer") from exc
+    if result < minimum or result > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}")
+    return result
+
+
+def _bounded_float(value, label: str, minimum: float, maximum: float) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be a number")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a number") from exc
+    if not math.isfinite(result) or result < minimum or result > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}")
+    return result
+
+# Last-resort fallback only (a past season's byes — goes stale). Byes are
+# preferred from player data, then from per-team byes derived from that data.
 BYE_WEEKS = {
     "ARI": 13, "ATL": 12, "BAL": 8, "BUF": 6, "CAR": 6, "CHI": 14,
     "CIN": 8, "CLE": 14, "DAL": 10, "DEN": 11, "DET": 5, "GB": 13,
@@ -42,26 +157,70 @@ BYE_WEEKS = {
     "TEN": 9, "WAS": 14,
 }
 
+
+def _team_byes_from_players(players) -> dict:
+    """Derive each team's bye week from whichever players carry one.
+
+    This self-heals every season from pulled data instead of relying on the
+    hardcoded table above.
+    """
+    byes: dict = {}
+    for player in players:
+        if player.team and player.bye_week and player.team not in byes:
+            byes[player.team] = player.bye_week
+    return byes
+
+
+def _player_indexes(players) -> tuple[dict, dict]:
+    """Return canonical players and aliases for pre-stable-id saved drafts."""
+    canonical = {player.key(): player for player in players}
+    aliases = {
+        player.legacy_key(): player.key()
+        for player in players
+        if player.legacy_key() != player.key()
+    }
+    return canonical, aliases
+
+
+def _canonicalize_player_keys(keys, aliases: dict) -> list[str]:
+    return [aliases.get(key, key) for key in keys]
+
 # Tracks background tasks (pull-free-data, collect-all, etc.)
 _tasks: dict[str, dict] = {}
 _task_lock = threading.Lock()
-MAX_FINISHED_TASKS = 20
-MAX_BODY_BYTES = 5 * 1024 * 1024
-
-# Cache for /api/players keyed on the projections file's mtime (only valid
-# for the local_json provider — network providers bypass it).
-_players_cache: dict = {"key": None, "players": None, "config": None}
-_players_cache_lock = threading.Lock()
+_task_slots = threading.BoundedSemaphore(2)
 
 
-def _player_to_js(player, config: LeagueConfig) -> dict:
-    """Convert a Python Player to the JS frontend's expected format."""
-    std_pts = fantasy_points(player.projections, STANDARD_SCORING)
-    # Full-PPR reception points. The frontend applies the league's per-
-    # reception rate itself (ppr = std + rec, half = std + rec*0.5).
-    rec_bonus = float(player.projections.get("rec", 0)) * 1.0
+def _player_to_js(player, config: LeagueConfig, team_byes: Optional[dict] = None,
+                  context: Optional[PlayerContext] = None) -> dict:
+    """Convert a Python Player to the JS frontend's expected format.
+
+    stdPts is standard (0 pt/rec) scoring; recPts is the full 1-pt-per-reception
+    bonus so the frontend computes: ppr = stdPts + recPts, half = stdPts + 0.5*recPts.
+    K/DST don't vary with reception format, so they are scored with the league's
+    own scoring config (STANDARD_SCORING has no kicker/defense stat weights).
+    """
+    # Board scoring runs through the same historical/age model as Auction + CLI,
+    # so accumulated history and aging shape the rankings — not just raw
+    # current-season projections.
+    if player.age is not None or player.historical_stats:
+        from ..historical import adjust_projections
+        proj = adjust_projections(player, config.scoring)
+    else:
+        proj = player.projections
+
+    if player.position in {"K", "DST"}:
+        std_pts = fantasy_points(proj, config.scoring)
+    else:
+        std_pts = fantasy_points(proj, STANDARD_SCORING)
+    rec_bonus = float(proj.get("rec", 0))
     adp = player.adp if player.adp else 999
-    bye = player.bye_week or BYE_WEEKS.get(player.team or "", None)
+    team = player.team or ""
+    bye = (
+        player.bye_week
+        or (team_byes or {}).get(team)
+        or BYE_WEEKS.get(team)
+    )
 
     tier = 5
     if adp <= 12:
@@ -73,8 +232,17 @@ def _player_to_js(player, config: LeagueConfig) -> dict:
     elif adp <= 90:
         tier = 4
 
+    # Keep every numeric raw stat so imported provider scoring (including
+    # bonuses and K/DST categories) can be rendered exactly in the browser.
+    stats = {
+        key: round(float(proj.get(key, 0.0)), 1)
+        for key in proj
+        if isinstance(proj.get(key), (int, float)) and proj.get(key)
+    }
+
     return {
         "id": player.key(),
+        "legacyId": player.legacy_key(),
         "name": player.name,
         "pos": player.position,
         "nflTeam": player.team or "FA",
@@ -84,25 +252,18 @@ def _player_to_js(player, config: LeagueConfig) -> dict:
         "tier": tier,
         "byeWeek": bye,
         "age": player.age,
+        "stats": stats,
+        "availability": primary_availability(context, player),
+        "confidence": confidence_for_player(context, player),
+        "signals": signal_summary(context, player),
+        "contextAsOf": context.refreshed_at if context else None,
+        "eligible": is_candidate_eligible(context, player),
     }
 
 
 def _load_players(profile: str):
     paths = ensure_profile(profile)
     config = load_profile_config(paths)
-
-    is_file_provider = (config.provider or {}).get("type", "local_json") == "local_json"
-    cache_key = None
-    if is_file_provider:
-        try:
-            cache_key = (paths.projections_path, os.path.getmtime(paths.projections_path))
-        except OSError:
-            cache_key = None
-        if cache_key is not None:
-            with _players_cache_lock:
-                if _players_cache["key"] == cache_key:
-                    return _players_cache["players"], _players_cache["config"]
-
     provider = build_provider(config.provider)
     players = provider.fetch_players()
     if not players:
@@ -110,20 +271,33 @@ def _load_players(profile: str):
             save_players(sample_players(), paths.projections_path)
         provider = build_provider(config.provider)
         players = provider.fetch_players()
-
-    if is_file_provider:
-        try:
-            cache_key = (paths.projections_path, os.path.getmtime(paths.projections_path))
-        except OSError:
-            cache_key = None
-        if cache_key is not None:
-            with _players_cache_lock:
-                _players_cache.update(key=cache_key, players=players, config=config)
     return players, config
+
+
+def _prune_tasks():
+    """Remove finished tasks older than 10 minutes or trim when task count exceeds 50."""
+    now = time.time()
+    cutoff = now - 600
+    expired = [
+        tid for tid, task in _tasks.items()
+        if task["status"] in ("done", "error") and task.get("created_at", now) < cutoff
+    ]
+    for tid in expired:
+        _tasks.pop(tid, None)
+    if len(_tasks) > 50:
+        finished = [
+            tid for tid, task in _tasks.items()
+            if task["status"] in ("done", "error")
+        ]
+        for tid in finished[: len(_tasks) - 50]:
+            _tasks.pop(tid, None)
 
 
 def _run_task(task_id: str, fn, *args, **kwargs):
     """Run *fn* in a background thread, storing result in _tasks."""
+    if not _task_slots.acquire(blocking=False):
+        return False
+
     def _worker():
         try:
             result = fn(*args, **kwargs)
@@ -131,23 +305,112 @@ def _run_task(task_id: str, fn, *args, **kwargs):
                 _tasks[task_id]["status"] = "done"
                 _tasks[task_id]["result"] = result
         except Exception as exc:
-            # Full traceback to the server log only; clients get the message.
-            print(f"[task {task_id}] {traceback.format_exc()}", file=sys.stderr)
+            # The traceback goes to the console, not to the browser: it carries
+            # absolute filesystem paths, and the task result is readable by
+            # anything that can reach this server.
+            traceback.print_exc()
             with _task_lock:
                 _tasks[task_id]["status"] = "error"
                 _tasks[task_id]["error"] = str(exc)
+        finally:
+            _task_slots.release()
 
     with _task_lock:
-        finished = [k for k, t in _tasks.items() if t["status"] != "running"]
-        if len(finished) > MAX_FINISHED_TASKS:
-            for k in finished[:-MAX_FINISHED_TASKS]:
-                del _tasks[k]
-        _tasks[task_id] = {"status": "running", "result": None, "error": None}
+        _prune_tasks()
+        _tasks[task_id] = {
+            "status": "running",
+            "result": None,
+            "error": None,
+            "created_at": time.time(),
+        }
     threading.Thread(target=_worker, daemon=True).start()
+    return True
+
+
+def _pick_player_ids(picks) -> list[str]:
+    ids: list[str] = []
+    if not isinstance(picks, list):
+        return ids
+    for pick in picks:
+        if isinstance(pick, str):
+            ids.append(pick)
+        elif isinstance(pick, dict):
+            player_id = pick.get("playerId") or pick.get("player_id") or pick.get("id")
+            if isinstance(player_id, str):
+                ids.append(player_id)
+    return ids
+
+
+def _my_pick_ids(picks, draft_position: int) -> list[str]:
+    ids: list[str] = []
+    if not isinstance(picks, list):
+        return ids
+    for pick in picks:
+        if not isinstance(pick, dict):
+            continue
+        player_id = pick.get("playerId") or pick.get("player_id") or pick.get("id")
+        if not isinstance(player_id, str):
+            continue
+        try:
+            team_num = int(pick.get("teamNum"))
+        except (TypeError, ValueError):
+            continue
+        if team_num == draft_position:
+            ids.append(player_id)
+    return ids
+
+
+def _drop_row(drop, points) -> Optional[dict]:
+    if not drop:
+        return None
+    return {
+        "id": drop.key(), "name": drop.name, "pos": drop.position,
+        "nflTeam": drop.team or "FA", "points": points,
+    }
+
+
+def _free_agent_row(rec, horizon: str = "ros") -> dict:
+    weekly = horizon == "weekly"
+    drop = rec.weekly_drop_player if weekly else rec.ros_drop_player
+    drop_points = rec.weekly_drop_points if weekly else rec.ros_drop_points
+    return {
+        "id": rec.player.key(),
+        "name": rec.player.name,
+        "pos": rec.player.position,
+        "nflTeam": rec.player.team or "FA",
+        "adp": round(rec.player.adp, 1) if rec.player.adp else None,
+        "byeWeek": rec.player.bye_week,
+        "points": rec.weekly_points if weekly else rec.ros_points,
+        "vor": rec.weekly_vor if weekly else rec.ros_vor,
+        "score": rec.weekly_score if weekly else rec.ros_score,
+        "rosterGain": rec.weekly_gain if weekly else rec.ros_gain,
+        "starterGain": rec.weekly_starter_gain if weekly else rec.ros_starter_gain,
+        "benchGain": rec.weekly_bench_gain if weekly else rec.ros_bench_gain,
+        "reason": rec.weekly_reason if weekly else rec.ros_reason,
+        "drop": _drop_row(drop, drop_points),
+        "weeklyPoints": rec.weekly_points,
+        "weeklyGain": rec.weekly_gain,
+        "weeklyScore": rec.weekly_score,
+        "weeklyDrop": _drop_row(rec.weekly_drop_player, rec.weekly_drop_points),
+        "weeklyReason": rec.weekly_reason,
+        "rosPoints": rec.ros_points,
+        "rosGain": rec.ros_gain,
+        "rosScore": rec.ros_score,
+        "rosDrop": _drop_row(rec.ros_drop_player, rec.ros_drop_points),
+        "rosReason": rec.ros_reason,
+        "urgency": rec.urgency,
+        "availability": rec.availability,
+        "confidence": rec.confidence,
+        "signals": rec.signals,
+        "weeklyProjectionOrigin": rec.weekly_projection_origin,
+    }
 
 
 class DraftAPIHandler(SimpleHTTPRequestHandler):
     """Serves static files from STATIC_DIR and handles /api/ routes."""
+
+    server_version = "DraftAssistant"
+    sys_version = ""
 
     def __init__(self, *args, profile: str = DEFAULT_PROFILE, **kwargs):
         self.profile = profile
@@ -155,29 +418,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
 
     # ── routing ───────────────────────────────────────────────────────────
 
-    # ── request origin validation ─────────────────────────────────────────
-    # The server binds 127.0.0.1, but any website open in the user's browser
-    # can still send requests to localhost. Reject anything that doesn't
-    # come from our own origin (blocks DNS rebinding + cross-site calls).
-
-    def _request_allowed(self) -> bool:
-        host = (self.headers.get("Host") or "").split(":")[0].lower()
-        if host not in ("127.0.0.1", "localhost", "[::1]", "::1"):
-            return False
-        origin = self.headers.get("Origin")
-        if origin:
-            try:
-                from urllib.parse import urlparse
-                o_host = (urlparse(origin).hostname or "").lower()
-            except ValueError:
-                return False
-            if o_host not in ("127.0.0.1", "localhost", "::1"):
-                return False
-        return True
-
     def do_GET(self):
-        if not self._request_allowed():
-            self._send_json({"error": "forbidden"}, 403)
+        if self.path.startswith("/api/") and not self._request_is_same_origin():
+            self._send_json({"error": "cross-origin request refused"}, 403)
             return
         if self.path == "/api/players":
             self._handle_players()
@@ -185,17 +428,42 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_config()
         elif self.path == "/api/state":
             self._handle_get_state()
+        elif self.path == "/api/workspace":
+            self._handle_workspace()
+        elif self.path == "/api/yahoo/status":
+            self._handle_yahoo_status()
+        elif self.path == "/api/context":
+            self._handle_context()
+        elif self.path == "/api/update":
+            self._handle_update()
         elif self.path.startswith("/api/task/"):
             self._handle_task_status()
         else:
             super().do_GET()
 
     def do_POST(self):
-        if not self._request_allowed():
-            self._send_json({"error": "forbidden"}, 403)
+        if not self._request_is_same_origin():
+            self._send_json({"error": "cross-origin request refused"}, 403)
+            return
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._send_json({"error": "Content-Type must be application/json"}, 415)
+            return
+        try:
+            # Parse and cache once before dispatch. This gives every endpoint
+            # consistent 400/413 handling instead of each broad exception block
+            # translating malformed input into an internal-server error.
+            self._request_body = self._read_body()
+        except PayloadTooLarge as exc:
+            self._send_json({"error": str(exc)}, 413)
+            return
+        except (ValueError, json.JSONDecodeError, UnicodeError) as exc:
+            self._send_json({"error": f"invalid JSON body: {exc}"}, 400)
             return
         if self.path == "/api/state":
             self._handle_save_state()
+        elif self.path == "/api/workspace":
+            self._handle_workspace(save=True)
         elif self.path == "/api/pull-free-data":
             self._handle_pull_free_data()
         elif self.path == "/api/collect-all":
@@ -204,48 +472,176 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_fetch()
         elif self.path == "/api/auction":
             self._handle_auction()
+        elif self.path == "/api/suggest":
+            self._handle_suggest()
+        elif self.path == "/api/free-agents":
+            self._handle_free_agents()
+        elif self.path == "/api/context/refresh":
+            self._handle_context_refresh()
+        elif self.path == "/api/sync-league":
+            self._handle_sync_league()
+        elif self.path == "/api/import-espn":
+            self._handle_import_espn()
+        elif self.path == "/api/league-settings":
+            self._handle_league_settings()
+        elif self.path == "/api/draft-sync":
+            self._handle_draft_sync()
+        elif self.path == "/api/sleeper/leagues":
+            self._handle_sleeper_leagues()
+        elif self.path == "/api/sleeper/import":
+            self._handle_sleeper_import()
+        elif self.path == "/api/sleeper/draft":
+            self._handle_sleeper_draft()
+        elif self.path == "/api/yahoo/connect":
+            self._handle_yahoo_connect()
+        elif self.path == "/api/yahoo/exchange":
+            self._handle_yahoo_exchange()
+        elif self.path == "/api/yahoo/import":
+            self._handle_yahoo_import()
         elif self.path == "/api/save-draft":
             self._handle_save_draft()
         elif self.path == "/api/load-draft":
             self._handle_load_draft()
-        elif self.path == "/api/export-log":
-            self._handle_export_log()
+        elif self.path == "/api/parse-draft-text":
+            self._handle_parse_draft_text()
         else:
             self._send_json({"error": "not found"}, 404)
 
-    # The UI is served same-origin from this server: no CORS headers needed,
-    # and cross-origin preflights should fail.
-    def do_OPTIONS(self):
-        self.send_response(403)
-        self.end_headers()
-
     # ── helpers ────────────────────────────────────────────────────────────
+    # No CORS headers on purpose: the frontend is same-origin, and a wildcard
+    # Access-Control-Allow-Origin would let any website the user has open
+    # rewrite draft state or trigger data pulls on this local server.
+
+    def _request_is_same_origin(self) -> bool:
+        """Reject API calls that a *different* site caused the browser to make.
+
+        Binding to 127.0.0.1 keeps other machines out, but it does nothing about
+        a page the user already has open. A cross-origin ``fetch`` with a JSON
+        content type is preflighted and blocked, but a plain HTML form POST with
+        ``enctype="text/plain"`` is a "simple request" — no preflight — and its
+        body can be crafted to parse as valid JSON. That was enough to overwrite
+        draft state or the stored Yahoo credentials from any open tab.
+
+        Two checks close it:
+          * ``Sec-Fetch-Site`` — sent by every current browser, and anything but
+            same-origin/same-site (or a direct navigation, ``none``) is refused.
+          * ``Host`` — a DNS-rebinding attacker points their own name at
+            127.0.0.1, which makes their page look same-origin to the browser;
+            pinning the host name they cannot forge closes that path.
+
+        Non-browser clients (curl, the tests) send no Sec-Fetch-Site and are
+        allowed through — the Host check still applies to them.
+        """
+        host = self.headers.get("Host", "").strip()
+        if not host:
+            return False
+        try:
+            hostname = (urlsplit(f"//{host}").hostname or "").lower()
+        except ValueError:
+            return False
+        if hostname not in ALLOWED_HOSTNAMES:
+            return False
+        site = self.headers.get("Sec-Fetch-Site")
+        if site is not None and site not in ("same-origin", "none"):
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            try:
+                parsed = urlsplit(origin)
+            except ValueError:
+                return False
+            if parsed.scheme != "http" or parsed.netloc.lower() != host.lower():
+                return False
+        return True
 
     def _read_body(self) -> dict:
-        length = int(self.headers.get("Content-Length", 0))
+        cached = getattr(self, "_request_body", None)
+        if cached is not None:
+            return cached
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid Content-Length") from exc
+        if length < 0:
+            raise ValueError("invalid Content-Length")
+        if length <= 0:
+            return {}
+        # Cap the read: Content-Length is attacker-controlled, and allocating
+        # whatever it claims is a free way to exhaust memory. The largest real
+        # payload is a pasted draft log, far under this.
         if length > MAX_BODY_BYTES:
-            raise ValueError("request body too large")
-        if length:
-            return json.loads(self.rfile.read(length))
-        return {}
+            raise PayloadTooLarge("request body too large")
+        def reject_constant(value):
+            raise ValueError(f"non-finite JSON number {value!r} is not allowed")
+
+        data = json.loads(self.rfile.read(length), parse_constant=reject_constant)
+        if not isinstance(data, dict):
+            raise ValueError("JSON body must be an object")
+        return data
+
+    @staticmethod
+    def _picks_list(value) -> list:
+        """Validate a picks payload: must be a list of player-key strings."""
+        if (not isinstance(value, list) or len(value) > MAX_PICKS
+                or not all(isinstance(item, str) and len(item) <= 256 for item in value)):
+            raise ValueError(
+                f"picks must be a list of at most {MAX_PICKS} short player key strings")
+        return value
+
+    def end_headers(self):
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'",
+        )
+        super().end_headers()
 
     def _send_json(self, data, code=200):
         body = json.dumps(data).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     # ── existing endpoints ────────────────────────────────────────────────
 
+    def _handle_workspace(self, save=False):
+        try:
+            self._send_json(save_workspace(self._read_body()) if save else load_workspace())
+        except WorkspaceConflictError as exc:
+            self._send_json({"error": str(exc), "code": "workspace_conflict", "currentRevision": exc.revision}, 409)
+        except WorkspaceVersionError as exc:
+            self._send_json({"error": str(exc), "code": "workspace_newer_version"}, 409)
+        except WorkspaceValidationError as exc:
+            self._send_json({"error": str(exc), "code": "workspace_invalid"}, 400)
+        except WorkspaceStorageError as exc:
+            self._send_json({"error": str(exc), "code": "workspace_storage_error"}, 500)
+
     def _handle_players(self):
         try:
             players, config = _load_players(self.profile)
-            js_players = [_player_to_js(p, config) for p in players]
+            context = load_context()
+            players = season_adjusted_players(players, context)
+            team_byes = _team_byes_from_players(players)
+            js_players = [_player_to_js(p, config, team_byes, context) for p in players]
             self._send_json(js_players)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
+
+    def _handle_context(self):
+        try:
+            self._send_json(context_payload(load_context()))
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_update(self):
+        self._send_json(check_for_update(__version__))
 
     def _handle_config(self):
         try:
@@ -260,34 +656,661 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
+    def _suggest_config(self, body: dict, config: LeagueConfig) -> LeagueConfig:
+        """Build the effective LeagueConfig for a suggestion request.
+
+        The profile supplies defaults, while an imported league can carry its
+        complete provider scoring map (including K/DST and uncommon bonuses).
+        The live UI may override teams / slot / roster / sim count per request.
+        """
+        league = body.get("league") or {}
+        if not isinstance(league, dict):
+            raise ValueError("league must be an object")
+        teams = _bounded_int(
+            league.get("numTeams") or config.teams, "numTeams", 2, MAX_TEAMS)
+        roster = dict(config.roster)
+        slots = league.get("rosterSlots")
+        if isinstance(slots, dict):
+            allowed_slots = {"QB", "RB", "WR", "TE", "K", "DST", "BN", "IR", *FLEX_TYPES}
+            unknown_slots = set(slots) - allowed_slots
+            if unknown_slots:
+                raise ValueError(f"unknown roster slots: {', '.join(sorted(unknown_slots))}")
+            roster.update({
+                key: _bounded_int(value, f"rosterSlots.{key}", 0, 30)
+                for key, value in slots.items() if value is not None
+            })
+        if sum(roster.values()) > MAX_ROSTER_SLOTS:
+            raise ValueError(f"roster may contain at most {MAX_ROSTER_SLOTS} total slots")
+        imported_scoring = league.get("importedScoring")
+        if isinstance(imported_scoring, dict) and len(imported_scoring) > 256:
+            raise ValueError("importedScoring may contain at most 256 categories")
+        scoring = scoring_for_league(league, config.scoring)
+        draft = dict(config.draft or {})
+        if league.get("draftPosition"):
+            draft["slot"] = _bounded_int(
+                league["draftPosition"], "draftPosition", 1, teams)
+        if league.get("sims") is not None:
+            draft["rollout_sims"] = _bounded_int(
+                league["sims"], "sims", 1, MAX_WEB_SIMS)
+        # Opponent ADP noise: the UI derives this from how many opponents are
+        # autodrafting (more autodrafters -> they follow ADP -> less noise).
+        if league.get("adpNoise") is not None:
+            draft["adp_noise"] = _bounded_float(
+                league["adpNoise"], "adpNoise", 0.0, 50.0)
+        # Common-random-numbers keeps impact stable at modest sim counts, so the
+        # web default favors responsiveness; bump via league.sims for precision.
+        draft.setdefault("rollout_sims", 24)
+        return LeagueConfig(
+            teams=teams, roster=roster, scoring=scoring,
+            provider=config.provider, draft=draft,
+        )
+
+    def _handle_suggest(self):
+        """Rank the board by the rest-of-draft season-points rollout engine.
+
+        Body: {picks: [key...], my_picks: [key...], top: int, league: {...}}.
+        Player ids are stable provider ids matching /api/players, so the
+        frontend can merge returned impact scores straight onto its board.
+        """
+        try:
+            body = self._read_body()
+            picks = self._picks_list(body.get("picks", []))
+            my_picks = self._picks_list(body.get("my_picks", []))
+            top_n = _bounded_int(body.get("top", 50), "top", 1, 100)
+            players, config = _load_players(self.profile)
+            context = load_context()
+            players = season_adjusted_players(players, context)
+            eff = self._suggest_config(body, config)
+            if str((body.get("league") or {}).get("draftType") or "snake").lower() == "auction":
+                self._send_json({"error": "Snake recommendations are unavailable for auction drafts"}, 400)
+                return
+
+            by_key, aliases = _player_indexes(players)
+            picks = _canonicalize_player_keys(picks, aliases)
+            my_picks = _canonicalize_player_keys(my_picks, aliases)
+            picked = set(picks)
+            available = [
+                p for k, p in by_key.items()
+                if k not in picked and is_candidate_eligible(context, p)
+            ]
+            my_roster: dict = {}
+            for k in my_picks:
+                p = by_key.get(k)
+                if p:
+                    my_roster.setdefault(p.position, []).append(p)
+            state = DraftState(
+                my_team_name="Me",
+                league_teams=[f"T{i + 1}" for i in range(eff.teams)],
+                picks=picks,
+                my_picks=my_picks,
+            )
+            drafted_players = [by_key[key] for key in picks if key in by_key]
+
+            results = rollout_values(
+                eff,
+                available,
+                my_roster,
+                state,
+                top_n=top_n,
+                drafted_players=drafted_players,
+            )
+            rows = [{
+                "id": r.player.key(),
+                "name": r.player.name,
+                "pos": r.player.position,
+                "nflTeam": r.player.team or "FA",
+                "adp": round(r.player.adp, 1) if r.player.adp else None,
+                "byeWeek": r.player.bye_week,
+                "points": r.points,
+                "vor": r.vor,
+                "immediateGain": r.immediate_gain,
+                "projRoster": r.expected_roster_points,
+                # Only the leading candidates get a full rollout. The rest are
+                # returned for board ordering but WITHOUT an impact: a prelim
+                # number isn't on the same scale (see rollout.py), and showing
+                # it would invite a comparison that doesn't hold.
+                "impact": r.impact if r.simulated else None,
+                "goneRisk": r.gone_risk,
+                "byePenalty": r.bye_penalty,
+                "simulated": r.simulated,
+                "availability": primary_availability(context, r.player),
+                "confidence": confidence_for_player(context, r.player),
+                "signals": signal_summary(context, r.player),
+            } for r in results]
+            # The eligibility filter above is only as good as the feed behind it.
+            # Say so on every response rather than letting the draft room imply
+            # the news has been checked when it has not.
+            failed_sources = sorted(
+                source for source, health in context.source_health.items()
+                if isinstance(health, dict) and health.get("ok") is False
+            )
+            self._send_json({
+                "suggestions": rows,
+                "sims": results[0].sims if results else 0,
+                "teams": eff.teams,
+                "slot": int((eff.draft or {}).get("slot", 1)),
+                "contextAsOf": context.refreshed_at,
+                "contextStale": is_stale(context) or bool(failed_sources),
+                "contextFailedSources": failed_sources,
+            })
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_free_agents(self):
+        """Scan all configured leagues and rank available waiver/free-agent adds.
+
+        Body: {leagues: [{...}], picks: {leagueId: [{playerId, teamNum}...]}, top: int}.
+        The browser owns the saved league list, while Python owns player data,
+        scoring, and roster optimization.
+        """
+        try:
+            body = self._read_body()
+            leagues = body.get("leagues") or []
+            if not isinstance(leagues, list) or len(leagues) > 50:
+                self._send_json({"error": "leagues must be a list of at most 50 items"}, 400)
+                return
+            picks_by_league = body.get("picks") or {}
+            if not isinstance(picks_by_league, dict):
+                picks_by_league = {}
+            top_n = _bounded_int(body.get("top", 8), "top", 1, 30)
+            week = _bounded_int(body.get("week", default_week()), "week", 1, 18)
+
+            players, config = _load_players(self.profile)
+            context = load_context(season=default_season(), week=week)
+            by_key, aliases = _player_indexes(players)
+            response_rows = []
+
+            for index, league in enumerate(leagues):
+                if not isinstance(league, dict):
+                    continue
+                league_id = str(league.get("id") or f"league-{index + 1}")
+                league_picks = picks_by_league.get(league_id, [])
+                draft_position = int(league.get("draftPosition") or 1)
+                picked_keys = set(_canonicalize_player_keys(
+                    _pick_player_ids(league_picks), aliases))
+                my_keys = _canonicalize_player_keys(
+                    _my_pick_ids(league_picks, draft_position), aliases)
+
+                eff = self._suggest_config({"league": league}, config)
+                available = [p for key, p in by_key.items() if key not in picked_keys]
+                my_roster: dict = {}
+                for key in my_keys:
+                    player = by_key.get(key)
+                    if player:
+                        my_roster.setdefault(player.position, []).append(player)
+
+                recs = free_agent_recommendations(
+                    eff, available, my_roster, top_n=None,
+                    context=context, week=week, sort_by="ros",
+                )
+                weekly_recs = rank_recommendations(recs, "weekly", top_n)
+                ros_recs = rank_recommendations(recs, "ros", top_n)
+                response_rows.append({
+                    "id": league_id,
+                    "name": league.get("name") or f"League {index + 1}",
+                    "platform": league.get("platform") or "",
+                    "rostered": len(my_keys),
+                    "available": len(available),
+                    # recommendations remains the ROS list for old clients.
+                    "recommendations": [_free_agent_row(rec, "ros") for rec in ros_recs],
+                    "weeklyRecommendations": [
+                        _free_agent_row(rec, "weekly") for rec in weekly_recs
+                    ],
+                    "rosRecommendations": [
+                        _free_agent_row(rec, "ros") for rec in ros_recs
+                    ],
+                })
+
+            self._send_json({
+                "scannedLeagues": len(response_rows),
+                "week": week,
+                "contextAsOf": context.refreshed_at,
+                "contextStale": context_payload(context, include_signals=False)["stale"],
+                "leagues": response_rows,
+            })
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_sync_league(self):
+        """Sync provider rosters into local synthetic picks for one web league."""
+        try:
+            body = self._read_body()
+            league = body.get("league") or {}
+            if not isinstance(league, dict):
+                self._send_json({"error": "league must be an object"}, 400)
+                return
+
+            platform = _league_platform(league)
+            players, _config = _load_players(self.profile)
+
+            if platform == "yahoo":
+                league_key = str(league.get("yahooLeagueKey") or body.get("leagueKey") or "").strip()
+                if not league_key:
+                    self._send_json({"error": "Yahoo league is missing yahooLeagueKey"}, 400)
+                    return
+                from ..importers import yahoo
+                rosters = yahoo.fetch_league_rosters(self._yahoo_access_token(), league_key)
+                source = "Yahoo"
+            elif platform == "espn":
+                league_id = str(league.get("espnLeagueId") or body.get("leagueId") or "").strip()
+                if not league_id:
+                    self._send_json({"error": "ESPN league is missing espnLeagueId"}, 400)
+                    return
+                from ..importers.free_sources import default_projection_season, fetch_espn_rosters
+                league_id = _espn_reference(league_id)
+                season = _bounded_int(league.get("season") or body.get("season") or default_projection_season(), "season", 2000, 2100)
+                rosters = fetch_espn_rosters(
+                    season,
+                    league_id,
+                    espn_s2=body.get("espnS2"),
+                    swid=body.get("swid"),
+                )
+                source = "ESPN"
+            elif platform == "sleeper":
+                league_id = str(league.get("sleeperLeagueId") or body.get("leagueId") or "").strip()
+                if not league_id:
+                    self._send_json({"error": "Sleeper league is missing sleeperLeagueId"}, 400)
+                    return
+                from ..importers import sleeper
+                rosters = sleeper.fetch_league_rosters(league_id)
+                source = "Sleeper"
+            else:
+                self._send_json(
+                    {"error": "Sync supports imported ESPN, Yahoo, or Sleeper leagues"}, 400)
+                return
+
+            result = synced_rosters_to_picks(rosters, players, league)
+            result.update({
+                "ok": True,
+                "source": source,
+                "leagueId": league.get("id"),
+                "leagueName": league.get("name"),
+                "rostered": sum(team["players"] for team in result["teams"]),
+            })
+            self._send_json(result)
+        except Exception as exc:
+            self._send_platform_error(exc, _league_platform(league) if isinstance(league, dict) else "")
+
+    def _send_platform_error(self, exc: Exception, platform: str = ""):
+        """Make provider failures actionable without echoing authentication data."""
+        if isinstance(exc, HTTPError):
+            exc.close()
+            if platform == "espn" and exc.code in {401, 403}:
+                self._send_json({
+                    "error": "ESPN denied access to this league. For a private league, enter your espn_s2 and SWID session cookies in League settings → Import. Check the league ID and season, and use an ESPN account that belongs to the league.",
+                    "code": "espn_auth_required",
+                }, 401)
+            elif exc.code == 404:
+                self._send_json({"error": "League or draft not found. Check the league ID and season."}, 404)
+            elif exc.code == 429:
+                self._send_json({"error": "The provider is limiting requests. Wait a moment and retry."}, 429)
+            else:
+                self._send_json({"error": f"The league provider returned HTTP {exc.code}. Please retry."}, 502)
+        elif isinstance(exc, (URLError, TimeoutError)):
+            self._send_json({"error": "Could not reach the league provider. Check your connection and retry."}, 502)
+        elif isinstance(exc, ValueError):
+            self._send_json({"error": str(exc)}, 400)
+        else:
+            self._send_json({"error": "Could not read this league from the provider. Check its settings and try again."}, 502)
+
+    def _espn_settings(self, body: dict, league: dict) -> dict:
+        from ..importers.free_sources import default_projection_season, fetch_espn_league
+        league_id = _espn_reference(league.get("espnLeagueId") or body.get("leagueId"))
+        season = _bounded_int(league.get("season") or body.get("season") or default_projection_season(), "season", 2000, 2100)
+        info = fetch_espn_league(season, league_id, espn_s2=body.get("espnS2"), swid=body.get("swid"))
+        return _import_scoring_type({**info, "espnLeagueId": league_id, "season": season})
+
+    def _handle_import_espn(self):
+        """Read public or authenticated ESPN league settings for the editor."""
+        try:
+            self._send_json(self._espn_settings(self._read_body(), {}))
+        except Exception as exc:
+            self._send_platform_error(exc, "espn")
+
+    def _handle_league_settings(self):
+        """Refresh settings/order without mutating any league or recorded picks."""
+        platform = ""
+        try:
+            body = self._read_body()
+            league = body.get("league")
+            if not isinstance(league, dict):
+                raise ValueError("league must be an object")
+            platform = _league_platform(league)
+            if platform == "espn":
+                info = self._espn_settings(body, league)
+            elif platform == "sleeper":
+                from ..importers import sleeper
+                league_id = str(league.get("sleeperLeagueId") or "").strip()
+                if not league_id:
+                    raise ValueError("Sleeper league is missing sleeperLeagueId")
+                info = _import_scoring_type(sleeper.fetch_league(league_id, username=league.get("sleeperUsername") or None))
+            elif platform == "yahoo":
+                from ..importers import yahoo
+                league_key = str(league.get("yahooLeagueKey") or "").strip()
+                if not league_key:
+                    raise ValueError("Yahoo league is missing yahooLeagueKey")
+                info = _import_scoring_type(yahoo.fetch_league(self._yahoo_access_token(), league_key))
+                info["draftOrderReady"] = False
+            else:
+                raise ValueError("Import an ESPN, Sleeper, or Yahoo league first.")
+            self._send_json({**info, **_draft_league_patch(info, league)})
+        except Exception as exc:
+            self._send_platform_error(exc, platform)
+
+    # ── Sleeper import + live draft sync ──────────────────────────────────
+    # Sleeper's league API is public and read-only, so these need no auth at
+    # all — a username or a league id is enough.
+
+    def _handle_sleeper_leagues(self):
+        """List a Sleeper user's leagues for the season, for the picker.
+
+        Body: {username, season?}.
+        """
+        try:
+            body = self._read_body()
+            username = str(body.get("username") or "").strip()
+            if not username:
+                self._send_json({"error": "username required"}, 400)
+                return
+            from ..importers import sleeper
+            from ..importers.free_sources import default_projection_season
+            season = int(body.get("season") or 0) or default_projection_season()
+            leagues = sleeper.fetch_user_leagues(username, season)
+            # Sleeper rolls leagues over per season; before the new season's
+            # leagues exist, the previous one is what the user is drafting.
+            if not leagues and not body.get("season"):
+                leagues = sleeper.fetch_user_leagues(username, season - 1)
+                season -= 1
+            self._send_json({"leagues": leagues, "season": season})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_sleeper_import(self):
+        """Import a Sleeper league's settings as a form-ready payload.
+
+        Body: {leagueId, username?}. Team names come back already in draft-slot
+        order, and ``username`` additionally resolves that user's own slot.
+        """
+        league_id = ""
+        try:
+            body = self._read_body()
+            league_id = str(body.get("leagueId") or "").strip()
+            if not league_id:
+                self._send_json({"error": "leagueId required"}, 400)
+                return
+            from ..importers import sleeper
+            info = sleeper.fetch_league(league_id, username=body.get("username") or None)
+            self._send_json(_import_scoring_type(info))
+        except Exception as exc:
+            self._send_json({"error": f"Could not import league {league_id!r}: {exc}"}, 500)
+
+    def _handle_sleeper_draft(self):
+        """Compatibility route for clients using the original Sleeper endpoint."""
+        self._handle_draft_sync(platform="sleeper")
+
+    def _handle_draft_sync(self, platform: str = ""):
+        """Read real provider draft picks; never reconstruct them from rosters.
+
+        Sleeper can be polled live. ESPN's available endpoint publishes results
+        after completion, so an empty in-progress response must not erase picks.
+        """
+        try:
+            body = self._read_body()
+            league = body.get("league") or {}
+            if not isinstance(league, dict):
+                raise ValueError("league must be an object")
+            platform = platform or _league_platform(league)
+            if platform == "espn":
+                from ..importers.free_sources import default_projection_season, fetch_espn_draft
+                league_id = _espn_reference(league.get("espnLeagueId") or body.get("leagueId"))
+                season = _bounded_int(league.get("season") or body.get("season") or default_projection_season(), "season", 2000, 2100)
+                info = fetch_espn_draft(season, league_id, espn_s2=body.get("espnS2"), swid=body.get("swid"))
+                if info.get("status") != "complete":
+                    self._send_json({
+                        "error": "ESPN has not published completed draft results yet. Its available API does not provide reliable live picks. Use Paste draft history or record picks during the draft, then sync results after it finishes.",
+                        "code": "espn_live_unavailable", "liveAvailable": False,
+                        "status": info.get("status") or "", "leaguePatch": _draft_league_patch(info, league),
+                    }, 409)
+                    return
+                draft_picks = info["draftPicks"]
+                draft_id = f"espn:{season}:{league_id}"
+                live_available = False
+            elif platform == "sleeper":
+                from ..importers import sleeper
+                draft_id = str(body.get("draftId") or league.get("sleeperDraftId") or "").strip()
+                if not draft_id:
+                    league_id = str(body.get("leagueId") or league.get("sleeperLeagueId") or "").strip()
+                    if not league_id:
+                        raise ValueError("Sleeper league is missing sleeperLeagueId")
+                    draft_id = sleeper.league_draft_id(league_id) or ""
+                    if not draft_id:
+                        raise ValueError("This Sleeper league has no draft yet")
+                draft = sleeper.fetch_draft(draft_id)
+                saved = league
+                if not league.get("teamIds") and league.get("sleeperLeagueId"):
+                    # Upgrade existing imports once; subsequent polls need only
+                    # the draft and its picks, not every user's league metadata.
+                    saved = {**league, **sleeper.fetch_league(str(league["sleeperLeagueId"]))}
+                info = sleeper.draft_order_patch(draft, saved)
+                info.update(status=draft.get("status") or "", lastPicked=draft.get("last_picked"))
+                draft_picks = sleeper.fetch_draft_picks(draft_id, draft)
+                live_available = True
+            else:
+                raise ValueError("Draft sync supports imported ESPN and Sleeper leagues. Yahoo supports roster sync.")
+
+            if info.get("status") != "complete" and info.get("draftType") not in {None, "", "snake"}:
+                self._send_json({
+                    "error": "Automatic draft tracking currently supports standard snake drafts. This league uses a different draft format.",
+                    "code": "unsupported_draft_type", "liveAvailable": False,
+                }, 409)
+                return
+            if not info.get("draftOrderReady"):
+                self._send_json({
+                    "error": "The provider has not published a complete draft order yet. Refresh the order when it is set.",
+                    "code": "draft_order_unavailable",
+                }, 409)
+                return
+            patch = _draft_league_patch(info, league)
+            players, _config = _load_players(self.profile)
+            result = synced_draft_to_picks(draft_picks, players, {**league, **patch})
+            patch["draftHasTradedPicks"] = result.pop("hasTradedPicks")
+            result.update({
+                "ok": True,
+                "source": "Sleeper" if platform == "sleeper" else "ESPN",
+                "draftId": draft_id,
+                "status": info.get("status") or "",
+                "draftType": info.get("draftType") or "snake",
+                "lastPicked": info.get("lastPicked"),
+                "leagueId": league.get("id"),
+                "leaguePatch": patch,
+                "liveAvailable": live_available,
+            })
+            self._send_json(result)
+        except Exception as exc:
+            self._send_platform_error(exc, platform)
+
+    # ── Yahoo OAuth import ────────────────────────────────────────────────
+    # Credentials + tokens are stored in the profile dir (local machine only).
+
+    def _yahoo_store_path(self) -> str:
+        paths = ensure_profile(self.profile)
+        return os.path.join(os.path.dirname(str(paths.state_path)), "yahoo.json")
+
+    def _yahoo_load(self) -> dict:
+        path = self._yahoo_store_path()
+        if os.path.exists(path):
+            try:
+                with open(path) as fh:
+                    return json.load(fh)
+            except (OSError, json.JSONDecodeError):
+                return {}
+        return {}
+
+    def _yahoo_save(self, data: dict) -> None:
+        from ..storage import atomic_write_json
+        atomic_write_json(self._yahoo_store_path(), data)
+
+    def _yahoo_access_token(self) -> str:
+        from ..importers import yahoo
+        data = self._yahoo_load()
+        token = data.get("token") or {}
+        if not token.get("access_token"):
+            raise RuntimeError("Authorize with Yahoo first")
+        if yahoo.token_is_expired(token):
+            token = yahoo.refresh_access_token(
+                data["client_id"],
+                data["client_secret"],
+                token["refresh_token"],
+                data.get("redirect_uri", yahoo.DEFAULT_REDIRECT),
+            )
+            data["token"] = token
+            self._yahoo_save(data)
+        return token["access_token"]
+
+    def _handle_yahoo_status(self):
+        """Report whether Yahoo credentials/token are already saved locally."""
+        try:
+            data = self._yahoo_load()
+            self._send_json({
+                "hasCredentials": bool(data.get("client_id") and data.get("client_secret")),
+                "hasToken": bool((data.get("token") or {}).get("access_token")),
+                "redirectUri": data.get("redirect_uri") or "https://localhost/",
+            })
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_yahoo_connect(self):
+        """Store/confirm Yahoo app credentials locally and return the authorize URL.
+
+        Falls back to already-saved credentials when the body omits them, so a
+        re-authorize doesn't require re-typing the Client ID/Secret.
+        """
+        try:
+            from ..importers import yahoo
+            body = self._read_body()
+            data = self._yahoo_load()
+            client_id = str(body.get("clientId") or data.get("client_id") or "").strip()
+            client_secret = str(body.get("clientSecret") or data.get("client_secret") or "").strip()
+            redirect = str(body.get("redirectUri") or data.get("redirect_uri") or yahoo.DEFAULT_REDIRECT).strip()
+            if not client_id or not client_secret:
+                self._send_json({"error": "clientId and clientSecret are required"}, 400)
+                return
+            data.update({"client_id": client_id, "client_secret": client_secret,
+                         "redirect_uri": redirect})
+            self._yahoo_save(data)
+            self._send_json({"authUrl": yahoo.auth_url(client_id, redirect)})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_yahoo_exchange(self):
+        """Exchange the pasted authorization code for tokens; list NFL leagues."""
+        try:
+            from ..importers import yahoo
+            body = self._read_body()
+            code = str(body.get("code") or "").strip()
+            data = self._yahoo_load()
+            if not data.get("client_id"):
+                self._send_json({"error": "Enter your Yahoo credentials first"}, 400)
+                return
+            if not code:
+                self._send_json({"error": "Paste the authorization code"}, 400)
+                return
+            token = yahoo.exchange_code(data["client_id"], data["client_secret"], code,
+                                        data.get("redirect_uri", yahoo.DEFAULT_REDIRECT))
+            data["token"] = token
+            self._yahoo_save(data)
+            self._send_json({"ok": True, "leagues": yahoo.list_leagues(token["access_token"])})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_yahoo_import(self):
+        """Import a chosen Yahoo league as a form-ready payload (like ESPN)."""
+        try:
+            from ..importers import yahoo
+            body = self._read_body()
+            league_key = str(body.get("leagueKey") or "").strip()
+            if not league_key:
+                self._send_json({"error": "leagueKey required"}, 400)
+                return
+            data = self._yahoo_load()
+            if not (data.get("token") or {}).get("access_token"):
+                self._send_json({"error": "Authorize with Yahoo first"}, 400)
+                return
+            info = yahoo.fetch_league(self._yahoo_access_token(), league_key)
+            self._send_json(_import_scoring_type(info))
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _get_draft_state(self) -> dict:
+        paths = ensure_profile(self.profile)
+        state = load_state(paths.state_path)
+        return {
+            "picks": state.picks,
+            "my_picks": state.my_picks,
+            "my_team_name": state.my_team_name,
+            "league_teams": state.league_teams,
+        }
+
+    def _save_draft_state(self) -> dict:
+        body = self._read_body()
+        paths = ensure_profile(self.profile)
+        picks = self._picks_list(body["picks"]) if "picks" in body else None
+        my_picks = self._picks_list(body["my_picks"]) if "my_picks" in body else None
+
+        def mutate(state):
+            if picks is not None:
+                state.picks = picks
+            if my_picks is not None:
+                state.my_picks = my_picks
+
+        update_state(paths.state_path, mutate)
+        return {"ok": True, "path": str(paths.state_path)}
+
     def _handle_get_state(self):
         try:
-            paths = ensure_profile(self.profile)
-            state = load_state(paths.state_path)
-            self._send_json({
-                "picks": state.picks,
-                "my_picks": state.my_picks,
-                "my_team_name": state.my_team_name,
-                "league_teams": state.league_teams,
-            })
+            self._send_json(self._get_draft_state())
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
     def _handle_save_state(self):
         try:
-            body = self._read_body()
-            paths = ensure_profile(self.profile)
-            state = load_state(paths.state_path)
-            if "picks" in body:
-                state.picks = body["picks"]
-            if "my_picks" in body:
-                state.my_picks = body["my_picks"]
-            save_state(state, paths.state_path)
+            self._save_draft_state()
             self._send_json({"ok": True})
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
     # ── background task polling ───────────────────────────────────────────
+
+    def _handle_context_refresh(self):
+        try:
+            body = self._read_body()
+            season = _bounded_int(
+                body.get("season", default_season()), "season", 2000, 2100)
+            week = _bounded_int(body.get("week", default_week()), "week", 1, 18)
+            force = bool(body.get("force", False))
+            task_id = f"context-{uuid.uuid4().hex}"
+
+            def _do_refresh():
+                context = load_context(season=season, week=week)
+                context = refresh_context(
+                    context, season=season, week=week, force=force)
+                save_context(context)
+                return context_payload(context, include_signals=False)
+
+            if not _run_task(task_id, _do_refresh):
+                self._send_json({"error": "Two data jobs are already running"}, 429)
+                return
+            self._send_json({"taskId": task_id})
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
 
     def _handle_task_status(self):
         task_id = self.path.split("/api/task/")[-1]
@@ -310,13 +1333,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             profile = self.profile
             task_id = f"pull-free-data-{uuid.uuid4().hex}"
 
-            espn_id = body.get("espnLeagueId")
-            if espn_id is not None and not str(espn_id).isdigit():
-                self._send_json({"error": "espnLeagueId must be numeric"}, 400)
-                return
-
             def _do_pull():
                 from ..importers.free_sources import pull_free_data as _pull
+                from ..importers.free_sources import merge_historical_into
                 paths = ensure_profile(profile)
                 config = load_profile_config(paths)
                 result = _pull(
@@ -326,16 +1345,29 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     teams=body.get("teams"),
                     adp_format=body.get("adpFormat"),
                     include_fftoday=not body.get("skipFftoday", False),
+                    include_cbs=not body.get("skipCbs", False),
                     espn_league_id=body.get("espnLeagueId"),
+                    history_seasons=body.get("history"),
                 )
-                save_players(result.players, paths.projections_path)
+                # Accumulate history across pulls: keep prior seasons on disk
+                # rather than overwriting them with this pull's seasons only.
+                players = update_players(
+                    paths.projections_path,
+                    lambda current: merge_historical_into(result.players, current),
+                )
+                seasons = sorted({s for p in players for s in p.historical_stats})
                 reports = [
                     {"source": r.source, "records": r.records, "ok": r.ok, "detail": r.detail}
                     for r in result.reports
                 ]
-                return {"players": len(result.players), "reports": reports}
+                return {"players": len(players), "reports": reports,
+                        "historySeasons": seasons,
+                        "consensusPlayers": result.consensus_players,
+                        "warnings": list(result.warnings)}
 
-            _run_task(task_id, _do_pull)
+            if not _run_task(task_id, _do_pull):
+                self._send_json({"error": "Two data jobs are already running"}, 429)
+                return
             self._send_json({"taskId": task_id})
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
@@ -349,20 +1381,42 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             task_id = f"collect-all-{uuid.uuid4().hex}"
 
             def _do_collect():
-                from ..collectors.combined import collect_all
+                from ..collectors.combined import collect_all_result
+                from ..importers.free_sources import merge_historical_into
                 paths = ensure_profile(profile)
-                players = collect_all(
-                    current_season=body.get("season", 2026),
+                config = load_profile_config(paths)
+                result = collect_all_result(
+                    current_season=body.get("season"),
                     history_seasons=body.get("history", 3),
-                    scoring_format=body.get("scoring", "ppr"),
+                    scoring_format=body.get("scoring") or body.get("adpFormat", "ppr"),
                     teams=body.get("teams", 12),
                     skip_sleeper=body.get("skipSleeper", False),
                     skip_adp=body.get("skipAdp", False),
+                    config=config,
+                    stats_season=body.get("statsSeason"),
+                    include_fftoday=not body.get("skipFftoday", False),
+                    include_cbs=not body.get("skipCbs", False),
+                    espn_league_id=body.get("espnLeagueId"),
                 )
-                save_players(players, paths.projections_path)
-                return {"players": len(players)}
+                # Same history accumulation as the free pull — a full collect
+                # must not discard seasons an earlier pull already banked.
+                players = update_players(
+                    paths.projections_path,
+                    lambda current: merge_historical_into(result.players, current),
+                )
+                seasons = sorted({s for p in players for s in p.historical_stats})
+                reports = [
+                    {"source": r.source, "records": r.records, "ok": r.ok, "detail": r.detail}
+                    for r in result.reports
+                ]
+                return {"players": len(players), "reports": reports,
+                        "historySeasons": seasons,
+                        "consensusPlayers": result.consensus_players,
+                        "warnings": list(result.warnings)}
 
-            _run_task(task_id, _do_collect)
+            if not _run_task(task_id, _do_collect):
+                self._send_json({"error": "Two data jobs are already running"}, 429)
+                return
             self._send_json({"taskId": task_id})
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
@@ -385,14 +1439,17 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     def _handle_auction(self):
         try:
             body = self._read_body()
-            budget = body.get("budget", 200)
-            top_n = body.get("top", 50)
+            budget = _bounded_int(body.get("budget", 200), "budget", 1, 10000)
+            top_n = _bounded_int(body.get("top", 50), "top", 1, 200)
             paths = ensure_profile(self.profile)
             config = load_profile_config(paths)
             provider = build_provider(config.provider)
             players = provider.fetch_players()
+            # Optional league override (same shape as /api/suggest) so values
+            # reflect the league being viewed, not the profile defaults.
+            eff = self._suggest_config(body, config)
             from ..auction import compute_dollar_values
-            values = compute_dollar_values(config, players, budget_per_team=budget)
+            values = compute_dollar_values(eff, players, budget_per_team=budget)
             sorted_vals = sorted(values.items(), key=lambda x: x[1], reverse=True)
             player_map = {p.key(): p for p in players}
             rows = []
@@ -403,7 +1460,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                         "name": p.name, "pos": p.position,
                         "team": p.team or "FA", "value": round(val, 1),
                     })
-            self._send_json({"budget": budget, "teams": config.teams, "values": rows})
+            self._send_json({"budget": budget, "teams": eff.teams, "values": rows})
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
@@ -411,69 +1468,49 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
 
     def _handle_save_draft(self):
         try:
-            body = self._read_body()
-            paths = ensure_profile(self.profile)
-            state = load_state(paths.state_path)
-            if "picks" in body:
-                state.picks = body["picks"]
-            if "my_picks" in body:
-                state.my_picks = body["my_picks"]
-            save_state(state, paths.state_path)
-            self._send_json({"ok": True, "path": str(paths.state_path)})
+            res = self._save_draft_state()
+            self._send_json(res)
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
     def _handle_load_draft(self):
-        try:
-            paths = ensure_profile(self.profile)
-            state = load_state(paths.state_path)
-            self._send_json({
-                "picks": state.picks,
-                "my_picks": state.my_picks,
-                "my_team_name": state.my_team_name,
-                "league_teams": state.league_teams,
-            })
-        except Exception as exc:
-            self._send_json({"error": str(exc)}, 500)
+        self._handle_get_state()
 
-    # ── export draft log ──────────────────────────────────────────────────
+    # Draft-log CSV export lives in the browser (draft-screen.jsx
+    # handleExportLog) — the server endpoint that used to duplicate it had no
+    # caller and is gone.
 
-    def _handle_export_log(self):
+    # ── parse draft room text (paste modal) ────────────────────────────────
+
+    def _handle_parse_draft_text(self):
         try:
             body = self._read_body()
-            pick_list = body.get("picks", [])
-            num_teams = body.get("numTeams", 12)
-            players_map = body.get("playersMap", {})
-            import csv
-            import io
+            raw_text = str(body.get("text") or "").strip()
+            num_teams = int(body.get("numTeams") or 12)
+            start_pick = int(body.get("startPick") or 1)
 
-            def _safe_cell(val):
-                # Neutralize spreadsheet formula injection (=, +, -, @, tab/CR
-                # prefixes) — player names come from external data sources.
-                s = str(val)
-                if s and s[0] in "=+-@\t\r":
-                    return "'" + s
-                return s
+            players_in_body = body.get("players")
+            if isinstance(players_in_body, list) and len(players_in_body) > 0:
+                available_players = players_in_body
+            else:
+                loaded, _ = _load_players(self.profile)
+                available_players = [{
+                    "id": p.key(),
+                    "name": p.name,
+                    "pos": p.position,
+                    "team": p.team or "",
+                } for p in loaded]
 
-            buf = io.StringIO()
-            w = csv.writer(buf)
-            w.writerow(["pick", "round", "pick_in_round", "team", "player", "position"])
-            for i, pk in enumerate(pick_list):
-                pick_num = i + 1
-                rd = (pick_num - 1) // num_teams + 1
-                pick_in_rd = (pick_num - 1) % num_teams + 1
-                pid = pk.get("playerId", "")
-                p = players_map.get(pid, {})
-                w.writerow([pick_num, rd, pick_in_rd, _safe_cell(pk.get("teamNum", "")),
-                            _safe_cell(p.get("name", pid)), _safe_cell(p.get("pos", ""))])
-            csv_str = buf.getvalue()
-            body_bytes = csv_str.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/csv")
-            self.send_header("Content-Disposition", 'attachment; filename="draft_log.csv"')
-            self.send_header("Content-Length", str(len(body_bytes)))
-            self.end_headers()
-            self.wfile.write(body_bytes)
+            from ..draft_paste_parser import parse_draft_text
+            parsed_items = parse_draft_text(
+                raw_text=raw_text,
+                all_players=available_players,
+                num_teams=num_teams,
+                start_pick=start_pick,
+            )
+            self._send_json({"items": parsed_items, "totalParsed": len(parsed_items)})
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
@@ -487,8 +1524,10 @@ def run_server(
     open_browser: bool = True,
 ) -> None:
     handler = partial(DraftAPIHandler, profile=profile)
+    # Threaded: the rollout endpoint can take a couple seconds, and a
+    # single-threaded server would freeze every other request (player data,
+    # state saves, the next pick) while it runs.
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
-    server.daemon_threads = True
     url = f"http://127.0.0.1:{port}"
     print(f"Draft Assistant web UI: {url}")
     print("Press Ctrl+C to stop.")

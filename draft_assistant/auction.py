@@ -3,11 +3,14 @@
 Computes dollar values from VOR distribution and tracks budgets.
 """
 from __future__ import annotations
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from .models import LeagueConfig, Player
 from .projections import compute_points, replacement_levels
-from .scoring import fantasy_points
+
+
+def _draftable_slots(config: LeagueConfig) -> int:
+    return sum(max(0, int(value)) for slot, value in config.roster.items() if slot != "IR")
 
 
 def compute_dollar_values(
@@ -19,11 +22,13 @@ def compute_dollar_values(
 
     The approach:
       1. Compute VOR for every player (only positive-VOR players have value).
-      2. Determine total roster spots that matter (starters only — bench is $1 each).
-      3. Reserve $1 per bench spot, distribute the rest proportional to VOR.
+      2. Reserve a $1 minimum bid for each draftable roster spot, excluding IR.
+      3. Distribute the remaining budget proportional to VOR.
     """
     pts_map = compute_points(players, config.scoring)
-    repl = replacement_levels(players, config.scoring, config.teams, config.roster)
+    repl = replacement_levels(
+        players, config.scoring, config.teams, config.roster, points_map=pts_map
+    )
 
     # Compute VOR for each player
     vors: Dict[str, float] = {}
@@ -42,9 +47,8 @@ def compute_dollar_values(
     # Total league budget
     total_budget = budget_per_team * config.teams
 
-    # Reserve $1 per roster spot for bench/minimum bids
-    bench_slots = int(config.roster.get("BN", 0)) + int(config.roster.get("IR", 0))
-    total_roster = sum(int(v) for v in config.roster.values())
+    # Reserve $1 per roster slot for minimum bids
+    total_roster = _draftable_slots(config)
     reserved = config.teams * total_roster  # $1 min per slot
     distributable = max(total_budget - reserved, 0)
 
@@ -71,6 +75,7 @@ class AuctionTracker:
         for i in range(config.teams):
             self.budgets[f"Team {i+1}"] = budget_per_team
         self.won: Dict[str, List[Tuple[str, int]]] = {}  # team -> [(player_key, price)]
+        self.my_team = "Team 1"
 
     def set_my_team(self, name: str) -> None:
         if name not in self.budgets:
@@ -81,7 +86,13 @@ class AuctionTracker:
         """Record that `team` won `player_key` for `price`."""
         if team not in self.budgets:
             return False
-        if self.budgets[team] < price:
+        if isinstance(price, bool) or not isinstance(price, int) or price < 1:
+            return False
+        if not isinstance(player_key, str) or not player_key.strip():
+            return False
+        if any(player_key == won_key for wins in self.won.values() for won_key, _ in wins):
+            return False
+        if price > self.max_bid(team):
             return False
         self.budgets[team] -= price
         self.won.setdefault(team, []).append((player_key, price))
@@ -92,39 +103,12 @@ class AuctionTracker:
 
     def max_bid(self, team: str) -> int:
         """Max a team can bid, reserving $1 per remaining roster slot."""
-        total_slots = sum(int(v) for v in self.config.roster.values())
+        if team not in self.budgets:
+            return 0
+        total_slots = _draftable_slots(self.config)
         filled = len(self.won.get(team, []))
-        remaining_slots = max(total_slots - filled - 1, 0)  # -1 for current nomination
-        return max(self.budgets.get(team, 0) - remaining_slots, 1)
-
-    def suggest_auction(
-        self,
-        players: List[Player],
-        my_roster: Dict[str, List[Player]],
-    ) -> List[Tuple[Player, float, float]]:
-        """Return players sorted by value minus estimated market cost.
-
-        Returns: [(player, dollar_value, surplus)]
-
-        Market price is estimated from the dollar-value curve at the
-        player's ADP rank: the room tends to pay roughly what the Nth-best
-        player is worth for the player drafted Nth. ADP is a draft
-        position, not a dollar amount, so it can't be subtracted directly.
-        """
-        values = compute_dollar_values(self.config, players, self.budget_per_team)
-        price_curve = sorted(values.values(), reverse=True)
-
-        def _market_price(p: Player) -> float:
-            if not p.adp or p.adp <= 0 or not price_curve:
-                return values.get(p.key(), 1.0)
-            idx = min(max(int(round(p.adp)) - 1, 0), len(price_curve) - 1)
-            return price_curve[idx]
-
-        results: List[Tuple[Player, float, float]] = []
-        for p in players:
-            val = values.get(p.key(), 1.0)
-            surplus = round(val - _market_price(p), 1)
-            results.append((p, val, surplus))
-
-        results.sort(key=lambda t: t[2], reverse=True)
-        return results
+        open_slots = total_slots - filled
+        if open_slots <= 0:
+            return 0
+        reserve_for_later = max(open_slots - 1, 0)
+        return max(self.budgets[team] - reserve_for_later, 0)

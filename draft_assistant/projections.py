@@ -1,54 +1,32 @@
 from __future__ import annotations
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
-from .models import Player
+from .models import FLEX_TYPES, Player
 from .scoring import fantasy_points
-
-
-FLEX_ELIGIBLE = {"RB", "WR", "TE"}
 
 
 def compute_points(
     players: List[Player],
     scoring: Dict[str, float],
     use_historical: bool = True,
+    season: Optional[int] = None,
 ) -> Dict[str, float]:
     """Compute projected fantasy points per player.
 
     When use_historical=True (default) and a player has age or historical_stats,
     the raw projections are blended with multi-year trends and adjusted by the
-    positional age curve before scoring.
+    positional age curve before scoring. ``season`` sets which season the blend
+    treats as current, and defaults to the calendar year.
     """
     pts: Dict[str, float] = {}
     for p in players:
         if use_historical and (p.age is not None or p.historical_stats):
             from .historical import adjust_projections
-            adj = adjust_projections(p, scoring)
+            adj = adjust_projections(p, scoring, season=season)
             pts[p.key()] = fantasy_points(adj, scoring)
         else:
             pts[p.key()] = fantasy_points(p.projections, scoring)
     return pts
-
-
-def _allocate_flex_baseline(
-    points_by_pos: Dict[str, List[Tuple[str, float]]],
-    flex_slots: int,
-    starters: Dict[str, int],
-) -> Dict[str, int]:
-    # FLEX slots are filled by the best players *after* each position's
-    # dedicated starters are taken, so pool only the post-starter tail —
-    # pooling everyone just re-selects the elites already counted as
-    # starters and skews replacement level.
-    pool: List[Tuple[str, float, str]] = []  # (key, pts, pos)
-    for pos in FLEX_ELIGIBLE:
-        cutoff = starters.get(pos, 0)
-        for key, pts in points_by_pos.get(pos, [])[cutoff:]:
-            pool.append((key, pts, pos))
-    pool.sort(key=lambda t: t[1], reverse=True)
-    alloc: Dict[str, int] = {"RB": 0, "WR": 0, "TE": 0}
-    for i in range(min(flex_slots, len(pool))):
-        alloc[pool[i][2]] += 1
-    return alloc
 
 
 def replacement_levels(
@@ -57,12 +35,25 @@ def replacement_levels(
     teams: int,
     roster: Dict[str, int],
     use_historical: bool = True,
+    points_map: Optional[Dict[str, float]] = None,
+    occupied_players: Optional[Sequence[Player]] = None,
 ) -> Dict[str, float]:
+    """Return positional replacement points for the supplied player pool.
+
+    ``players`` is normally the complete board.  During a live draft it is the
+    remaining board instead; in that case ``occupied_players`` must contain the
+    players already drafted so their starter and flex slots are removed from
+    league-wide demand.  Without that adjustment, the fourth remaining RB in a
+    four-team/one-RB league was treated as the replacement player even after
+    three teams had already drafted an RB.
+    """
     # Build per-position sorted lists
     by_pos: Dict[str, List[Player]] = {}
     for p in players:
         by_pos.setdefault(p.position, []).append(p)
-    pts_map = compute_points(players, scoring, use_historical=use_historical)
+    # Callers that already computed points pass them in; recomputing runs the
+    # historical adjustment over every player a second time.
+    pts_map = points_map if points_map is not None else compute_points(players, scoring, use_historical=use_historical)
     points_by_pos: Dict[str, List[Tuple[str, float]]] = {}
     for pos, plist in by_pos.items():
         points_by_pos[pos] = sorted(
@@ -73,21 +64,63 @@ def replacement_levels(
     for pos in ["QB", "RB", "WR", "TE", "K", "DST"]:
         starters[pos] = teams * int(roster.get(pos, 0))
 
-    # Distribute FLEX among eligible positions
-    flex_slots = teams * int(roster.get("FLEX", 0))
-    flex_alloc = _allocate_flex_baseline(points_by_pos, flex_slots, starters)
-    starters["RB"] += flex_alloc.get("RB", 0)
-    starters["WR"] += flex_alloc.get("WR", 0)
-    starters["TE"] += flex_alloc.get("TE", 0)
+    # A live board only needs enough players to fill the starter slots that
+    # remain open across the league.  Fill mandatory positional slots first;
+    # drafted overflow may already occupy flex slots (or be bench depth).
+    occupied_excess: Dict[str, int] = {}
+    if occupied_players is not None:
+        occupied_by_pos: Dict[str, int] = {}
+        for player in occupied_players:
+            occupied_by_pos[player.position] = occupied_by_pos.get(player.position, 0) + 1
+        for pos, count in occupied_by_pos.items():
+            mandatory = starters.get(pos, 0)
+            used = min(count, mandatory)
+            if pos in starters:
+                starters[pos] -= used
+            occupied_excess[pos] = count - used
+
+    # Allocate typed flex slots league-wide, most restrictive first, each to the
+    # eligible position whose next-best available player is highest. A WR/TE slot
+    # only deepens WR/TE replacement; it never lifts RB.
+    flex_slots: List[tuple] = []
+    for fkey, elig in FLEX_TYPES.items():
+        flex_slots.extend([elig] * (teams * int(roster.get(fkey, 0))))
+    flex_slots.sort(key=len)
+
+    remaining_flex_slots: List[tuple] = []
+    for elig in flex_slots:
+        filled_pos = None
+        filled_count = 0
+        for pos in elig:
+            count = occupied_excess.get(pos, 0)
+            if count > filled_count:
+                filled_pos, filled_count = pos, count
+        if filled_pos is not None:
+            occupied_excess[filled_pos] -= 1
+        else:
+            remaining_flex_slots.append(elig)
+
+    for elig in remaining_flex_slots:
+        best_pos = None
+        best_pts = 0.0
+        for pos in elig:
+            lst = points_by_pos.get(pos, [])
+            i = starters.get(pos, 0)
+            if i < len(lst):
+                pv = lst[i][1]
+                if best_pos is None or pv > best_pts:
+                    best_pos, best_pts = pos, pv
+        if best_pos is not None:
+            starters[best_pos] += 1
 
     repl: Dict[str, float] = {}
     for pos, count in starters.items():
         lst = points_by_pos.get(pos, [])
         if count <= 0:
-            # Position isn't startable in this league: replacement is the
-            # best player at the position, so VOR <= 0 (a replacement of
-            # 0.0 would hand every K/DST their full points as VOR).
-            repl[pos] = lst[0][1] if lst else 0.0
+            # Once league-wide starter demand is satisfied, the best remaining
+            # player is the replacement option.  Giving the position a zero
+            # baseline would make every bench candidate look like elite VOR.
+            repl[pos] = lst[0][1] if occupied_players is not None and lst else 0.0
             continue
         idx = min(max(count - 1, 0), max(len(lst) - 1, 0))
         repl[pos] = lst[idx][1] if lst else 0.0

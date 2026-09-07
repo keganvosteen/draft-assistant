@@ -62,7 +62,9 @@ def build_consensus(
     by_key: Dict[str, List[Player]] = {}
     for source in all_sources:
         for p in source:
-            by_key.setdefault(p.key(), []).append(p)
+            # Vendors use different stable ids for the same NFL player.
+            # Consensus matching remains deliberately name+position based.
+            by_key.setdefault(p.legacy_key(), []).append(p)
 
     # Merge
     merged_players: List[Player] = []

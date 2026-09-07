@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fantasy-draft-assistant"
+dynamic = ["version"]
+description = "Local-first fantasy football draft and roster assistant"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Draft Assistant contributors"}]
+dependencies = []
+
+[project.optional-dependencies]
+desktop = ["pywebview>=4,<7"]
+data = ["nfl_data_py>=0.3,<0.4", "pandas>=1.5,<2"]
+backtest = ["numpy>=1.23,<3", "pandas>=1.5,<3"]
+# pywebview ships in the installers so the packaged app gets a native window
+# rather than falling back to the browser.
+build = ["pyinstaller>=6.11,<7", "pywebview>=4,<7"]
+
+[project.scripts]
+draft-assistant = "draft_assistant.cli:main"
+
+[project.gui-scripts]
+draft-assistant-app = "draft_assistant.desktop:run_desktop"
+
+[tool.setuptools.packages.find]
+include = ["draft_assistant*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "draft_assistant.__version__"}
+
+[tool.setuptools.package-data]
+draft_assistant = [
+  "web/static/*.html",
+  "web/static/*.css",
+  "web/static/*.jsx",
+  "web/static/components/*.js",
+  "web/static/components/*.jsx",
+  "web/static/vendor/*.js",
+  "web/static/vendor/*.md",
+]

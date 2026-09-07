@@ -4,7 +4,7 @@ import json
 from typing import Dict, List, Tuple
 
 from .draft import DraftTracker
-from .models import DraftState, LeagueConfig, Player
+from .models import DraftState, FLEX_TYPES, LeagueConfig, Player
 from .profiles import (
     DEFAULT_PROFILE,
     ProfilePaths,
@@ -32,7 +32,7 @@ else:
 
 
 POSITION_CHOICES = ["", "QB", "RB", "WR", "TE", "K", "DST"]
-ROSTER_FIELDS = ["QB", "RB", "WR", "TE", "FLEX", "K", "DST", "BN", "IR"]
+ROSTER_FIELDS = ["QB", "RB", "WR", "TE", *FLEX_TYPES.keys(), "K", "DST", "BN", "IR"]
 VOR_TOOLTIP_TEXT = (
     "VOR (Value Over Replacement)\n"
     "Projected points above the league replacement line at that position.\n"
@@ -374,6 +374,7 @@ class DraftAssistantApp:
             self.tracker.my_roster(),
             top_n=top_n,
             draft_state=self.state,
+            drafted_players=self.tracker.drafted_players(),
         )
         for p, pts, vor, score in ranked:
             adp = "" if p.adp is None else f"{p.adp:.1f}"
@@ -392,7 +393,7 @@ class DraftAssistantApp:
             lines.append(f"{pos}: {names if names else '-'}")
         lines.append("")
         lines.append("Needs")
-        for pos in ["QB", "RB", "WR", "TE", "FLEX", "K", "DST"]:
+        for pos in ["QB", "RB", "WR", "TE", *FLEX_TYPES.keys(), "K", "DST"]:
             lines.append(f"{pos}: {needs.get(pos, 0)}")
         self._set_text(self.roster_text, "\n".join(lines))
 
@@ -460,6 +461,12 @@ class DraftAssistantApp:
             if messagebox:
                 messagebox.showinfo("Data Already Loaded", f"Loaded {len(self.players)} players from:\n{out_path}")
             return
+        if self.players and messagebox:
+            if not messagebox.askyesno(
+                "Replace Player Data?",
+                f"This will overwrite {len(self.players)} existing players in:\n{out_path}\n\nContinue?",
+            ):
+                return
         save_players(sample_players(), out_path)
         self.status_var.set(f"Seeded sample data to {out_path}")
         self.reload_data()
@@ -489,7 +496,7 @@ class DraftAssistantApp:
         draft_box.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 8))
         draft_settings = self.config.draft or {}
         draft_slot_var = tk.StringVar(value=str(int(draft_settings.get("slot", 1))))
-        sims_var = tk.StringVar(value=str(int(draft_settings.get("monte_carlo_sims", 250))))
+        sims_var = tk.StringVar(value=str(int(draft_settings.get("rollout_sims", 48))))
         noise_var = tk.StringVar(value=str(float(draft_settings.get("adp_noise", 8.0))))
         ttk.Label(draft_box, text="Snake Slot").grid(row=0, column=0, sticky="w", padx=(0, 4), pady=3)
         ttk.Entry(draft_box, textvariable=draft_slot_var, width=6).grid(row=0, column=1, sticky="w", pady=3)
@@ -608,8 +615,7 @@ class DraftAssistantApp:
             draft_settings = dict(self.config.draft or {})
             draft_settings.update({
                 "slot": draft_slot,
-                "snake": True,
-                "monte_carlo_sims": sims,
+                "rollout_sims": sims,
                 "adp_noise": adp_noise,
             })
             self.config.draft = draft_settings

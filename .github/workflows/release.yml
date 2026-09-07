@@ -1,0 +1,126 @@
+name: Build installers
+
+# Push a tag to cut a release:  git tag v1.0.0 && git push origin v1.0.0
+# Or run manually from the Actions tab to get installers without tagging.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m unittest discover tests -v
+      - run: node scripts/check_web_syntax.js
+      - run: node scripts/check_league_sync.js
+      - run: node scripts/check_workspace_store.js
+      - run: python -m pip install --no-deps .
+      - run: python -I scripts/check_installed_assets.py
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Chocolatey is preinstalled on the runners; winget is not reliably
+      # usable from a non-interactive Actions session.
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+        shell: pwsh
+
+      - name: Build installer
+        run: powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
+        shell: pwsh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/installers/*.exe
+          if-no-files-found: error
+
+  macos:
+    needs: test
+    # One universal2 .dmg covering both Apple Silicon and Intel. Building each
+    # arch natively would be simpler, but GitHub's Intel runner (macos-13) no
+    # longer picks up jobs, so cross-building from arm64 is the only option.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      # actions/setup-python is arch-specific; PyInstaller can only emit a
+      # universal2 binary from a universal2 interpreter, which python.org ships.
+      - name: Install universal2 Python
+        run: |
+          set -euxo pipefail
+          PKG=python-3.12.8-macos11.pkg
+          curl -fsSL -o "$PKG" "https://www.python.org/ftp/python/3.12.8/$PKG"
+          sudo installer -pkg "$PKG" -target /
+          echo "PYTHON_BIN=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3" >> "$GITHUB_ENV"
+
+      - name: Build universal .app and .dmg
+        env:
+          DRAFT_ASSISTANT_TARGET_ARCH: universal2
+        # Unsigned/ad-hoc build. To sign, add an Apple Developer certificate to
+        # the keychain here and set DRAFT_ASSISTANT_CODESIGN_IDENTITY.
+        # See docs/DISTRIBUTION.md.
+        run: |
+          chmod +x packaging/macos/build.sh packaging/macos/smoke_test.sh
+          ./packaging/macos/build.sh
+
+      - name: Verify the binary really is universal
+        run: |
+          set -euo pipefail
+          BIN="dist/pyinstaller/Draft Assistant.app/Contents/MacOS/DraftAssistant"
+          file "$BIN"
+          lipo -archs "$BIN" | tee /tmp/archs
+          grep -q x86_64 /tmp/archs && grep -q arm64 /tmp/archs \
+            || { echo "ERROR: binary is not universal (Intel testers would get a broken app)" >&2; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg-universal
+          path: dist/installers/*.dmg
+          if-no-files-found: error
+
+  release:
+    # Only publish a GitHub Release for tag pushes; manual runs just leave
+    # artifacts attached to the workflow run.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          body: |
+            ## Installing
+
+            **Windows** — download the `.exe`, run it. SmartScreen will warn
+            because the build is unsigned: click **More info → Run anyway**.
+
+            **macOS** — download the `.dmg`, open it, drag Draft Assistant to
+            Applications. One download works on both Apple Silicon and Intel.
+            On first launch macOS blocks it because the build is unsigned: open
+            **System Settings → Privacy & Security**, scroll down, and click
+            **Open Anyway**.
+
+            Full step-by-step: [docs/FOR_TESTERS.md](https://github.com/keganvosteen/draft-assistant/blob/master/docs/FOR_TESTERS.md)
