@@ -179,3 +179,42 @@ class TestLeagueSyncApi(_ServerFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEspnCookieNormalization(unittest.TestCase):
+    """Users paste cookies straight out of DevTools — with quotes, braces
+    missing, name= prefixes, or the URL-decoded espn_s2 some guides show.
+    All of those used to 401 silently; they must normalize instead."""
+
+    def _cookie(self, s2=None, swid=None):
+        return espn._espn_cookie_headers(s2, swid).get("Cookie", "")
+
+    def test_devtools_quotes_are_stripped(self):
+        self.assertEqual(
+            self._cookie('"AEAw%2Fabc"', '"{C904188A-BE28}"'),
+            "espn_s2=AEAw%2Fabc; SWID={C904188A-BE28}",
+        )
+
+    def test_copied_name_prefix_is_stripped(self):
+        self.assertEqual(self._cookie("espn_s2=AEAwabc"), "espn_s2=AEAwabc")
+        self.assertEqual(self._cookie(None, "SWID={ABC-123}"), "SWID={ABC-123}")
+
+    def test_swid_gains_missing_braces(self):
+        self.assertEqual(self._cookie(None, "C904188A-BE28"), "SWID={C904188A-BE28}")
+        # Already-braced values pass through verbatim (case untouched).
+        self.assertEqual(self._cookie(None, "{c904188a-be28}"), "SWID={c904188a-be28}")
+
+    def test_decoded_espn_s2_is_reencoded(self):
+        self.assertEqual(self._cookie("AEAw/ab+c="), "espn_s2=AEAw%2Fab%2Bc%3D")
+
+    def test_encoded_espn_s2_is_left_alone(self):
+        raw = "AEAwzmwW8Qgm%2F6e0aGK%2BB3W0%3D"
+        self.assertEqual(self._cookie(raw), f"espn_s2={raw}")
+
+    def test_clean_values_are_unchanged(self):
+        self.assertEqual(self._cookie("session", "{owner}"),
+                         "espn_s2=session; SWID={owner}")
+
+    def test_injection_still_rejected_after_cleaning(self):
+        with self.assertRaises(ValueError):
+            self._cookie('"s2; unauthorized=1"')
