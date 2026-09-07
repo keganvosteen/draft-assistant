@@ -163,6 +163,65 @@ class TestRequestBodyLimits(_ServerFixture):
         self.assertIn(b"top", body)
 
 
+class TestEarlyRejectionsCloseCleanly(_ServerFixture):
+    """The 403/413/415 replies land instead of being lost to a reset.
+
+    Those three answer before reading the request body. Closing a socket with
+    received-but-unread bytes still buffered is an *abortive* close on Windows:
+    the RST makes the client discard the reply it had not read yet, and
+    `getresponse()` raises ConnectionAbortedError instead of returning a
+    status. It reproduced on roughly 3% of requests, which is what made the
+    full suite intermittently red. The handler now drains the body first.
+
+    These loop because the failure is a race — one request would usually pass
+    even with the drain removed. At ~3% per request, 100 iterations catches a
+    regression better than 95 times out of 100.
+    """
+
+    REPEATS = 100
+
+    def _repeat(self, send):
+        aborted = []
+        for _ in range(self.REPEATS):
+            try:
+                send()
+            except OSError as exc:  # the reset, surfacing as a client error
+                aborted.append(exc)
+        self.assertEqual(aborted, [], f"{len(aborted)}/{self.REPEATS} connections reset")
+
+    def test_cross_origin_rejection_is_delivered(self):
+        def send():
+            status, _ = self.request(
+                "POST", "/api/state", {"picks": []},
+                headers={"Sec-Fetch-Site": "cross-site"},
+            )
+            self.assertEqual(status, 403)
+        self._repeat(send)
+
+    def test_oversized_rejection_is_delivered(self):
+        def send():
+            conn = HTTPConnection("127.0.0.1", self.port, timeout=10)
+            try:
+                conn.putrequest("POST", "/api/import-espn")
+                conn.putheader("Content-Type", "application/json")
+                conn.putheader("Content-Length", str(MAX_BODY_BYTES + 1))
+                conn.endheaders()
+                conn.send(b"{}")
+                self.assertEqual(conn.getresponse().status, 413)
+            finally:
+                conn.close()
+        self._repeat(send)
+
+    def test_unsupported_media_type_rejection_is_delivered(self):
+        def send():
+            status, _ = self.request(
+                "POST", "/api/state", {"picks": []},
+                headers={"Content-Type": "text/plain"},
+            )
+            self.assertEqual(status, 415)
+        self._repeat(send)
+
+
 class TestMalformedBodyHandling(_ServerFixture):
     def test_malformed_json_returns_an_error_response(self):
         """Regression: this used to raise UnboundLocalError inside the handler's
