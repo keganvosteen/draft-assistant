@@ -116,14 +116,17 @@
 
   // One pick by one team: distribute take-probability across the top
   // available candidates. Autodrafters concentrate hard on best ADP;
-  // live drafters spread more and weight by need.
-  function predictPick(teamPlayers, cands, slots, mode, picksLeft) {
+  // live drafters spread more and weight by need. `spread` scales the
+  // ADP-discipline temperature (from the "ADP Noise" tweak: higher =
+  // less predictable drafters).
+  function predictPick(teamPlayers, cands, slots, mode, picksLeft, spread) {
     var c       = posCounts(teamPlayers);
     var weights = [];
     var total   = 0;
+    var tau     = (mode === 'auto' ? 1.8 : 3.0) * (spread || 1);
 
     cands.forEach(function (cd, i) {
-      var w = Math.exp(-i / (mode === 'auto' ? 1.8 : 3.0));
+      var w = Math.exp(-i / tau);
       w *= needFactor(cd.player.pos, c, slots, mode, picksLeft);
       w *= cd.surv;   // discount players probably already gone
       weights.push(w);
@@ -146,10 +149,12 @@
     // picks:      [{pickNum, teamNum, playerId}]
     // teamModes:  {teamNum: 'live'|'auto'}, default 'live'
     // playersById: {id: player}
-    analyze: function (available, picks, league, teamModes, playersById) {
+    // opts:       {sigma} — ADP noise from the tweaks panel (18 = neutral)
+    analyze: function (available, picks, league, teamModes, playersById, opts) {
       var numTeams = league.numTeams;
       var slots    = league.rosterSlots;
       var modes    = teamModes || {};
+      var spread   = ((opts && opts.sigma) || 18) / 18;
 
       var rosters = {};
       for (var t = 1; t <= numTeams; t++) rosters[t] = [];
@@ -186,7 +191,7 @@
         }
         if (cands.length === 0) break;
 
-        var pred = predictPick(rosters[team], cands, slots, mode, picksLeft);
+        var pred = predictPick(rosters[team], cands, slots, mode, picksLeft, spread);
         cands.forEach(function (cd, k) {
           surv[cd.player.id] = Math.max(0.02, surv[cd.player.id] * (1 - pred.take[k]));
         });

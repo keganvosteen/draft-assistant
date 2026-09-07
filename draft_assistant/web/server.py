@@ -1377,6 +1377,32 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
+    def _yahoo_adp_report(self, body: dict, players):
+        """Overlay Yahoo draft-room ADP when the pulling league is on Yahoo.
+
+        Runs only when the pull carries a ``yahooLeagueKey`` (the UI sends it
+        for leagues imported from Yahoo). Yahoo's ``draft_analysis`` is the
+        ADP of the user's actual draft room, so it replaces the public board's
+        number (kept in metadata as ``public_adp``). Failures never sink the
+        pull — they surface as a not-ok source report like any other source.
+        """
+        from ..importers.free_sources import SourceReport, apply_yahoo_adp
+        league_key = str(body.get("yahooLeagueKey") or "").strip()
+        if not league_key:
+            return None
+        try:
+            saved = self._yahoo_load()
+            if not (saved.get("token") or {}).get("access_token"):
+                return SourceReport("Yahoo ADP", 0, ok=False,
+                                    detail="authorize with Yahoo first (league hub)")
+            from ..importers import yahoo
+            rows = yahoo.fetch_draft_analysis(self._yahoo_access_token(), league_key)
+            matched = apply_yahoo_adp(players, rows)
+            return SourceReport("Yahoo ADP", matched,
+                                detail=f"{len(rows)} drafted players; replaces public ADP")
+        except Exception as exc:
+            return SourceReport("Yahoo ADP", 0, ok=False, detail=str(exc))
+
     def _handle_yahoo_import(self):
         """Import a chosen Yahoo league as a form-ready payload (like ESPN)."""
         try:
@@ -1534,6 +1560,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     espn_league_id=body.get("espnLeagueId"),
                     history_seasons=body.get("history"),
                 )
+                yahoo_report = self._yahoo_adp_report(body, result.players)
+                if yahoo_report:
+                    result.reports.append(yahoo_report)
                 # Accumulate history across pulls: keep prior seasons on disk
                 # rather than overwriting them with this pull's seasons only.
                 players = update_players(
@@ -1583,6 +1612,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     include_cbs=not body.get("skipCbs", False),
                     espn_league_id=body.get("espnLeagueId"),
                 )
+                yahoo_report = self._yahoo_adp_report(body, result.players)
+                if yahoo_report:
+                    result.reports.append(yahoo_report)
                 # Same history accumulation as the free pull — a full collect
                 # must not discard seasons an earlier pull already banked.
                 players = update_players(

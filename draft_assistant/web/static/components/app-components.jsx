@@ -203,7 +203,7 @@ function EspnAccessFields({ leagueId }) {
   return (
     <details style={{marginTop:12}}>
       <summary style={{cursor:'pointer', color:T.primary, fontSize:13, fontWeight:600}}>Private ESPN league access (optional)</summary>
-      <Note style={{margin:'10px 0'}}>For a private league or a 401 error, copy these cookies from your signed-in ESPN browser session (Developer tools → Application or Storage → Cookies → espn.com). They stay in memory until this app page closes or reloads.</Note>
+      <Note style={{margin:'10px 0'}}>For a private league or a 401 error, copy these cookies from your signed-in ESPN browser session (Developer tools → Application or Storage → Cookies → espn.com). Paste them as shown — quotes, braces, and %-encoding are cleaned up automatically. They stay in memory until this app page closes or reloads, then click Import again.</Note>
       <Field label="espn_s2 cookie"><Input type="password" autoComplete="off" value={access.espnS2 || ''}
         aria-label="ESPN espn_s2 cookie" onChange={e => change('espnS2', e.target.value)} /></Field>
       <Field label="SWID cookie"><Input type="password" autoComplete="off" value={access.swid || ''}
@@ -844,7 +844,10 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
     // Full Collect runs the same free-source pull and then enriches it, so both
     // modes take the identical options — sending less would shrink the board.
     const body = { season, statsSeason, history, teams, adpFormat,
-                   scoring: adpFormat, skipFftoday: skipFf, espnLeagueId };
+                   scoring: adpFormat, skipFftoday: skipFf, espnLeagueId,
+                   // Yahoo leagues get their own draft room's ADP overlaid on
+                   // the board (needs the saved Yahoo authorization).
+                   yahooLeagueKey: (league && league.yahooLeagueKey) || undefined };
     fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

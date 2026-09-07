@@ -355,6 +355,59 @@ def _parse_teams(teams: Dict) -> List[Dict]:
     return parsed
 
 
+def fetch_draft_analysis(access_token: str, league_key: str,
+                         limit: int = 400) -> List[Dict[str, object]]:
+    """Yahoo's league-wide draft analysis: real ADP from actual Yahoo drafts.
+
+    Pages through the league's player collection (Yahoo caps pages at 25)
+    sorted by Yahoo's overall rank, reading the ``draft_analysis``
+    subresource: ``average_pick``, ``average_round``, ``average_cost``,
+    ``percent_drafted``. Undrafted players report ``"-"`` — those rows are
+    skipped, and paging stops once a full page has no drafted players
+    (the sort means everyone after that is deeper still).
+
+    This is the ADP board the user's actual draft room runs on, which makes
+    it a better availability signal for a Yahoo league than the public
+    FFC/Sleeper boards.
+    """
+    rows: List[Dict[str, object]] = []
+    start = 0
+    while start < limit:
+        count = min(25, limit - start)
+        data = _api_get(
+            access_token,
+            f"league/{_seg(league_key)}/players;start={start};count={count};sort=OR/draft_analysis",
+        )
+        page = _find_all(data, "player")
+        if not page:
+            break
+        page_rows = 0
+        for raw in page:
+            flat = _flatten_yahoo_player(raw)
+            avg_pick = _to_float(flat.get("average_pick"))
+            if not flat.get("name") or not flat.get("position"):
+                continue
+            if avg_pick is None or avg_pick <= 0:
+                continue
+            rows.append({
+                "name": flat["name"],
+                "position": str(flat["position"]).split(",")[0].strip().upper(),
+                "team": (flat.get("team") or "").upper() or None,
+                "average_pick": avg_pick,
+                "average_round": _to_float(flat.get("average_round")),
+                "average_cost": _to_float(flat.get("average_cost")),
+                "percent_drafted": _to_float(flat.get("percent_drafted")),
+            })
+            page_rows += 1
+        if page_rows == 0:
+            break
+        start += len(page)
+        if len(page) < count:
+            break
+    return rows
+
+
+
 def _parse_league(settings: Dict, teams: Dict, league_key: str) -> Dict[str, object]:
     """Pure parse of Yahoo's nested settings/teams JSON (testable offline)."""
     name = _first(settings, "name") or league_key
@@ -542,6 +595,10 @@ def _flatten_yahoo_player(raw) -> Dict[str, str]:
                 flat["position"] = str(obj["display_position"])
             if "editorial_team_abbr" in obj:
                 flat["team"] = str(obj["editorial_team_abbr"])
+            # draft_analysis fields (fetch_draft_analysis); "-" means undrafted.
+            for key in ("average_pick", "average_round", "average_cost", "percent_drafted"):
+                if key in obj and not isinstance(obj[key], (dict, list)):
+                    flat[key] = str(obj[key])
             name = obj.get("name")
             if isinstance(name, dict) and name.get("full"):
                 flat["name"] = str(name["full"])
@@ -558,6 +615,13 @@ def _flatten_yahoo_player(raw) -> Dict[str, str]:
 def _to_int(value) -> Optional[int]:
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float(value) -> Optional[float]:
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return None
 
@@ -725,3 +789,4 @@ def parse_settings_text(text: str) -> Dict[str, object]:
     if team_names and len(team_names) >= 2:
         out["teamNames"] = team_names[:num_teams]
     return out
+

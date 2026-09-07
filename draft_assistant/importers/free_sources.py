@@ -605,7 +605,11 @@ def _fetch_espn_players(
         stats = _espn_projection_stats(player, season)
         if not _has_projection_value(stats):
             continue
-        adp = _valid_adp(
+        # draftRanksByRankType is an ordinal *rank* (1, 2, 3, ...), not an
+        # ADP. Feeding it into Player.adp lets the min-merge drag every
+        # player's ADP toward their ESPN rank, distorting the whole board —
+        # keep it as metadata and leave ADP to real boards (Sleeper, FFC).
+        espn_rank = _valid_adp(
             _nested_get(player, ["draftRanksByRankType", "PPR", "rank"])
             or _nested_get(player, ["draftRanksByRankType", "STANDARD", "rank"])
         )
@@ -614,10 +618,11 @@ def _fetch_espn_players(
             name=player.get("fullName") or "",
             position=position,
             team=_espn_team(player.get("proTeamId")),
-            adp=adp,
+            adp=None,
             projections=stats,
             metadata=_clean_metadata({
                 "espn_id": player.get("id"),
+                "espn_rank": espn_rank,
                 "injury_status": player.get("injuryStatus"),
                 "projection_source": "ESPN",
                 "sources": ["espn"],
@@ -838,14 +843,40 @@ def _parse_espn_rosters(data: dict) -> List[SyncedRosterTeam]:
     return out
 
 
+def _clean_espn_cookie(key: str, value: str) -> str:
+    """Normalize the formats people actually paste from DevTools/guides.
+
+    ESPN authenticates only the exact browser values, but users paste them
+    with the surrounding quotes DevTools displays, with a ``name=`` prefix
+    from a copied Cookie header, SWID without its braces, or espn_s2 in the
+    URL-*decoded* form some guides hand out. Every one of those silently
+    turned into a 401 ("it imported a generic league") — fix them instead.
+    """
+    value = str(value).strip().strip('"').strip("'").strip()
+    prefix = key.lower() + "="
+    if value.lower().startswith(prefix):
+        value = value[len(prefix):].strip().strip('"').strip("'").strip()
+    if key == "SWID":
+        value = value.strip("{}")
+        if value:
+            value = "{" + value + "}"
+    elif key == "espn_s2":
+        # The genuine cookie is percent-encoded (%2F etc). A value with no
+        # '%' but base64-ish '/' or '+' is the decoded form — re-encode it.
+        if value and "%" not in value and any(c in value for c in "/+"):
+            value = quote(value, safe="")
+    return value
+
+
 def _espn_cookie_headers(espn_s2: Optional[str], swid: Optional[str]) -> Dict[str, str]:
     cookies = []
     for key, value in (("espn_s2", espn_s2), ("SWID", swid)):
         if value:
-            value = str(value).strip()
+            value = _clean_espn_cookie(key, value)
             if any(ord(c) < 32 or ord(c) > 126 or c == ";" for c in value):
                 raise ValueError(f"{key} must be a single cookie value")
-            cookies.append(f"{key}={value}")
+            if value:
+                cookies.append(f"{key}={value}")
     return {"Cookie": "; ".join(cookies)} if cookies else {}
 
 
@@ -1094,6 +1125,46 @@ def _merge_key(player: Player) -> str:
     if player.position == "DST":
         return f"{_team_code_or_name(player)}|DST"
     return f"{_norm_name(player.name)}|{player.position}"
+
+
+def apply_yahoo_adp(players: List[Player], rows: List[dict]) -> int:
+    """Overlay Yahoo draft-room ADP onto the pulled board.
+
+    ``rows`` come from ``yahoo.fetch_draft_analysis`` — real average picks
+    from actual Yahoo drafts, which is the board the user's own Yahoo room
+    runs on. Matched players get ``metadata["yahoo_adp"]`` and their
+    ``Player.adp`` replaced (the public FFC/Sleeper number stays available
+    in metadata as ``public_adp``). Returns how many players matched.
+    """
+    by_key: Dict[str, Player] = {}
+    for player in players:
+        by_key.setdefault(_merge_key(player), player)
+
+    matched = 0
+    for row in rows:
+        position = str(row.get("position") or "").upper()
+        if position == "DEF":
+            position = "DST"
+        stub = Player(
+            id="yahoo-adp", name=str(row.get("name") or ""),
+            position=position, team=row.get("team"), projections={},
+        )
+        player = by_key.get(_merge_key(stub))
+        if player is None:
+            continue
+        avg_pick = row.get("average_pick")
+        if not avg_pick:
+            continue
+        if player.adp is not None and player.metadata.get("yahoo_adp") is None:
+            player.metadata["public_adp"] = player.adp
+        player.metadata["yahoo_adp"] = float(avg_pick)
+        if row.get("average_cost"):
+            player.metadata["yahoo_avg_cost"] = float(row["average_cost"])
+        if row.get("percent_drafted") is not None:
+            player.metadata["yahoo_percent_drafted"] = float(row["percent_drafted"])
+        player.adp = float(avg_pick)
+        matched += 1
+    return matched
 
 
 def _team_code_or_name(player: Player) -> str:
