@@ -290,11 +290,13 @@ function ImportPanel({ form, setForm }) {
     });
   };
 
-  // ── Yahoo OAuth (multi-step: credentials → authorize → pick league) ──
+  // ── Yahoo OAuth & Settings Import ──
   const [yh, setYh] = React.useState({
+    mode: 'paste', // 'paste' or 'oauth'
+    pasteText: '',
     clientId: '', clientSecret: '', redirectUri: 'https://localhost/',
     authUrl: '', code: '', leagues: null, leagueKey: '', busy: false, msg: null,
-    credsSaved: false, showCredForm: false,
+    credsSaved: false, showCredForm: false, needsApproval: false, approvalUrl: '',
   });
   const yhSet = patch => setYh(s => ({ ...s, ...patch }));
   // Pick up credentials already saved on this machine (so re-auth is one click).
@@ -307,7 +309,18 @@ function ImportPanel({ form, setForm }) {
     yhSet({ busy: true, msg: null });
     fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(r => r.json())
-      .then(d => { if (d.error) yhSet({ msg: { ok: false, text: d.error } }); else onOk(d); })
+      .then(d => {
+        if (d.error) {
+          yhSet({
+            msg: { ok: false, text: d.error },
+            needsApproval: Boolean(d.needsApproval),
+            approvalUrl: d.approvalUrl || '',
+          });
+        } else {
+          yhSet({ needsApproval: false });
+          onOk(d);
+        }
+      })
       .catch(() => yhSet({ msg: { ok: false, text: 'Request failed' } }))
       .finally(() => setYh(s => ({ ...s, busy: false })));
   };
@@ -341,6 +354,16 @@ function ImportPanel({ form, setForm }) {
       setForm(f => importedLeague(f, d, 'Yahoo'));
       const seat = d.draftPosition ? `, your seat #${d.draftPosition}` : '';
       yhSet({ msg: { ok: true, text: `Imported “${d.name}” — ${d.numTeams} teams${seat}, ${(d.teamNames || []).length} names, ${d.scoringType}` } });
+    });
+  };
+  const yahooParseSettings = () => {
+    if (!yh.pasteText.trim()) {
+      yhSet({ msg: { ok: false, text: 'Paste your Yahoo league settings text first.' } });
+      return;
+    }
+    yhPost('/api/yahoo/parse-settings', { text: yh.pasteText.trim() }, d => {
+      setForm(f => importedLeague(f, d, 'Yahoo'));
+      yhSet({ msg: { ok: true, text: `Imported “${d.name}” from settings — ${d.numTeams} teams, ${d.scoringType}. Switch to Draft order tab to enter teams or select your seat.` } });
     });
   };
 
@@ -416,63 +439,128 @@ function ImportPanel({ form, setForm }) {
 
       {provider === 'yahoo' && (
         <div>
-          {!yh.leagues ? (
-            <>
-              {yh.credsSaved && !yh.showCredForm ? (
-                <div style={{fontSize:12.5, color:T.text, marginBottom:8}}>
-                  ✓ Yahoo credentials saved on this machine.{' '}
-                  <button onClick={()=>yhSet({showCredForm:true})} style={{
-                    background:'none', border:'none', padding:0, color:T.primary,
-                    cursor:'pointer', textDecoration:'underline', fontSize:12.5,
-                  }}>Use different credentials</button>
-                </div>
-              ) : (
-                <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
-                  <Input value={yh.clientId} onChange={e=>yhSet({clientId:e.target.value})}
-                    aria-label="Yahoo client ID" placeholder="Client ID (Consumer Key)" />
-                  <Input value={yh.clientSecret} onChange={e=>yhSet({clientSecret:e.target.value})}
-                    aria-label="Yahoo client secret" placeholder="Client Secret" type="password" />
-                </div>
-              )}
-              <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
-                <Input value={yh.redirectUri} onChange={e=>yhSet({redirectUri:e.target.value})}
-                  aria-label="Redirect URI" placeholder="Redirect URI" style={{flex:1}} />
-                <Btn variant="secondary" onClick={yahooConnect} disabled={yh.busy}>
-                  {yh.busy ? '…' : 'Get authorize link'}
+          <div style={{marginBottom:14}}>
+            <SegmentedControl name="yahooMode" value={yh.mode || 'paste'} onChange={v=>yhSet({mode:v, msg:null})} options={[
+              { value: 'paste', label: 'Paste settings', hint: 'Instant / No setup' },
+              { value: 'oauth', label: 'Yahoo OAuth',    hint: 'API sync' },
+            ]} />
+          </div>
+
+          {yh.mode === 'paste' ? (
+            <div>
+              <div style={{fontSize:12.5, color:T.text, lineHeight:1.5, marginBottom:8}}>
+                Open your Yahoo league in a browser, navigate to <b>League → Settings</b> (<code>…/settings</code>), select all (Ctrl+A), copy (Ctrl+C), and paste the text below. Draft Assistant will parse your league name, teams, roster positions, and custom scoring rules immediately.
+              </div>
+              <textarea
+                value={yh.pasteText}
+                onChange={e => yhSet({ pasteText: e.target.value })}
+                placeholder="Paste Yahoo league settings text here (e.g. from football.fantasysports.yahoo.com/f1/.../settings)..."
+                rows={6}
+                style={{
+                  width: '100%',
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  padding: 8,
+                  borderRadius: T.rsm,
+                  border: `1px solid ${T.border}`,
+                  background: T.surface,
+                  color: T.text,
+                  boxSizing: 'border-box',
+                  resize: 'vertical',
+                }}
+              />
+              <div style={{display:'flex', justifyContent:'flex-end', marginTop:8}}>
+                <Btn onClick={yahooParseSettings} disabled={yh.busy || !yh.pasteText.trim()}>
+                  {yh.busy ? 'Importing…' : 'Import from settings text'}
                 </Btn>
               </div>
-              {yh.authUrl && (
-                <div style={{marginTop:10}}>
-                  <a href={yh.authUrl} target="_blank" rel="noreferrer"
-                    style={{fontSize:12.5, color:T.primary, fontWeight:600}}>
-                    Open Yahoo authorize page ↗
-                  </a>
+            </div>
+          ) : (
+            <div>
+              {!yh.leagues ? (
+                <>
+                  {yh.credsSaved && !yh.showCredForm ? (
+                    <div style={{fontSize:12.5, color:T.text, marginBottom:8}}>
+                      ✓ Yahoo credentials saved on this machine.{' '}
+                      <button onClick={()=>yhSet({showCredForm:true})} style={{
+                        background:'none', border:'none', padding:0, color:T.primary,
+                        cursor:'pointer', textDecoration:'underline', fontSize:12.5,
+                      }}>Use different credentials</button>
+                    </div>
+                  ) : (
+                    <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
+                      <Input value={yh.clientId} onChange={e=>yhSet({clientId:e.target.value})}
+                        aria-label="Yahoo client ID" placeholder="Client ID (Consumer Key)" />
+                      <Input value={yh.clientSecret} onChange={e=>yhSet({clientSecret:e.target.value})}
+                        aria-label="Yahoo client secret" placeholder="Client Secret" type="password" />
+                    </div>
+                  )}
                   <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
-                    <Input value={yh.code} onChange={e=>yhSet({code:e.target.value})}
-                      aria-label="Yahoo authorization code"
-                      placeholder="Paste authorization code" style={{flex:1}} />
-                    <Btn onClick={yahooExchange} disabled={yh.busy}>Connect</Btn>
+                    <Input value={yh.redirectUri} onChange={e=>yhSet({redirectUri:e.target.value})}
+                      aria-label="Redirect URI" placeholder="Redirect URI" style={{flex:1}} />
+                    <Btn variant="secondary" onClick={yahooConnect} disabled={yh.busy}>
+                      {yh.busy ? '…' : 'Get authorize link'}
+                    </Btn>
                   </div>
+                  {yh.authUrl && (
+                    <div style={{marginTop:10}}>
+                      <a href={yh.authUrl} target="_blank" rel="noreferrer"
+                        onClick={e => {
+                          if (window.pywebview?.api?.open_external_url) {
+                            e.preventDefault();
+                            window.pywebview.api.open_external_url(yh.authUrl);
+                          }
+                        }}
+                        style={{fontSize:12.5, color:T.primary, fontWeight:600}}>
+                        Open Yahoo authorize page ↗
+                      </a>
+                      <div style={{display:'flex', gap:8, marginTop:8, alignItems:'center'}}>
+                        <Input value={yh.code} onChange={e=>yhSet({code:e.target.value})}
+                          aria-label="Yahoo authorization code"
+                          placeholder="Paste authorization code or full redirect URL" style={{flex:1}} />
+                        <Btn onClick={yahooExchange} disabled={yh.busy}>Connect</Btn>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div style={{display:'flex', gap:8, alignItems:'center'}}>
+                  <div style={{flex:1}}>
+                    <Select value={yh.leagueKey} onChange={e=>yhSet({leagueKey:e.target.value})}
+                      aria-label="Yahoo league"
+                      options={yh.leagues.map(l=>({value:l.league_key, label:`${l.name}${l.season?` (${l.season})`:''}`}))} />
+                  </div>
+                  <Btn onClick={yahooImport} disabled={yh.busy || !yh.leagueKey}>Import</Btn>
                 </div>
               )}
-            </>
-          ) : (
-            <div style={{display:'flex', gap:8, alignItems:'center'}}>
-              <div style={{flex:1}}>
-                <Select value={yh.leagueKey} onChange={e=>yhSet({leagueKey:e.target.value})}
-                  aria-label="Yahoo league"
-                  options={yh.leagues.map(l=>({value:l.league_key, label:`${l.name}${l.season?` (${l.season})`:''}`}))} />
+
+              {yh.needsApproval && (
+                <div style={{marginTop:12, padding:12, borderRadius:T.rsm, background:T.surfaceAlt, border:`1px solid ${T.border}`}}>
+                  <div style={{fontSize:12.5, fontWeight:600, color:T.text, marginBottom:4}}>
+                    Yahoo Fantasy API access pending approval
+                  </div>
+                  <div style={{fontSize:12, color:T.muted, lineHeight:1.4, marginBottom:8}}>
+                    Yahoo recently restricted its Fantasy Sports API for new developer apps. Submit Yahoo's official access form to enable Fantasy Sports permissions for this App ID, or switch to <b>Paste settings</b> above to import immediately without waiting.
+                  </div>
+                  <Btn size="sm" variant="secondary" onClick={() => {
+                    const url = yh.approvalUrl || 'https://sports.yahoo.com/developer/access/';
+                    if (window.pywebview?.api?.open_external_url) window.pywebview.api.open_external_url(url);
+                    else window.open(url, '_blank');
+                  }}>
+                    Open Yahoo Developer Access Form ↗
+                  </Btn>
+                </div>
+              )}
+
+              <div style={{marginTop:8, fontSize:11.5, color:T.muted, lineHeight:1.5}}>
+                Register a free app at developer.yahoo.com (Installed App · Fantasy → Read · redirect{' '}
+                <b>https://localhost/</b>). After authorizing, copy the <b>code</b> from the address bar.
+                Yahoo has no projections, so those stay from the consensus. Your secret is stored only
+                on this machine.
               </div>
-              <Btn onClick={yahooImport} disabled={yh.busy || !yh.leagueKey}>Import</Btn>
             </div>
           )}
           {status(yh.msg)}
-          <div style={{marginTop:8, fontSize:11.5, color:T.muted, lineHeight:1.5}}>
-            Register a free app at developer.yahoo.com (Installed App · Fantasy → Read · redirect{' '}
-            <b>https://localhost/</b>). After authorizing, copy the <b>code</b> from the address bar.
-            Yahoo has no projections, so those stay from the consensus. Your secret is stored only
-            on this machine.
-          </div>
         </div>
       )}
     </div>

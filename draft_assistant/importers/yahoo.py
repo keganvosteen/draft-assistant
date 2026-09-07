@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import time
 from typing import Dict, List, Optional
 from urllib.error import HTTPError
@@ -197,6 +198,12 @@ def _api_get(access_token: str, path: str) -> Dict:
             return json.loads(resp.read())
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:300]
+        if "additional_authorization_required" in detail:
+            raise RuntimeError(
+                "Yahoo Fantasy Sports API access is not enabled for your Developer App ID yet. "
+                "Yahoo requires submitting the access request form at https://sports.yahoo.com/developer/access/ "
+                "to approve your Client ID for Fantasy Sports access."
+            )
         raise RuntimeError(f"Yahoo API {path} failed ({exc.code}): {detail}")
 
 
@@ -553,3 +560,168 @@ def _to_int(value) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def parse_settings_text(text: str) -> Dict[str, object]:
+    """Parse copied/pasted text from a Yahoo Fantasy league settings page."""
+    raw = text.strip()
+    if not raw:
+        raise ValueError("Please paste your Yahoo league settings text")
+
+    # 1. League name
+    name = "Yahoo League"
+    name_m = re.search(r"(?:League Name|League)\s*[:\t]?\s*([^\n\r]+)", raw, re.I)
+    if name_m:
+        val = name_m.group(1).strip()
+        if val and not val.lower().startswith("settings"):
+            name = val
+    else:
+        first_line = raw.splitlines()[0].strip()
+        if first_line and len(first_line) < 50 and not any(k in first_line.lower() for k in ("http", "settings", "draft")):
+            name = first_line
+
+    # 2. Number of teams
+    teams_m = re.search(r"(?:Max Teams|Teams|Number of Teams)\s*[:\t]?\s*(\d+)", raw, re.I)
+    num_teams = int(teams_m.group(1)) if teams_m else 10
+
+    # 3. Draft type
+    draft_type = "snake"
+    dt_m = re.search(r"Draft Type\s*[:\t]?\s*([^\n\r]+)", raw, re.I)
+    if dt_m and any(k in dt_m.group(1).lower() for k in ("auction", "salary cap")):
+        draft_type = "auction"
+
+    # 4. Roster positions
+    roster = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "FLEX": 0, "K": 0, "DST": 0, "BN": 0}
+    pos_m = re.search(r"Roster Positions\s*[:\t]?\s*([^\n\r]+)", raw, re.I)
+    if pos_m:
+        tokens = [p.strip().upper() for p in pos_m.group(1).split(",") if p.strip()]
+        for tok in tokens:
+            key = YAHOO_POS.get(tok)
+            if key:
+                roster[key] = roster.get(key, 0) + 1
+    else:
+        line_patterns = [
+            (r"(?:Quarterback|QB)\b.*?[:\t]?\s*(\d+)", "QB"),
+            (r"(?:Running Back|RB)\b.*?[:\t]?\s*(\d+)", "RB"),
+            (r"(?:Wide Receiver|WR)\b.*?[:\t]?\s*(\d+)", "WR"),
+            (r"(?:Tight End|TE)\b.*?[:\t]?\s*(\d+)", "TE"),
+            (r"(?:W/R/T|Flex|W/R/T/Q)\b.*?[:\t]?\s*(\d+)", "FLEX"),
+            (r"(?:W/T)\b.*?[:\t]?\s*(\d+)", "WRTE"),
+            (r"(?:R/W|W/R)\b.*?[:\t]?\s*(\d+)", "RBWR"),
+            (r"(?:Superflex|Q/W/R/T)\b.*?[:\t]?\s*(\d+)", "SUPERFLEX"),
+            (r"(?:Kicker|K)\b.*?[:\t]?\s*(\d+)", "K"),
+            (r"(?:Defense/Special Teams|Defense|DEF|DST)\b.*?[:\t]?\s*(\d+)", "DST"),
+            (r"(?:Bench|BN)\b.*?[:\t]?\s*(\d+)", "BN"),
+            (r"(?:Injured Reserve|IR)\b.*?[:\t]?\s*(\d+)", "IR"),
+        ]
+        for pat, key in line_patterns:
+            m = re.search(pat, raw, re.I)
+            if m:
+                roster[key] = int(m.group(1))
+
+    if not any(roster.values()):
+        roster = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DST": 1, "BN": 6}
+
+    # 5. Scoring settings
+    scoring = {}
+    def _parse_num(pat, default=None):
+        m = re.search(pat, raw, re.I)
+        if not m:
+            return default
+        try:
+            return float(m.group(1))
+        except (ValueError, TypeError):
+            return default
+
+    # Passing
+    pass_yd_raw = _parse_num(r"Passing Yards?\s*[:\t]?\s*(\d+(?:\.\d+)?)")
+    if pass_yd_raw is not None:
+        scoring["pass_yd"] = round(1.0 / pass_yd_raw, 4) if pass_yd_raw >= 1 else pass_yd_raw
+    else:
+        scoring["pass_yd"] = 0.04
+
+    scoring["pass_td"] = _parse_num(r"Passing Touchdowns?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 4.0)
+    scoring["pass_int"] = _parse_num(r"(?:Interceptions|Interceptions Thrown|Pass Int)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", -2.0)
+
+    # Rushing
+    rush_yd_raw = _parse_num(r"Rushing Yards?\s*[:\t]?\s*(\d+(?:\.\d+)?)")
+    if rush_yd_raw is not None:
+        scoring["rush_yd"] = round(1.0 / rush_yd_raw, 4) if rush_yd_raw >= 1 else rush_yd_raw
+    else:
+        scoring["rush_yd"] = 0.1
+
+    scoring["rush_td"] = _parse_num(r"Rushing Touchdowns?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 6.0)
+
+    # Receiving
+    rec = _parse_num(r"Receptions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 0.5)
+    scoring["rec"] = rec
+    rec_yd_raw = _parse_num(r"Receiving Yards?\s*[:\t]?\s*(\d+(?:\.\d+)?)")
+    if rec_yd_raw is not None:
+        scoring["rec_yd"] = round(1.0 / rec_yd_raw, 4) if rec_yd_raw >= 1 else rec_yd_raw
+    else:
+        scoring["rec_yd"] = 0.1
+    scoring["rec_td"] = _parse_num(r"Receiving Touchdowns?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 6.0)
+
+    # 2PT & Fumbles
+    two_pt = _parse_num(r"(?:2-Point Conversions?|2PT Conversions?)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
+    scoring["pass_2pt"] = _parse_num(r"Passing 2-Point Conversions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", two_pt)
+    scoring["rush_2pt"] = _parse_num(r"Rushing 2-Point Conversions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", two_pt)
+    scoring["rec_2pt"] = _parse_num(r"Receiving 2-Point Conversions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", two_pt)
+    scoring["fumbles"] = _parse_num(r"Fumbles Lost\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", -2.0)
+    fumbles_tot = _parse_num(r"(?:Total Fumbles|Fumbles Total|Fumbles \(Total\))\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
+    if fumbles_tot is not None:
+        scoring["fumbles_total"] = fumbles_tot
+
+    # Defense
+    scoring["sack"] = _parse_num(r"Sacks?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 1.0)
+    scoring["def_int"] = _parse_num(r"(?:Interception Return|Interceptions? \(DEF\))\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
+    scoring["fumble_recovery"] = _parse_num(r"Fumble Recover(?:y|ies)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
+    def_td = _parse_num(r"(?:Touchdown \(DEF\)|Defensive Touchdowns?)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 6.0)
+    scoring["int_ret_td"] = def_td
+    scoring["fum_ret_td"] = def_td
+    scoring["safety"] = _parse_num(r"Safet(?:y|ies)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
+    scoring["blk_kick"] = _parse_num(r"Blocked? Kicks?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
+
+    # Kicking
+    fg_0_19 = _parse_num(r"Field Goals? 0-19 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
+    fg_20_29 = _parse_num(r"Field Goals? 20-29 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
+    fg_30_39 = _parse_num(r"Field Goals? 30-39 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
+    fg_short = [v for v in (fg_0_19, fg_20_29, fg_30_39) if v is not None]
+    if fg_short:
+        scoring["fg_0_39"] = round(sum(fg_short) / len(fg_short), 2)
+    else:
+        scoring["fg_0_39"] = 3.0
+
+    scoring["fg_40_49"] = _parse_num(r"Field Goals? 40-49 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 4.0)
+    fg_50 = _parse_num(r"Field Goals? 50\+ Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 5.0)
+    scoring["fg_50_59"] = fg_50
+    scoring["fg_60_plus"] = fg_50
+    scoring["pat_made"] = _parse_num(r"(?:Point After Attempt Made|PAT Made)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 1.0)
+    fg_miss = _parse_num(r"Field Goals? Missed\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
+    if fg_miss is not None:
+        scoring["fg_miss"] = fg_miss
+
+    scoring_type = "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"
+
+    # Team names if present
+    team_names = []
+    for line in raw.splitlines():
+        line = line.strip()
+        tm = re.match(r"^\d+[\.\)]\s+([A-Za-z0-9\s_\-\.']+?)(?:\s+\(.*?\))?$", line)
+        if tm:
+            candidate = tm.group(1).strip()
+            if len(candidate) > 1 and candidate not in team_names:
+                team_names.append(candidate)
+
+    out: Dict[str, object] = {
+        "name": name,
+        "platform": "Yahoo",
+        "numTeams": num_teams,
+        "draftType": draft_type,
+        "rosterSlots": roster,
+        "scoring": scoring,
+        "scoringType": scoring_type,
+    }
+    if team_names and len(team_names) >= 2:
+        out["teamNames"] = team_names[:num_teams]
+    return out

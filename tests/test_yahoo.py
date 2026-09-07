@@ -7,6 +7,7 @@ from draft_assistant.importers.yahoo import (
     _parse_roster_players,
     auth_url,
     extract_code,
+    parse_settings_text,
 )
 from draft_assistant.platform_sync import SyncedRosterPlayer, SyncedRosterTeam
 
@@ -223,5 +224,130 @@ class TestYahooParse(unittest.TestCase):
         self.assertEqual(picks[1].player.position, "WR")
 
 
+class TestYahooParseSettingsText(unittest.TestCase):
+    def test_parse_settings_empty_raises(self):
+        with self.assertRaises(ValueError):
+            parse_settings_text("")
+        with self.assertRaises(ValueError):
+            parse_settings_text("   \n\t  ")
+
+    def test_parse_settings_comma_positions_and_scoring(self):
+        sample = """
+League Name: The Champions League
+Max Teams: 12
+Draft Type: Live Standard Draft
+Roster Positions: QB, WR, WR, RB, RB, TE, W/R/T, K, DEF, BN, BN, BN, BN, BN, BN, IR
+
+Passing Yards: 25 yards per point
+Passing Touchdowns: 4
+Interceptions: -2
+Rushing Yards: 10 yards per point
+Rushing Touchdowns: 6
+Receptions: 0.5
+Receiving Yards: 10 yards per point
+Receiving Touchdowns: 6
+2-Point Conversions: 2
+Fumbles Lost: -2
+Sacks: 1
+Interceptions: 2
+Fumble Recoveries: 2
+Touchdown (DEF): 6
+Safeties: 2
+Blocked Kicks: 2
+Field Goals 0-19 Yards: 3
+Field Goals 20-29 Yards: 3
+Field Goals 30-39 Yards: 3
+Field Goals 40-49 Yards: 4
+Field Goals 50+ Yards: 5
+Point After Attempt Made: 1
+
+1. Josh's Team
+2. Sarah's Squad
+3. Team Dynasty
+        """
+        info = parse_settings_text(sample)
+        self.assertEqual(info["name"], "The Champions League")
+        self.assertEqual(info["numTeams"], 12)
+        self.assertEqual(info["draftType"], "snake")
+        self.assertEqual(info["platform"], "Yahoo")
+        self.assertEqual(info["scoringType"], "half-ppr")
+
+        # Roster
+        roster = info["rosterSlots"]
+        self.assertEqual(roster["QB"], 1)
+        self.assertEqual(roster["WR"], 2)
+        self.assertEqual(roster["RB"], 2)
+        self.assertEqual(roster["TE"], 1)
+        self.assertEqual(roster["FLEX"], 1)
+        self.assertEqual(roster["K"], 1)
+        self.assertEqual(roster["DST"], 1)
+        self.assertEqual(roster["BN"], 6)
+
+        # Scoring
+        sc = info["scoring"]
+        self.assertEqual(sc["pass_yd"], 0.04)
+        self.assertEqual(sc["pass_td"], 4.0)
+        self.assertEqual(sc["pass_int"], -2.0)
+        self.assertEqual(sc["rush_yd"], 0.1)
+        self.assertEqual(sc["rush_td"], 6.0)
+        self.assertEqual(sc["rec"], 0.5)
+        self.assertEqual(sc["rec_yd"], 0.1)
+        self.assertEqual(sc["rec_td"], 6.0)
+        self.assertEqual(sc["pass_2pt"], 2.0)
+        self.assertEqual(sc["fumbles"], -2.0)
+        self.assertEqual(sc["fg_0_39"], 3.0)
+        self.assertEqual(sc["fg_40_49"], 4.0)
+        self.assertEqual(sc["fg_50_59"], 5.0)
+        self.assertEqual(sc["pat_made"], 1.0)
+        self.assertEqual(sc["sack"], 1.0)
+        self.assertEqual(sc["def_int"], 2.0)
+        self.assertEqual(sc["fumble_recovery"], 2.0)
+        self.assertEqual(sc["int_ret_td"], 6.0)
+        self.assertEqual(sc["safety"], 2.0)
+
+        # Teams
+        self.assertEqual(info["teamNames"][:3], ["Josh's Team", "Sarah's Squad", "Team Dynasty"])
+
+    def test_parse_settings_line_by_line_and_superflex(self):
+        sample = """
+League: Superflex Showdown
+Teams: 10
+Draft Type: Live Salary Cap Draft
+Quarterback (QB): 1
+Running Back (RB): 2
+Wide Receiver (WR): 3
+Tight End (TE): 1
+Superflex (Q/W/R/T): 1
+Defense (DEF): 1
+Bench (BN): 5
+Injured Reserve (IR): 2
+
+Passing Yards: 20 yards per point
+Passing Touchdowns: 6
+Receptions: 1.0
+        """
+        info = parse_settings_text(sample)
+        self.assertEqual(info["name"], "Superflex Showdown")
+        self.assertEqual(info["numTeams"], 10)
+        self.assertEqual(info["draftType"], "auction")
+        self.assertEqual(info["scoringType"], "ppr")
+
+        roster = info["rosterSlots"]
+        self.assertEqual(roster["QB"], 1)
+        self.assertEqual(roster["RB"], 2)
+        self.assertEqual(roster["WR"], 3)
+        self.assertEqual(roster["TE"], 1)
+        self.assertEqual(roster["SUPERFLEX"], 1)
+        self.assertEqual(roster["DST"], 1)
+        self.assertEqual(roster["BN"], 5)
+        self.assertEqual(roster["IR"], 2)
+
+        sc = info["scoring"]
+        self.assertEqual(sc["pass_yd"], 0.05)
+        self.assertEqual(sc["pass_td"], 6.0)
+        self.assertEqual(sc["rec"], 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
+

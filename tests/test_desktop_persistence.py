@@ -81,13 +81,16 @@ class DesktopPersistenceTests(unittest.TestCase):
             self.assertTrue(api.open_external_url("https://github.com/keganvosteen/draft-assistant/releases/tag/v0.6.0"))
             mock_open.assert_called_with("https://github.com/keganvosteen/draft-assistant/releases/tag/v0.6.0")
 
-            # Valid Yahoo OAuth
+            # Valid Yahoo OAuth & Developer URLs
             self.assertTrue(api.open_external_url("https://api.login.yahoo.com/oauth2/request_auth?client_id=abc"))
             self.assertTrue(api.open_external_url("https://login.yahoo.com/oauth2/request_auth?client_id=abc"))
+            self.assertTrue(api.open_external_url("https://sports.yahoo.com/developer/access/"))
+            self.assertTrue(api.open_external_url("https://developer.yahoo.com/apps/"))
 
             # Disallowed URLs
             self.assertFalse(api.open_external_url("http://api.login.yahoo.com/oauth2/request_auth"))
             self.assertFalse(api.open_external_url("https://evil.com/oauth2/request_auth"))
             self.assertFalse(api.open_external_url("https://login.yahoo.com/account/security"))
             self.assertFalse(api.open_external_url("https://github.com/malicious/repo"))
+
 

@@ -507,6 +507,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_yahoo_import()
         elif self.path == "/api/yahoo/draft":
             self._handle_yahoo_draft()
+        elif self.path == "/api/yahoo/parse-settings":
+            self._handle_yahoo_parse_settings()
         elif self.path == "/api/save-draft":
             self._handle_save_draft()
         elif self.path == "/api/load-draft":
@@ -1034,6 +1036,19 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
 
     def _send_platform_error(self, exc: Exception, platform: str = ""):
         """Make provider failures actionable without echoing authentication data."""
+        err_msg = str(exc)
+        if "additional_authorization_required" in err_msg:
+            self._send_json({
+                "error": (
+                    "Yahoo Fantasy Sports API access is not enabled for your Developer App ID yet. "
+                    "Yahoo requires submitting the access request form at https://sports.yahoo.com/developer/access/ "
+                    "to approve your Client ID for Fantasy Sports access."
+                ),
+                "code": "yahoo_additional_authorization_required",
+                "needsApproval": True,
+                "approvalUrl": "https://sports.yahoo.com/developer/access/",
+            }, 403)
+            return
         if isinstance(exc, HTTPError):
             exc.close()
             if platform == "espn" and exc.code in {401, 403}:
@@ -1341,7 +1356,24 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                                         data.get("redirect_uri", yahoo.DEFAULT_REDIRECT))
             data["token"] = token
             self._yahoo_save(data)
-            self._send_json({"ok": True, "leagues": yahoo.list_leagues(token["access_token"])})
+            try:
+                leagues = yahoo.list_leagues(token["access_token"])
+            except Exception as exc:
+                if "additional_authorization_required" in str(exc):
+                    self._send_json({
+                        "error": (
+                            "Yahoo Fantasy Sports API access is not enabled for your Developer App ID yet. "
+                            "Yahoo requires submitting the access request form at https://sports.yahoo.com/developer/access/ "
+                            "to approve your Client ID for Fantasy Sports access. "
+                            "In the meantime, you can paste your Yahoo league settings text below to import your league immediately."
+                        ),
+                        "code": "yahoo_additional_authorization_required",
+                        "needsApproval": True,
+                        "approvalUrl": "https://sports.yahoo.com/developer/access/",
+                    }, 403)
+                    return
+                raise
+            self._send_json({"ok": True, "leagues": leagues})
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
@@ -1358,8 +1390,39 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             if not (data.get("token") or {}).get("access_token"):
                 self._send_json({"error": "Authorize with Yahoo first"}, 400)
                 return
-            info = yahoo.fetch_league(self._yahoo_access_token(), league_key)
+            try:
+                info = yahoo.fetch_league(self._yahoo_access_token(), league_key)
+            except Exception as exc:
+                if "additional_authorization_required" in str(exc):
+                    self._send_json({
+                        "error": (
+                            "Yahoo Fantasy Sports API access is not enabled for your Developer App ID yet. "
+                            "Yahoo requires submitting the access request form at https://sports.yahoo.com/developer/access/ "
+                            "to approve your Client ID."
+                        ),
+                        "code": "yahoo_additional_authorization_required",
+                        "needsApproval": True,
+                        "approvalUrl": "https://sports.yahoo.com/developer/access/",
+                    }, 403)
+                    return
+                raise
             self._send_json(_import_scoring_type(info))
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    def _handle_yahoo_parse_settings(self):
+        """Parse copied/pasted text from a Yahoo Fantasy league settings page."""
+        try:
+            from ..importers import yahoo
+            body = self._read_body()
+            text = str(body.get("text") or "").strip()
+            if not text:
+                self._send_json({"error": "Paste your Yahoo league settings text first"}, 400)
+                return
+            parsed = yahoo.parse_settings_text(text)
+            self._send_json(_import_scoring_type(parsed))
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 

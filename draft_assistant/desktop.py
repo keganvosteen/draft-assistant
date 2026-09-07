@@ -99,11 +99,12 @@ class DesktopAPI:
             parsed.hostname == "github.com"
             and parsed.path.startswith("/keganvosteen/draft-assistant/releases/")
         )
-        is_yahoo_auth = (
-            parsed.hostname in ("api.login.yahoo.com", "login.yahoo.com")
-            and parsed.path.startswith("/oauth2/")
+        is_yahoo = (
+            (parsed.hostname in ("api.login.yahoo.com", "login.yahoo.com") and parsed.path.startswith("/oauth2/"))
+            or (parsed.hostname == "sports.yahoo.com" and parsed.path.startswith("/developer"))
+            or (parsed.hostname == "developer.yahoo.com")
         )
-        if not (is_release or is_yahoo_auth):
+        if not (is_release or is_yahoo):
             return False
         return bool(webbrowser.open(url))
 
