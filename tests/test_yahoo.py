@@ -479,11 +479,6 @@ class TestApplyYahooAdp(unittest.TestCase):
         self.assertEqual(board[0].metadata["public_adp"], 45.0)  # still original
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-
 class TestSettingsTextRosterParsing(unittest.TestCase):
     """The paste fallback is what a user falls back on when Yahoo has not
     approved their app for API access, so its roster must be exact — a wrong
@@ -543,3 +538,32 @@ class TestSettingsTextRosterParsing(unittest.TestCase):
         self.assertEqual(roster["WR"], 2)
         self.assertEqual(roster["FLEX"], 1)
         self.assertEqual(roster["DST"], 1)
+
+    def test_table_copy_puts_each_cell_on_its_own_line(self):
+        """Copying Yahoo's settings table out of a browser yields the label and
+        its value on separate lines. That must parse identically to the inline
+        layout — it is the shape most users actually paste."""
+        from draft_assistant.importers.yahoo import parse_settings_text
+        info = parse_settings_text("\n".join([
+            "Lega di Paca",
+            "League Settings",
+            "League Name",
+            "Lega di Paca",
+            "Max Teams",
+            "12",
+            "Roster Positions",
+            "QB, WR, WR, RB, RB, TE, W/R/T, K, DEF, BN, BN, BN, BN, BN, BN",
+            "Receptions",
+            "0.5",
+        ]))
+        self.assertEqual(info["name"], "Lega di Paca")
+        self.assertEqual(info["numTeams"], 12)
+        self.assertEqual(info["scoringType"], "half-ppr")
+        roster = info["rosterSlots"]
+        self.assertEqual((roster["QB"], roster["RB"], roster["WR"]), (1, 2, 2))
+        self.assertEqual(roster["FLEX"], 1)
+        self.assertEqual(roster["BN"], 6)
+
+
+if __name__ == "__main__":
+    unittest.main()
