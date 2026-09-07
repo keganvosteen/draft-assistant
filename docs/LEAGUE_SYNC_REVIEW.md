@@ -54,8 +54,9 @@ and [Sleeper's documented draft endpoints](https://docs.sleeper.com/).
 Update preservation was subsequently implemented for 0.6.0: a versioned disk
 workspace, atomic saves, cross-process revision checks, retained backups,
 portable export/restore, and persistent desktop browser storage. A one-time
-rescue script migrates the open older native app before its private session is
-closed. See [the upgrade guide](UPGRADING.md).
+rescue script supports existing sessions that can reload. Standard older native
+windows disable reload, so their settings and draft state require recovery
+while the old window stays open. See [the upgrade guide](UPGRADING.md).
 
 Browser verification migrated the existing two-league test profile to disk,
 opened a separate app address with the same two leagues and 220 picks, then

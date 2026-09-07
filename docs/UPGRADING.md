@@ -44,17 +44,43 @@ launch. Keeping the installer data directory alone therefore did not preserve
 that UI state. **Do not close an old window containing the only saved league
 until its backup is verified.**
 
-An open older native app can be rescued locally with
-`scripts/backup_running_app.py`. It temporarily adds a backup script to the
-installed page, then the user refreshes the **same existing window** with Ctrl+R.
+The standard older native app disables browser shortcuts, context menus, and
+developer tools. **Ctrl+R and F5 do not reload it.** It also has no in-app reload
+button, so the refresh-based rescue script below cannot rescue that window.
+Restarting with debug enabled creates a different private session and does not
+recover the old one.
+
+For that native app, keep the old window open while preserving its setup:
+
+1. Copy the existing data directory to a backup location.
+2. Record each league's settings from **Edit league**: Basics, Roster & scoring,
+   Draft order, and the provider league ID under Import. Record any keeper and
+   engine settings as well. Provider import can recreate published settings,
+   but manual changes and the selected team still need to be preserved.
+3. If picks were recorded, use **Draft room → More → Save snapshot to disk**.
+   Copy the resulting `draft_state.json` before saving another league: there is
+   only one snapshot slot. This snapshot contains pick order and your own player
+   IDs, not the league settings or complete team ownership. Record ownership
+   separately where it cannot be reconstructed from a standard draft order.
+4. Reconstruct and verify the leagues and ownership in a separate updated app
+   before closing the old session. Export all leagues from the updated app once
+   verified. A default backend configuration or an empty snapshot alone does
+   not prove the open window's league was recovered.
+
+### Refresh-based rescue for browser or already-debug-enabled sessions
+
+`scripts/backup_running_app.py` works only when the **existing session already
+supports page reload**. It temporarily adds a backup script to the served page,
+then the user reloads that same window using its available reload control.
 It reads only the app's league, pick, and engine-preference keys. A temporary
 localhost receiver saves a verified JSON file under `backups/legacy-recovery/`
 and creates `workspace-state.json` only when none exists. It never replaces an
 existing workspace. The installed page is restored after success, timeout, or
 interruption. No data leaves the computer.
 
-Run from the source checkout, substituting the actual installed page and the
-running app's exact localhost port:
+Run from the source checkout, substituting the actual served page and the
+running app's exact localhost port. Do not run this for a standard older native
+window with reload disabled:
 
 ```powershell
 python scripts/backup_running_app.py --index "$env:LOCALAPPDATA\Programs\Draft Assistant\_internal\draft_assistant\web\static\index.html" --origin http://127.0.0.1:PORT --data-dir "$env:LOCALAPPDATA\DraftAssistant"
