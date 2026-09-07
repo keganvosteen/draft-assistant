@@ -94,6 +94,28 @@ YAHOO_POS = {
 }
 
 
+# Page headings and field labels that are never a league's actual name.
+_NAME_NON_VALUES = ("settings", "name", "http", "draft", "scoring", "roster", "league")
+
+# Roster labels for the line-per-position settings layout, most specific first:
+# parse_settings_text takes the first label that matches a line, so "W/R/T" must
+# be offered as FLEX before "W/R" can claim it as RBWR.
+_LINE_POSITION_LABELS = (
+    (r"Q/W/R/T|Superflex|OP", "SUPERFLEX"),
+    (r"W/R/T|Flex", "FLEX"),
+    (r"W/T", "WRTE"),
+    (r"W/R|R/W", "RBWR"),
+    (r"Quarterbacks?|QB", "QB"),
+    (r"Running Backs?|RB", "RB"),
+    (r"Wide Receivers?|WR", "WR"),
+    (r"Tight Ends?|TE", "TE"),
+    (r"Kickers?|K", "K"),
+    (r"Defense/Special Teams|Defense|D/ST|DST|DEF", "DST"),
+    (r"Bench|BN", "BN"),
+    (r"Injured Reserve|IR", "IR"),
+)
+
+
 def extract_code(code_or_url: str) -> str:
     """Extract authorization code from either a raw code or a full redirect URL.
 
@@ -632,17 +654,28 @@ def parse_settings_text(text: str) -> Dict[str, object]:
     if not raw:
         raise ValueError("Please paste your Yahoo league settings text")
 
-    # 1. League name
+    # 1. League name. Try candidates in priority order and keep the first
+    # plausible one — a single regex stopped at the page heading "League
+    # Settings", rejected "Settings" as a name, and then gave up rather than
+    # falling through to the real "League Name" row below it.
+    def _plausible_name(value: object) -> Optional[str]:
+        candidate = str(value or "").strip().strip(":|").strip()
+        if not candidate or len(candidate) > 60:
+            return None
+        if candidate.lower().startswith(_NAME_NON_VALUES):
+            return None
+        return candidate
+
     name = "Yahoo League"
-    name_m = re.search(r"(?:League Name|League)\s*[:\t]?\s*([^\n\r]+)", raw, re.I)
-    if name_m:
-        val = name_m.group(1).strip()
-        if val and not val.lower().startswith("settings"):
-            name = val
-    else:
-        first_line = raw.splitlines()[0].strip()
-        if first_line and len(first_line) < 50 and not any(k in first_line.lower() for k in ("http", "settings", "draft")):
-            name = first_line
+    for value in (
+        *re.findall(r"League\s+Name\s*[:\t]?\s*([^\n\r]+)", raw, re.I),
+        *re.findall(r"^\s*League\s*[:\t]\s*([^\n\r]+)", raw, re.I | re.M),
+        raw.splitlines()[0],
+    ):
+        plausible = _plausible_name(value)
+        if plausible:
+            name = plausible
+            break
 
     # 2. Number of teams
     teams_m = re.search(r"(?:Max Teams|Teams|Number of Teams)\s*[:\t]?\s*(\d+)", raw, re.I)
@@ -664,24 +697,24 @@ def parse_settings_text(text: str) -> Dict[str, object]:
             if key:
                 roster[key] = roster.get(key, 0) + 1
     else:
-        line_patterns = [
-            (r"(?:Quarterback|QB)\b.*?[:\t]?\s*(\d+)", "QB"),
-            (r"(?:Running Back|RB)\b.*?[:\t]?\s*(\d+)", "RB"),
-            (r"(?:Wide Receiver|WR)\b.*?[:\t]?\s*(\d+)", "WR"),
-            (r"(?:Tight End|TE)\b.*?[:\t]?\s*(\d+)", "TE"),
-            (r"(?:W/R/T|Flex|W/R/T/Q)\b.*?[:\t]?\s*(\d+)", "FLEX"),
-            (r"(?:W/T)\b.*?[:\t]?\s*(\d+)", "WRTE"),
-            (r"(?:R/W|W/R)\b.*?[:\t]?\s*(\d+)", "RBWR"),
-            (r"(?:Superflex|Q/W/R/T)\b.*?[:\t]?\s*(\d+)", "SUPERFLEX"),
-            (r"(?:Kicker|K)\b.*?[:\t]?\s*(\d+)", "K"),
-            (r"(?:Defense/Special Teams|Defense|DEF|DST)\b.*?[:\t]?\s*(\d+)", "DST"),
-            (r"(?:Bench|BN)\b.*?[:\t]?\s*(\d+)", "BN"),
-            (r"(?:Injured Reserve|IR)\b.*?[:\t]?\s*(\d+)", "IR"),
-        ]
-        for pat, key in line_patterns:
-            m = re.search(pat, raw, re.I)
-            if m:
-                roster[key] = int(m.group(1))
+        # Line-per-position layout. The label must start the line and the count
+        # must end it: searching the whole blob let any word ending in the
+        # abbreviation swallow an unrelated number, so a settings page with
+        # "Trade End Date  Week 11" scored TE=11 (from "Da-te") and "Playoffs
+        # Week 15" scored K=15 (from "Wee-k"). The first matching label wins so
+        # "W/R/T" is claimed as FLEX before the narrower "W/R" can also read it
+        # as a phantom RBWR slot.
+        for line in raw.splitlines():
+            for label, key in _LINE_POSITION_LABELS:
+                # The optional parenthetical carries Yahoo's abbreviation, as in
+                # "Wide Receiver (WR): 3".
+                match = re.match(
+                    rf"\s*(?:{label})\s*(?:\([^)]*\))?\s*[:\t]?\s*(\d*)\s*$", line, re.I)
+                if not match:
+                    continue
+                # A bare label line is the one-slot-per-line rendering.
+                roster[key] = roster.get(key, 0) + (int(match.group(1)) if match.group(1) else 1)
+                break
 
     if not any(roster.values()):
         roster = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DST": 1, "BN": 6}
