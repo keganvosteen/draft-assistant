@@ -41,6 +41,36 @@ The web UI starts a loopback-only HTTP server (default `http://127.0.0.1:8080`) 
 
 The desktop UI opens a Tkinter window with a draft board, roster panel, and a league switcher.
 
+### League imports and draft sync
+
+- **ESPN:** Add league → Import accepts the league ID or ESPN URL and season.
+  For a private league (HTTP 401/403), expand **Private ESPN league access** and
+  enter the `espn_s2` and `SWID` cookies from your signed-in ESPN browser session
+  (Developer tools → Application/Storage → Cookies). These are session credentials:
+  enter them only in your local app, not an issue or chat. They remain in page memory,
+  are sent only to the local server and ESPN, and must be reentered after a reload.
+  Adding another league does not overwrite an existing one or inherit its credentials.
+- **Draft order:** League settings → Draft order → **Refresh settings** loads the
+  published ESPN or Sleeper order. Mark your team with **Me**. Provider team IDs
+  preserve your selection and existing pick ownership when seats or names change.
+  An unpublished order is labeled unconfirmed; it is never inferred from standings.
+- **Sleeper live picks:** In the draft room, choose **Go live**. The board follows
+  the real draft every five seconds, retries connection failures, and stops on
+  completion. **Stop live** returns to manual entry. Incomplete histories do not
+  replace the board; unmatched players keep their pick positions.
+- **ESPN draft results:** More → **Sync completed ESPN draft** imports published
+  pick numbers and team ownership after completion. ESPN's accessible league API
+  does not reliably publish live picks; use **Paste draft history** or manual picks
+  during the draft. This app does not claim ESPN live tracking.
+- **Roster sync:** ESPN, Sleeper, and Yahoo can load current ownership for the
+  waiver wire. A roster snapshot is labeled separately and cannot drive a draft
+  clock. Standard snake drafts are supported; auction, linear, and third-round
+  reversal drafts cannot use the automatic snake-draft recommendation workflow.
+
+Provider availability is outside the app's control. The Sleeper API is documented
+at [docs.sleeper.com](https://docs.sleeper.com/). ESPN integration uses its
+undocumented league API; its live draft room uses a separate feed.
+
 ---
 
 ## Installable Builds
@@ -335,3 +365,20 @@ The test suite covers scoring, VOR/replacement levels, typed flex, bye-week pena
 - The web API binds to loopback, rejects cross-origin and non-JSON mutation requests, bounds expensive inputs, and limits concurrent data jobs.
 - For Pro Football Reference and sites that block scraping, prefer the `collect-all` + `pull-free-data` paths which use public API endpoints and GitHub-hosted datasets.
 - Project-original code is all-rights-reserved; vendored component terms are listed in `THIRD_PARTY_NOTICES.md`.
+## Keeping your leagues when updating
+
+Version 0.6.0 saves all leagues, scoring, draft order, picks, roster ownership,
+keeper metadata, and engine preferences in `workspace-state.json`. Installed
+Windows builds keep it in `%LOCALAPPDATA%\DraftAssistant`, separate from the
+program files. Installing a newer version over the existing app preserves that
+folder. No uninstall is required.
+
+Use **Backups → Export all leagues** for a portable JSON copy. Each save also
+keeps earlier versions in `backups/`: the initial migration and ten recent
+versions. Restore a portable backup from the same Backups panel. ESPN session
+cookies are excluded and must be re-entered after restarting.
+
+**Updating from 0.5.0 or earlier:** browser leagues migrate automatically when
+the new page can still read the old browser storage. The old native desktop
+window used private storage, so keep that window open until a full league backup
+is verified. See [the upgrade guide](docs/UPGRADING.md) for the one-time rescue.

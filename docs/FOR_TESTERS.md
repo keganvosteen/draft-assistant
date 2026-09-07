@@ -9,7 +9,7 @@ You do **not** need Python or anything else installed.
 
 ## Windows
 
-1. Download **`DraftAssistant-Setup-0.4.0.exe`**.
+1. Download the latest **`DraftAssistant-Setup-<version>.exe`**.
 2. Run it. Windows will show a blue **"Windows protected your PC"** box —
    that's because the app isn't signed with a (fairly expensive) certificate,
    not because anything is wrong with it.
@@ -24,7 +24,7 @@ To remove it: Settings → Apps → Draft Assistant → Uninstall.
 
 ## Mac
 
-1. Download **`DraftAssistant-0.4.0-universal2.dmg`**. The one file works on
+1. Download **`DraftAssistant-<version>-universal2.dmg`**. The one file works on
    both Apple Silicon (M1/M2/M3/M4) and older Intel Macs — you don't need to
    know which you have.
 
@@ -51,12 +51,17 @@ The app opens in its own window. Everything is local — the recommendation
 engine runs on your machine, so it works with no internet connection (you only
 need one to import a league from Sleeper, ESPN or Yahoo).
 
-Your leagues, settings and draft progress are saved automatically to:
+Starting with 0.6.0, your leagues, settings and draft progress are saved automatically to:
 
 - **Windows:** `%LOCALAPPDATA%\DraftAssistant`
 - **Mac:** `~/Library/Application Support/DraftAssistant`
 
 Uninstalling leaves that folder alone, so reinstalling won't lose a draft.
+
+**If updating from 0.5.0 or earlier, keep the old native window open until your
+league backup is verified.** Those versions held multi-league UI data in private
+browser storage. Follow [Updating without losing leagues](UPGRADING.md) for the
+one-time migration and future updates.
 
 Starting with v0.3.0, a banner appears when a newer stable version is available.
 It opens the correct GitHub download for your computer; the app never installs

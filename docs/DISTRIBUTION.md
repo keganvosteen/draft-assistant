@@ -26,6 +26,12 @@ On first run the app copies the bundled `data/projections.json` and
 `league.config.json` into that directory. Upgrades never overwrite them, so a
 reinstall keeps a draft in progress.
 
+Version 0.6.0 also persists the full multi-league UI in `workspace-state.json`,
+with atomic writes and revisioned backups. The desktop browser profile lives
+under `webview/` in the same mutable directory. Never change the installer AppId,
+move this data root, or add it to installer deletion rules during an upgrade.
+Older native versions need the [one-time migration](UPGRADING.md) before closing.
+
 Set `DRAFT_ASSISTANT_HOME` to point any build at a different directory — that
 is how the smoke tests get a clean slate.
 

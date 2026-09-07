@@ -5,9 +5,6 @@ from .models import FLEX_TYPES, Player
 from .scoring import fantasy_points
 
 
-FLEX_ELIGIBLE = set(FLEX_TYPES["FLEX"])
-
-
 def compute_points(
     players: List[Player],
     scoring: Dict[str, float],

@@ -10,7 +10,7 @@ const PLATFORMS       = ['ESPN','Yahoo','Sleeper','NFL.com','Other'];
 
 function makeLeague(o = {}) {
   return {
-    id: 'l' + Date.now(),
+    id: 'l' + crypto.randomUUID(),
     name: 'My League',
     platform: 'ESPN',
     numTeams: 10,
@@ -70,10 +70,8 @@ function migratePickIds(picksByLeague, players) {
 // ─── DRAFT ORDER EDITOR ──────────────────────────────────────────────────────
 // Draft-order + "which team is mine" editor. teamNames is stored in DRAFT-SLOT
 // order (index i == slot i+1 == snake seat), and draftPosition points at the
-// owner's slot. Imports (ESPN/Yahoo) arrive in the platform's own order, which
-// is NOT draft order — so the owner reorders here and marks their team by name
-// instead of guessing a raw slot number.
-function DraftOrderEditor({ numTeams, teamNames, draftPosition, onChange }) {
+// owner's slot. Provider IDs move with names so a refresh preserves ownership.
+function DraftOrderEditor({ numTeams, teamNames, teamIds, draftPosition, draftOrderReady, onChange }) {
   const names = Array.from({ length: numTeams }, (_, i) => (teamNames || [])[i] || '');
   const [pasteOpen, setPasteOpen] = React.useState(false);
   const [dragFrom, setDragFrom] = React.useState(null);
@@ -92,10 +90,16 @@ function DraftOrderEditor({ numTeams, teamNames, draftPosition, onChange }) {
     const dp = draftPosition >= 1 && draftPosition <= numTeams
       ? order.indexOf(draftPosition - 1) + 1
       : draftPosition;
-    onChange({ teamNames: order.map(idx => names[idx]), draftPosition: dp });
+    onChange({ teamNames: order.map(idx => names[idx]), teamIds: order.map(idx => (teamIds || [])[idx]), draftPosition: dp });
   };
-  const bulkPaste = text =>
-    onChange({ teamNames: text.split('\n').map(s => s.trim()).slice(0, numTeams) });
+  const bulkPaste = text => {
+    const nextNames = text.split('\n').map(s => s.trim()).slice(0, numTeams);
+    const next = {teamNames:nextNames, teamIds:nextNames.map(name =>
+      name && names.filter(value => value === name).length === 1 ? (teamIds || [])[names.indexOf(name)] : null)};
+    next.draftPosition = remappedTeamSlot({teamNames:names, teamIds}, next, draftPosition);
+    next.teamSelectionRequired = !next.draftPosition;
+    onChange(next);
+  };
 
   const arrow = disabled => ({
     width:26, height:26, textAlign:'center', padding:0, flexShrink:0,
@@ -116,8 +120,9 @@ function DraftOrderEditor({ numTeams, teamNames, draftPosition, onChange }) {
 
       <Note style={{marginBottom:10}}>
         Order the rows to match your draft's seat 1…{numTeams}, then mark your own team with{' '}
-        <b style={{color:T.text}}>Me</b>. ESPN and Yahoo imports arrive in platform order, not draft
-        order — drag them into place. Sleeper imports already know the seating.
+        <b style={{color:T.text}}>Me</b>. {draftOrderReady
+          ? 'The provider has published a draft order. Refresh it if your commissioner changes the seats.'
+          : 'The provider has not confirmed these seats. Refresh once the order is set, or arrange the rows yourself.'}
       </Note>
 
       <div style={{display:'flex', flexDirection:'column', gap:6}}>
@@ -164,7 +169,7 @@ function DraftOrderEditor({ numTeams, teamNames, draftPosition, onChange }) {
                 disabled={i === 0} style={arrow(i === 0)}>↑</button>
               <button type="button" aria-label={`Move slot ${i + 1} down`} onClick={() => move(i, i + 1)}
                 disabled={i === numTeams - 1} style={arrow(i === numTeams - 1)}>↓</button>
-              <button type="button" aria-pressed={isMe} onClick={() => onChange({ draftPosition: i + 1 })} style={{
+              <button type="button" aria-pressed={isMe} onClick={() => onChange({ draftPosition: i + 1, teamSelectionRequired:false })} style={{
                 padding:'5px 11px', borderRadius:T.rxs, cursor:'pointer',
                 fontSize:12, fontWeight:700, whiteSpace:'nowrap', flexShrink:0,
                 border:`1.5px solid ${isMe ? T.primary : T.border}`,
@@ -189,13 +194,45 @@ function DraftOrderEditor({ numTeams, teamNames, draftPosition, onChange }) {
 }
 
 // ─── LEAGUE IMPORT PANELS ────────────────────────────────────────────────────
+function EspnAccessFields({ leagueId }) {
+  const [access, setAccess] = React.useState(() => getEspnAccess(leagueId));
+  const change = (key, value) => {
+    const next = { ...access, [key]:value };
+    setAccess(next); setEspnAccess(leagueId, next);
+  };
+  return (
+    <details style={{marginTop:12}}>
+      <summary style={{cursor:'pointer', color:T.primary, fontSize:13, fontWeight:600}}>Private ESPN league access (optional)</summary>
+      <Note style={{margin:'10px 0'}}>For a private league or a 401 error, copy these cookies from your signed-in ESPN browser session (Developer tools → Application or Storage → Cookies → espn.com). They stay in memory until this app page closes or reloads.</Note>
+      <Field label="espn_s2 cookie"><Input type="password" autoComplete="off" value={access.espnS2 || ''}
+        aria-label="ESPN espn_s2 cookie" onChange={e => change('espnS2', e.target.value)} /></Field>
+      <Field label="SWID cookie"><Input type="password" autoComplete="off" value={access.swid || ''}
+        aria-label="ESPN SWID cookie" onChange={e => change('swid', e.target.value)} /></Field>
+      <Btn variant="subtle" size="sm" onClick={() => { setAccess({}); setEspnAccess(leagueId, null); }}>Clear session credentials</Btn>
+    </details>
+  );
+}
+
+function importedLeague(form, data, platform) {
+  const sameLeague = linkedProvider(form) === platform && (
+    platform === 'ESPN' ? String(form.espnLeagueId) === String(data.espnLeagueId)
+      : platform === 'Sleeper' ? String(form.sleeperLeagueId) === String(data.sleeperLeagueId)
+        : form.yahooLeagueKey === data.yahooLeagueKey);
+  const base = sameLeague ? form : { ...form, teamIds:[], teamNames:[], draftPosition:null };
+  const next = mergeLeagueSettings(base, { ...data, platform });
+  ['espnLeagueId', 'sleeperLeagueId', 'sleeperDraftId', 'yahooLeagueKey'].forEach(key => {
+    if (!(key in data)) delete next[key];
+  });
+  return next;
+}
+
 // One platform at a time. All three used to be stacked open at once, which made
 // the setup modal a wall of credentials for services you weren't using.
 function ImportPanel({ form, setForm }) {
   const [provider, setProvider] = React.useState(
     form.sleeperLeagueId ? 'sleeper' : form.yahooLeagueKey ? 'yahoo' : 'espn');
 
-  // ── ESPN (public leagues only — nothing to authorize) ──
+  // ── ESPN: public leagues or optional session cookies for private leagues ──
   const [espnId, setEspnId] = React.useState(form.espnLeagueId || '');
   const [importing, setImporting] = React.useState(false);
   const [importMsg, setImportMsg] = React.useState(null);
@@ -205,26 +242,16 @@ function ImportPanel({ form, setForm }) {
     setImporting(true); setImportMsg(null);
     fetch('/api/import-espn', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leagueId: id }),
+      body: JSON.stringify({ leagueId: id, season: form.season || new Date().getFullYear(), ...getEspnAccess(form.id) }),
     })
       .then(r => r.json())
       .then(d => {
         if (d.error) { setImportMsg({ ok: false, text: d.error }); return; }
-        setForm(f => ({
-          ...f,
-          name: d.name || f.name,
-          platform: 'ESPN',
-          numTeams: d.numTeams || f.numTeams,
-          scoringType: d.scoringType || f.scoringType,
-          importedScoring: d.scoring || null,
-          rosterSlots: { ...DEFAULT_SLOTS, ...(d.rosterSlots || {}) },
-          teamNames: d.teamNames || [],
-          espnLeagueId: d.espnLeagueId || id,
-        }));
+        setForm(f => importedLeague(f, { ...d, espnLeagueId:d.espnLeagueId || id }, 'ESPN'));
         setImportMsg({ ok: true,
           text: `Imported “${d.name}” — ${d.numTeams} teams, ${(d.teamNames || []).length} names, ${d.scoringType}` });
       })
-      .catch(() => setImportMsg({ ok: false, text: 'Import failed — is the league public?' }))
+      .catch(() => setImportMsg({ ok: false, text: 'Import failed. Check the connection and try again.' }))
       .finally(() => setImporting(false));
   };
 
@@ -256,21 +283,7 @@ function ImportPanel({ form, setForm }) {
     const id = (sl.leagueId || '').trim();
     if (!id) return;
     slPost('/api/sleeper/import', { leagueId: id, username: sl.username.trim() || undefined }, d => {
-      setForm(f => ({
-        ...f,
-        name: d.name || f.name,
-        platform: 'Sleeper',
-        numTeams: d.numTeams || f.numTeams,
-        scoringType: d.scoringType || f.scoringType,
-        importedScoring: d.scoring || null,
-        rosterSlots: { ...DEFAULT_SLOTS, ...(d.rosterSlots || {}) },
-        teamNames: d.teamNames || [],
-        sleeperLeagueId: d.sleeperLeagueId || id,
-        sleeperDraftId: d.sleeperDraftId || null,
-        draftType: d.draftType || f.draftType,
-        // Sleeper knows the real seating, so the draft slot comes back too.
-        draftPosition: d.draftPosition || f.draftPosition,
-      }));
+      setForm(f => importedLeague(f, { ...d, sleeperLeagueId:d.sleeperLeagueId || id }, 'Sleeper'));
       const seat = d.draftPosition ? `, your seat #${d.draftPosition}` : '';
       slSet({ leagueId: d.sleeperLeagueId || id, msg: { ok: true,
         text: `Imported “${d.name}” — ${d.numTeams} teams${seat}, ${d.scoringType}${d.sleeperDraftId ? ' · draft linked' : ''}` } });
@@ -321,12 +334,7 @@ function ImportPanel({ form, setForm }) {
   const yahooImport = () => {
     if (!yh.leagueKey) return;
     yhPost('/api/yahoo/import', { leagueKey: yh.leagueKey }, d => {
-      setForm(f => ({
-        ...f, name: d.name || f.name, platform: 'Yahoo', numTeams: d.numTeams || f.numTeams,
-        scoringType: d.scoringType || f.scoringType, rosterSlots: { ...DEFAULT_SLOTS, ...(d.rosterSlots || {}) },
-        importedScoring: d.scoring || null,
-        teamNames: d.teamNames || [], yahooLeagueKey: d.yahooLeagueKey,
-      }));
+      setForm(f => importedLeague(f, d, 'Yahoo'));
       yhSet({ msg: { ok: true, text: `Imported “${d.name}” — ${d.numTeams} teams, ${(d.teamNames || []).length} names, ${d.scoringType}` } });
     });
   };
@@ -344,7 +352,7 @@ function ImportPanel({ form, setForm }) {
 
       <Field label="Where is your league?">
         <SegmentedControl name="provider" value={provider} onChange={setProvider} options={[
-          { value: 'espn',    label: 'ESPN',    hint: 'Public leagues' },
+          { value: 'espn',    label: 'ESPN',    hint: 'Public or private' },
           { value: 'sleeper', label: 'Sleeper', hint: 'No login' },
           { value: 'yahoo',   label: 'Yahoo',   hint: 'OAuth' },
         ]} />
@@ -352,6 +360,9 @@ function ImportPanel({ form, setForm }) {
 
       {provider === 'espn' && (
         <div>
+          <Field label="Season"><Input type="number" min={2018} max={new Date().getFullYear() + 1}
+            aria-label="ESPN season" value={form.season || new Date().getFullYear()}
+            onChange={e => setForm(f => ({...f, season:Number(e.target.value)}))} style={{width:130}} /></Field>
           <div style={{display:'flex', gap:8, alignItems:'center'}}>
             <Input value={espnId} onChange={e=>setEspnId(e.target.value)}
               aria-label="ESPN league ID"
@@ -362,9 +373,9 @@ function ImportPanel({ form, setForm }) {
           </div>
           {status(importMsg)}
           <div style={{marginTop:8, fontSize:11.5, color:T.muted, lineHeight:1.5}}>
-            Find the ID in your ESPN league URL: <code>…/leagues/<b>THIS</b></code>. Private leagues
-            can't be read without credentials — set those up by hand on the other tabs.
+            Find the ID in your ESPN league URL: <code>…/leagues/<b>THIS</b></code> or <code>leagueId=<b>THIS</b></code>. A 401 means ESPN denied access; private leagues need both cookies below.
           </div>
+          <EspnAccessFields leagueId={form.id} />
         </div>
       )}
 
@@ -471,7 +482,28 @@ function LeagueSetupModal({ league, onSave, onClose }) {
     ? {...league, rosterSlots:{...league.rosterSlots}, customScoring:{...DEFAULT_CUSTOM, ...league.customScoring}}
     : makeLeague());
   const [tab, setTab] = React.useState(league ? 'basics' : 'import');
-  const set = (k, v) => setForm(f => ({...f, [k]: v}));
+  const [refreshing, setRefreshing] = React.useState(false);
+  const [refreshMessage, setRefreshMessage] = React.useState(null);
+  const set = (k, v) => setForm(f => k === 'numTeams' ? {
+    ...f, numTeams:v, teamNames:(f.teamNames || []).slice(0,v), teamIds:(f.teamIds || []).slice(0,v),
+    draftPosition:f.draftPosition <= v ? f.draftPosition : null,
+    teamSelectionRequired:!f.draftPosition || f.draftPosition > v,
+  } : {...f, [k]:v});
+  const selectTeam = slot => setForm(f => ({...f, draftPosition:slot, teamSelectionRequired:!slot}));
+  const refreshSettings = () => {
+    setRefreshing(true); setRefreshMessage(null);
+    fetch('/api/league-settings', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({league:form, ...getEspnAccess(form.id)}),
+    }).then(r => r.json()).then(data => {
+      if (data.error) throw new Error(data.error);
+      setForm(f => mergeLeagueSettings(f, data));
+      setRefreshMessage({ok:true, text:data.draftOrderReady
+        ? 'League settings and the published draft order refreshed. Confirm your team below.'
+        : 'League settings refreshed. The provider has not published a confirmed draft order yet.'});
+    }).catch(error => setRefreshMessage({ok:false, text:error.message}))
+      .finally(() => setRefreshing(false));
+  };
   const setSlot = (k, v) => setForm(f => ({...f, rosterSlots:{...f.rosterSlots, [k]: parseInt(v)||0}}));
   const setCustom = (k, v) => setForm(f => ({...f, customScoring:{...f.customScoring, [k]: parseFloat(v)||0}}));
 
@@ -502,7 +534,7 @@ function LeagueSetupModal({ league, onSave, onClose }) {
       footer={
         <>
           <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
-          <Btn onClick={() => onSave(form)}>{league ? 'Save changes' : 'Add league'}</Btn>
+          <Btn disabled={refreshing} onClick={() => onSave(form)}>{league ? 'Save changes' : 'Add league'}</Btn>
         </>
       }>
       <div className="da-no-scrollbar" role="tablist" style={{
@@ -520,6 +552,8 @@ function LeagueSetupModal({ league, onSave, onClose }) {
             }}>{t.label}</button>
         ))}
       </div>
+
+      {form.teamSelectionRequired && <Note tone="warn" style={{marginBottom:14}}>Choose your team in Basics or mark Me in Draft order before using draft recommendations.</Note>}
 
       {tab === 'import' && <ImportPanel form={form} setForm={setForm} />}
 
@@ -539,15 +573,15 @@ function LeagueSetupModal({ league, onSave, onClose }) {
             </Field>
             <Field label="My team" hint="draft slot">
               {(form.teamNames || []).some(Boolean) ? (
-                <Select value={form.draftPosition}
-                  onChange={e=>set('draftPosition',parseInt(e.target.value)||1)}
-                  options={Array.from({length: form.numTeams}, (_, i) => {
+                <Select value={form.draftPosition || ''}
+                  onChange={e=>selectTeam(parseInt(e.target.value)||null)}
+                  options={[{value:'', label:'Choose your team'}, ...Array.from({length: form.numTeams}, (_, i) => {
                     const nm = (form.teamNames || [])[i];
                     return { value: i+1, label: nm ? `${i+1} — ${nm}` : `${i+1} — (slot ${i+1})` };
-                  })} />
+                  })]} />
               ) : (
                 <Input type="number" value={form.draftPosition}
-                  onChange={e=>set('draftPosition',parseInt(e.target.value)||1)}
+                  onChange={e=>selectTeam(parseInt(e.target.value)||null)}
                   min={1} max={form.numTeams} />
               )}
             </Field>
@@ -556,7 +590,8 @@ function LeagueSetupModal({ league, onSave, onClose }) {
           <Field label="Draft type">
             <SegmentedControl name="draftType" value={form.draftType || 'snake'}
               onChange={v => set('draftType', v)}
-              options={[{value:'snake', label:'Snake'}, {value:'auction', label:'Auction'}]} />
+              options={[{value:'snake', label:'Snake'}, {value:'auction', label:'Auction'},
+                ...(!['snake','auction'].includes(form.draftType || 'snake') ? [{value:form.draftType, label:form.draftType}] : [])]} />
           </Field>
           {(form.draftType||'snake') === 'auction' && (
             <Field label="Auction budget per team">
@@ -624,11 +659,20 @@ function LeagueSetupModal({ league, onSave, onClose }) {
       )}
 
       {tab === 'order' && (
+        <div>
+        {linkedProvider(form) && <div style={{marginBottom:16}}>
+          <Btn variant="secondary" onClick={refreshSettings} disabled={refreshing}>{refreshing ? 'Refreshing…' : `Refresh settings from ${linkedProvider(form)}`}</Btn>
+          {refreshMessage && <Note tone={refreshMessage.ok ? 'ok' : 'error'} style={{marginTop:10}}>{refreshMessage.text}</Note>}
+          {form.platform === 'ESPN' && <EspnAccessFields leagueId={form.id} />}
+        </div>}
         <DraftOrderEditor
           numTeams={form.numTeams}
           teamNames={form.teamNames}
+          teamIds={form.teamIds}
+          draftOrderReady={form.draftOrderReady}
           draftPosition={form.draftPosition}
           onChange={patch => setForm(f => ({ ...f, ...patch }))} />
+        </div>
       )}
     </Modal>
   );
@@ -949,7 +993,7 @@ function SetupGuide({ playerCount, leagues, picks, onPullData, onAddLeague, onEd
     {
       done: hasNames,
       title: 'Set the draft order',
-      body: 'Drag the teams into seat order and mark your own with “Me”. Sleeper imports arrive already seated; ESPN and Yahoo do not.',
+      body: 'Refresh the published ESPN or Sleeper draft order, then mark your team with “Me”. If the provider has no confirmed order yet, arrange the seats yourself.',
       action: first ? { label: 'Draft order', onClick: () => onEditLeague(first.id) } : null,
     },
     {
@@ -1067,7 +1111,7 @@ function LeagueCard({ league, picks, onOpen, onEdit }) {
 }
 
 function HomeScreen({ leagues, picks, onOpenLeague, onAddLeague, onEditLeague, playerCount,
-                      onRefreshPlayers, updateInfo, onDismissUpdate }) {
+                      onRefreshPlayers, updateInfo, onDismissUpdate, onOpenBackups, saveStatus }) {
   const [showPull, setShowPull] = React.useState(false);
   // First-run setup guide: auto-open until dismissed once, reopenable from the header.
   const [showGuide, setShowGuide] = React.useState(() => {
@@ -1100,6 +1144,7 @@ function HomeScreen({ leagues, picks, onOpenLeague, onAddLeague, onEditLeague, p
           ? <Badge label={`${playerCount} players`} color={playerCount ? 'gray' : 'amber'} />
           : null}>
         <Btn variant="subtle" size="sm" onClick={() => setShowGuide(true)}>Setup guide</Btn>
+        <Btn variant="subtle" size="sm" onClick={onOpenBackups}>Backups</Btn>
         <Btn variant="secondary" size="sm" onClick={() => setShowPull(true)}>Pull data</Btn>
         <Btn onClick={onAddLeague}>Add league</Btn>
       </AppBar>
@@ -1108,7 +1153,8 @@ function HomeScreen({ leagues, picks, onOpenLeague, onAddLeague, onEditLeague, p
         <UpdateBanner update={updateInfo} onDismiss={onDismissUpdate} />
         <h2 style={{fontSize:21, fontWeight:700, color:T.text, margin:'0 0 4px'}}>Your leagues</h2>
         <p style={{fontSize:13.5, color:T.muted, margin:'0 0 24px'}}>
-          Open a league to reach its draft room and waiver wire.
+          Open a league to reach its draft room and waiver wire.{' '}
+          {saveStatus.state === 'saved' && 'Your leagues are saved on this computer.'}
         </p>
 
         {(playerCount || 0) === 0 && leagues.length > 0 && (
@@ -1159,12 +1205,17 @@ function App() {
   const [loadError, setLoadError] = React.useState(null);
   const [updateInfo, setUpdateInfo] = React.useState(null);
 
-  const [leagues, setLeagues] = React.useState(() => {
-    try { return JSON.parse(localStorage.getItem('fda_leagues') || '[]'); } catch { return []; }
-  });
-  const [picks, setPicks] = React.useState(() => {
-    try { return JSON.parse(localStorage.getItem('fda_picks') || '{}'); } catch { return {}; }
-  });
+  const [leagues, setLeagues] = React.useState([]);
+  const [picks, setPicks] = React.useState({});
+  const [preferences, setPreferences] = React.useState({});
+  const [workspaceReady, setWorkspaceReady] = React.useState(false);
+  const [saveStatus, setSaveStatus] = React.useState({state:'loading'});
+  const [showBackups, setShowBackups] = React.useState(false);
+  const [restoreBusy, setRestoreBusy] = React.useState(false);
+  const workspaceGeneration = React.useRef(0);
+  const workspaceRef = React.useRef(null);
+  if (!workspaceRef.current) workspaceRef.current = createWorkspaceClient({onStatus:setSaveStatus});
+  const workspace = workspaceRef.current;
   // { screen: 'home' | 'league' | 'draft' | 'waivers', leagueId }
   const [route, setRoute] = React.useState({ screen: 'home', leagueId: null });
   const [showSetup, setShowSetup] = React.useState(false);
@@ -1184,28 +1235,26 @@ function App() {
   }, []);
 
   React.useEffect(() => {
-    fetch('/api/players')
+    const board = fetch('/api/players')
       .then(r => r.json())
       .then(data => {
         if (data.error) throw new Error(data.error);
-        setPlayers(data);
-        setPicks(prev => migratePickIds(prev, data));
-      })
-      .catch(err => setLoadError(String(err)));
-
-    setLeagues(prev => {
-      if (prev.length > 0) return prev;
-      fetch('/api/config')
-        .then(r => r.json())
-        .then(cfg => {
-          if (cfg && !cfg.error) {
-            const seed = leagueFromBackendConfig(cfg);
-            if (seed) setLeagues([seed]);
-          }
-        })
-        .catch(() => {});
-      return prev;
-    });
+        return data;
+      });
+    Promise.all([board, workspace.load()]).then(async ([data, saved]) => {
+      let initialLeagues = saved.leagues;
+      if (!saved.exists && initialLeagues.length === 0) {
+        const cfg = await fetch('/api/config').then(r => r.json());
+        const seed = cfg && !cfg.error ? leagueFromBackendConfig(cfg) : null;
+        if (seed) initialLeagues = [seed];
+      }
+      setLeagues(initialLeagues);
+      setPicks(migratePickIds(saved.picks, data));
+      setPreferences(saved.preferences);
+      try { localStorage.setItem('fda_tweaks', JSON.stringify(saved.preferences.tweaks || {})); } catch {}
+      setPlayers(data);
+      setWorkspaceReady(true);
+    }).catch(err => setLoadError(err.message || String(err)));
   }, []);
 
   React.useEffect(() => {
@@ -1247,10 +1296,84 @@ function App() {
     }).catch(e => newsFailed(String(e)));
   }, [refreshPlayers]);
 
-  React.useEffect(() => { localStorage.setItem('fda_leagues', JSON.stringify(leagues)); }, [leagues]);
-  React.useEffect(() => { localStorage.setItem('fda_picks',   JSON.stringify(picks));   }, [picks]);
+  React.useEffect(() => {
+    if (workspaceReady) workspace.save({schemaVersion:1, leagues, picks, preferences});
+  }, [workspaceReady, leagues, picks, preferences]);
+
+  React.useEffect(() => {
+    const changed = event => setPreferences(prev => ({...prev, tweaks:event.detail}));
+    const beforeClose = event => {
+      if (workspace.hasPending()) { event.preventDefault(); event.returnValue = ''; }
+    };
+    window.addEventListener('fda-tweaks-changed', changed);
+    window.addEventListener('beforeunload', beforeClose);
+    window.__fdaHasPendingWrites = () => workspace.hasPending();
+    window.__fdaFlushForClose = () => workspace.flush();
+    return () => {
+      window.removeEventListener('fda-tweaks-changed', changed);
+      window.removeEventListener('beforeunload', beforeClose);
+      delete window.__fdaHasPendingWrites;
+      delete window.__fdaFlushForClose;
+    };
+  }, []);
+
+  const exportBackup = () => {
+    try {
+      let data;
+      try { data = workspace.snapshot(); }
+      catch {
+        data = {recoveryOnly:true, browserStorage:Object.fromEntries(
+          ['fda_workspace', 'fda_leagues', 'fda_picks', 'fda_tweaks'].map(key => [key, localStorage.getItem(key)]))};
+      }
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], {type:'application/json'}));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `DraftAssistant-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) { toast(error.message, 'error'); }
+  };
+
+  const useDiskCopy = async () => {
+    if (!await confirmDialog({title:'Use the saved disk version?',
+      body:'This discards this window’s unsaved changes and loads the latest saved leagues. Export this window’s backup first if you want to keep those changes.',
+      confirmLabel:'Use disk version', tone:'danger'})) return;
+    try { await workspace.useDiskCopy(); location.reload(); }
+    catch (error) { toast(error.message, 'error'); }
+  };
+
+  const restoreBackup = async event => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      if (file.size > 8 * 1024 * 1024) throw new Error('The backup must be smaller than 8 MiB.');
+      const candidate = workspaceData(JSON.parse(await file.text()));
+      if (!await confirmDialog({title:'Restore this league backup?',
+        body:`Replace your current leagues with the ${candidate.leagues.length} leagues in ${file.name}? The previous saved version is kept in the automatic backups folder.`,
+        confirmLabel:'Restore backup', tone:'danger'})) return;
+      setRestoreBusy(true);
+      workspaceGeneration.current++;
+      const restored = await workspace.restore(candidate);
+      setLeagues(restored.leagues);
+      setPicks(restored.picks);
+      setPreferences(restored.preferences);
+      try { localStorage.setItem('fda_tweaks', JSON.stringify(restored.preferences.tweaks || {})); } catch {}
+      setRoute({screen:'home', leagueId:null});
+      setShowBackups(false);
+      toast('League backup restored.', 'ok');
+    } catch (error) { toast(error.message, 'error', 8000); }
+    finally { setRestoreBusy(false); }
+  };
 
   const saveLeague = lg => {
+    const previous = leagues.find(l => l.id === lg.id);
+    if (previous) {
+      try {
+        const remapped = remapLeaguePicks(picks[lg.id] || [], previous, lg);
+        setPicks(prev => ({...prev, [lg.id]:remapped}));
+      } catch (error) { toast(error.message, 'error', 7000); return; }
+    }
     setLeagues(prev => {
       const idx = prev.findIndex(l => l.id === lg.id);
       return idx >= 0 ? prev.map(l => l.id === lg.id ? lg : l) : [...prev, lg];
@@ -1261,6 +1384,7 @@ function App() {
   };
 
   const deleteLeague = id => {
+    setEspnAccess(id, null);
     setLeagues(prev => prev.filter(l => l.id !== id));
     setPicks(prev => { const n = {...prev}; delete n[id]; return n; });
   };
@@ -1273,20 +1397,25 @@ function App() {
     setPicks(prev => ({ ...prev, [leagueId]: [...(prev[leagueId] || []), pick] }));
   };
 
-  const replacePicks = (leagueId, newPicks) => {
+  const replacePicks = (leagueId, newPicks, leaguePatch) => {
     setPicks(prev => ({ ...prev, [leagueId]: newPicks }));
+    setLeagues(prev => prev.map(l => l.id === leagueId
+      ? {...mergeLeagueSettings(l, leaguePatch || {}), pickSource:'draft'} : l));
   };
 
   const syncLeague = React.useCallback(lg => {
+    const generation = workspaceGeneration.current;
     return fetch('/api/sync-league', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ league: lg }),
+      body: JSON.stringify({ league: lg, ...getEspnAccess(lg.id) }),
     })
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error);
+        if (generation !== workspaceGeneration.current) throw new Error('Roster sync was superseded by restoring a backup.');
         setPicks(prev => ({ ...prev, [lg.id]: d.picks || [] }));
+        setLeagues(prev => prev.map(l => l.id === lg.id ? {...l, pickSource:'rosters'} : l));
         return `Synced ${d.matched || 0} of ${d.rostered || 0} rostered players from ${d.source || lg.platform}.`;
       });
   }, []);
@@ -1303,6 +1432,7 @@ function App() {
     }).then(ok => {
       if (!ok) return;
       setPicks(prev => ({ ...prev, [leagueId]: [] }));
+      setLeagues(prev => prev.map(l => l.id === leagueId ? {...l, pickSource:'draft'} : l));
       toast('Picks cleared.', 'ok');
     });
   };
@@ -1316,18 +1446,23 @@ function App() {
     return (
       <div style={{padding:40, textAlign:'center'}}>
         <div style={{color:T.red, fontSize:14, fontWeight:600, marginBottom:8}}>
-          Couldn't load player data
+          Couldn't safely load your saved data
         </div>
         <div style={{color:T.muted, fontSize:13}}>{loadError}</div>
+        <div style={{display:'flex', justifyContent:'center', gap:8, marginTop:16}}>
+          <Btn variant="secondary" onClick={exportBackup}>Export this window’s backup</Btn>
+          <Btn onClick={() => location.reload()}>Reload saved data</Btn>
+          <Btn variant="secondary" onClick={useDiskCopy}>Use saved disk version</Btn>
+        </div>
       </div>
     );
   }
 
-  if (!players) {
+  if (!players || !workspaceReady || restoreBusy) {
     return (
       <div className="loading-screen">
         <Spinner />
-        <span>Loading player data…</span>
+        <span>{restoreBusy ? 'Restoring league backup…' : 'Loading saved leagues and player data…'}</span>
       </div>
     );
   }
@@ -1338,7 +1473,7 @@ function App() {
   let body;
   if (screen === 'draft') {
     body = (
-      <DraftScreen
+      <DraftScreen key={routeLeague.id}
         league={routeLeague}
         picks={picks[routeLeague.id] || []}
         allPlayers={players}
@@ -1346,7 +1481,7 @@ function App() {
         onAddPick={pick => addPick(routeLeague.id, pick)}
         onUndoPick={() => undoPick(routeLeague.id)}
         onResetPicks={() => resetPicks(routeLeague.id)}
-        onReplacePicks={newPicks => replacePicks(routeLeague.id, newPicks)}
+        onReplacePicks={(newPicks, patch) => replacePicks(routeLeague.id, newPicks, patch)}
         onUpdateLeague={patch => updateLeague(routeLeague.id, patch)}
         onRefreshPlayers={refreshPlayers}
       />
@@ -1388,6 +1523,8 @@ function App() {
         playerCount={players.length}
         onRefreshPlayers={refreshPlayers}
         updateInfo={updateInfo}
+        saveStatus={saveStatus}
+        onOpenBackups={() => setShowBackups(true)}
         onDismissUpdate={() => {
           if (updateInfo) {
             try { localStorage.setItem('fda_skipped_update', updateInfo.latestVersion); } catch {}
@@ -1401,6 +1538,26 @@ function App() {
   return (
     <>
       {body}
+      {saveStatus.state !== 'saved' && <div role="status" style={{
+        position:'fixed', bottom:12, left:12, right:12, zIndex:1100, padding:'10px 14px',
+        border:`1px solid ${T.border}`, borderRadius:T.rsm, background:T.surface, boxShadow:T.shadowLg,
+        display:'flex', gap:10, alignItems:'center', fontSize:12,
+      }}>
+        {saveStatus.state === 'error'
+          ? <><span style={{flex:1, color:T.red}}>Changes are not saved to disk: {saveStatus.message}</span>
+            <Btn size="sm" onClick={() => workspace.flush().catch(() => {})}>Retry save</Btn>
+            <Btn size="sm" variant="secondary" onClick={exportBackup}>Export backup</Btn></>
+          : <span>Saving leagues… Keep the app open until saving finishes.</span>}
+      </div>}
+      {showBackups && <Modal title="League backups" onClose={() => setShowBackups(false)}>
+        <p>Your leagues, scoring, draft order, picks, rosters and engine settings save automatically on this computer. App updates keep this data.</p>
+        <p>Export a backup before moving to another computer. Restoring replaces the saved leagues after keeping the previous version in the automatic backups folder. Provider session credentials are excluded.</p>
+        <div style={{display:'flex', gap:10, alignItems:'center', flexWrap:'wrap'}}>
+          <Btn onClick={exportBackup}>Export all leagues</Btn>
+          <Btn variant="secondary" onClick={useDiskCopy}>Reload saved disk version</Btn>
+          <label>Restore a backup <input type="file" accept=".json,application/json" disabled={restoreBusy} onChange={restoreBackup} /></label>
+        </div>
+      </Modal>}
       {showSetup && (
         <LeagueSetupModal
           league={editingLeague}

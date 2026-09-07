@@ -18,7 +18,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: python -m unittest discover tests -v
+      - run: node scripts/check_web_syntax.js
+      - run: node scripts/check_league_sync.js
+      - run: node scripts/check_workspace_store.js
+      - run: python -m pip install --no-deps .
+      - run: python -I scripts/check_installed_assets.py
 
   windows:
     needs: test

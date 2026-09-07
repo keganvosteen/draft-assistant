@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from copy import deepcopy
 from dataclasses import asdict
 from typing import Any, Dict
 
@@ -138,10 +139,7 @@ def load_config(path: str = CONFIG_FILENAME) -> LeagueConfig:
 
 
 def _defaults_copy() -> Dict[str, Any]:
-    return {
-        key: dict(value) if isinstance(value, dict) else value
-        for key, value in DEFAULT_CONFIG.items()
-    }
+    return deepcopy(DEFAULT_CONFIG)
 
 
 def save_config(config: LeagueConfig, path: str = CONFIG_FILENAME) -> None:

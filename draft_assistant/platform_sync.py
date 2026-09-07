@@ -28,6 +28,7 @@ class SyncedDraftPick:
     pick_no: int
     team_num: int
     player: SyncedRosterPlayer
+    provider_team_id: Optional[str] = None
 
 
 def synced_rosters_to_picks(
@@ -49,7 +50,7 @@ def synced_rosters_to_picks(
     seen_player_ids = set()
 
     for fallback_idx, team in enumerate(synced_teams, 1):
-        team_num = team_nums.get(_norm(team.name), fallback_idx)
+        team_num = team_nums[fallback_idx - 1]
         for roster_player in team.players:
             matched = matcher.match(roster_player)
             if not matched:
@@ -81,7 +82,7 @@ def synced_rosters_to_picks(
             {
                 "name": team.name,
                 "players": len(team.players),
-                "teamNum": team_nums.get(_norm(team.name), i + 1),
+                "teamNum": team_nums[i],
             }
             for i, team in enumerate(synced_teams)
         ],
@@ -109,11 +110,17 @@ def synced_draft_to_picks(
     picks: List[dict] = []
     unmatched: List[dict] = []
     seen_player_ids = set()
+    ordered = sorted(draft_picks, key=lambda p: p.pick_no)
+    if [p.pick_no for p in ordered] != list(range(1, len(ordered) + 1)):
+        raise ValueError("The provider returned an incomplete draft history. Retry before replacing recorded picks.")
+    team_ids = {str(team_id): i for i, team_id in enumerate(league.get("teamIds") or [], 1) if team_id is not None}
 
-    for draft_pick in sorted(draft_picks, key=lambda p: p.pick_no):
+    for draft_pick in ordered:
         source = draft_pick.player
         matched = matcher.match(source)
-        team_num = draft_pick.team_num
+        team_num = team_ids.get(str(draft_pick.provider_team_id), draft_pick.team_num)
+        if draft_pick.provider_team_id is not None and not team_num:
+            raise ValueError("A drafted team is missing from the published order. Refresh league settings and retry.")
         if not team_num and num_teams:
             team_num = _snake_team(draft_pick.pick_no, num_teams)
         pick = {
@@ -121,6 +128,7 @@ def synced_draft_to_picks(
             "teamNum": team_num or 1,
             "synced": True,
             "sourceName": source.name,
+            "providerTeamId": draft_pick.provider_team_id,
         }
         player_id = matched.key() if matched else None
         if player_id is not None and player_id not in seen_player_ids:
@@ -134,6 +142,8 @@ def synced_draft_to_picks(
             # number of picks made is what tells the app whose turn it is, so
             # skipping one puts the whole draft on the wrong clock from there on.
             pick["playerId"] = f"{source.name or source.provider_id or 'Unknown'}|{_position(source.position)}"
+            if pick["playerId"] in seen_player_ids:
+                pick["playerId"] = f"{source.name or 'Unknown'} (pick {draft_pick.pick_no})|{_position(source.position)}"
             pick["unmatched"] = True
             unmatched.append({
                 "pickNum": draft_pick.pick_no,
@@ -143,6 +153,7 @@ def synced_draft_to_picks(
                 "id": source.provider_id,
             })
         picks.append(pick)
+        seen_player_ids.add(pick["playerId"])
 
     return {
         "picks": picks,
@@ -150,6 +161,8 @@ def synced_draft_to_picks(
         "unmatched": unmatched,
         "totalPicks": len(picks),
         "nextPickNum": (picks[-1]["pickNum"] + 1) if picks else 1,
+        "hasTradedPicks": bool(num_teams and league.get("draftType") == "snake" and any(
+            pick["teamNum"] != _snake_team(pick["pickNum"], num_teams) for pick in picks)),
     }
 
 
@@ -159,15 +172,22 @@ def _snake_team(pick_no: int, num_teams: int) -> int:
     return (num_teams - idx) if rnd % 2 else (idx + 1)
 
 
-def _team_number_map(league: dict, synced_teams: Sequence[SyncedRosterTeam]) -> Dict[str, int]:
-    saved = league.get("teamNames") or []
-    out: Dict[str, int] = {}
-    for idx, name in enumerate(saved, 1):
-        if isinstance(name, str) and name.strip():
-            out[_norm(name)] = idx
-    for idx, team in enumerate(synced_teams, 1):
-        out.setdefault(_norm(team.name), idx)
-    return out
+def _team_number_map(league: dict, synced_teams: Sequence[SyncedRosterTeam]) -> List[int]:
+    saved = [_norm(name) for name in league.get("teamNames") or []]
+    ids = {str(value): i for i, value in enumerate(league.get("teamIds") or [], 1) if value is not None}
+    result = []
+    for fallback, team in enumerate(synced_teams, 1):
+        if str(team.provider_id) in ids:
+            result.append(ids[str(team.provider_id)])
+        elif saved.count(_norm(team.name)) == 1:
+            result.append(saved.index(_norm(team.name)) + 1)
+        elif not saved and not ids:
+            result.append(fallback)
+        else:
+            raise ValueError("Could not identify a roster's team. Refresh league settings and select your team before syncing.")
+    if len(set(result)) != len(result):
+        raise ValueError("Roster team names are ambiguous. Refresh league settings to load provider team IDs.")
+    return result
 
 
 class _PlayerMatcher:

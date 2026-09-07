@@ -25,6 +25,10 @@ yahoo.json
 # tracking them meant every draft dirtied the working tree. The player board
 # (data/projections.json) stays tracked so a clone is usable immediately.
 draft_state.json
+workspace-state.json
+workspace-state.lock
+webview/
+backups/
 .draft_assistant_profiles/
 # Dynamic injury/trend/weekly context is regenerated and never bundled.
 data/player_context.json

@@ -135,7 +135,6 @@ DEFAULT_BLEND_WEIGHT = 0.7
 
 # Situation-change adjustments: empirical multipliers for common scenarios
 TEAM_CHANGE_PENALTY = 0.92       # Changing teams hurts ~8% on average in year 1
-COACHING_CHANGE_FACTOR = 0.97    # New OC: small uncertainty penalty (unused)
 
 # How fast a history stops speaking for a player once it stops being current.
 # A board pull collects last season for anyone who played it, so a history that

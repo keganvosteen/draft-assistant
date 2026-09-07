@@ -131,7 +131,7 @@ function MyTeamPanel({ league, myPlayers, round, hint, onGetHint, fullWidth = fa
         </div>
       )}
 
-      <div style={{padding:'11px 14px', borderTop:`1px solid ${T.border}`}}>
+      {onGetHint && <div style={{padding:'11px 14px', borderTop:`1px solid ${T.border}`}}>
         <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:6}}>
           <SectionLabel>Round {round} plan</SectionLabel>
           <button onClick={onGetHint} style={{
@@ -142,7 +142,7 @@ function MyTeamPanel({ league, myPlayers, round, hint, onGetHint, fullWidth = fa
         {hint
           ? <div style={{fontSize:12, color:T.text, lineHeight:1.55}}>{hint}</div>
           : <div style={{fontSize:12, color:T.mutedLight}}>A one-line read on what this round is for.</div>}
-      </div>
+      </div>}
     </aside>
   );
 }
@@ -477,7 +477,7 @@ function RecCard({ label, player, reason, highlight, onDraft, bestImpact }) {
           {sig.attribution || sig.source}: {String(sig.kind).replace(/_/g, ' ')} {sig.value}
         </div>
       ))}
-      <Btn size="sm" variant={highlight ? 'primary' : 'secondary'} onClick={() => onDraft(player)}
+      <Btn size="sm" variant={highlight ? 'primary' : 'secondary'} onClick={() => onDraft(player)} disabled={!onDraft}
         style={{marginTop:2, alignSelf:'flex-start'}}>
         Draft {player.name.split(' ').slice(-1)[0]}
       </Btn>
@@ -682,7 +682,7 @@ function QuickPickInput({ players, search, setSearch, onDraftPlayer }) {
   const [isOpen, setIsOpen] = React.useState(false);
 
   const candidates = React.useMemo(
-    () => matchQuickPickCandidates(search, players, 5), [search, players]);
+    () => onDraftPlayer ? matchQuickPickCandidates(search, players, 5) : [], [search, players, onDraftPlayer]);
 
   React.useEffect(() => { setSelectedIndex(0); }, [search]);
 
@@ -710,8 +710,8 @@ function QuickPickInput({ players, search, setSearch, onDraftPlayer }) {
     <div style={{position:'relative', flex:1, minWidth:200}}>
       <input
         type="text"
-        aria-label="Search players — Enter drafts the highlighted match"
-        placeholder="Search players (“bij”, “allen qb”, “kc dst”) — Enter drafts"
+        aria-label={onDraftPlayer ? 'Search players — Enter drafts the highlighted match' : 'Search players'}
+        placeholder={onDraftPlayer ? 'Search players (“bij”, “allen qb”, “kc dst”) — Enter drafts' : 'Search players'}
         value={search}
         onChange={e => { setSearch(e.target.value); setIsOpen(true); }}
         onFocus={() => setIsOpen(true)}
@@ -975,11 +975,11 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
                 {p.drafted ? (
                   <span style={{fontSize:11, color:T.mutedLight}}>Taken</span>
                 ) : (
-                  <button onClick={() => onDraft(p)} aria-label={`Draft ${p.name}`} style={{
+                  <button onClick={() => onDraft(p)} disabled={!onDraft} aria-label={`Draft ${p.name}`} style={{
                     background: isHov ? T.primary : T.primaryLight,
                     color: isHov ? '#fff' : T.primary,
                     border:'none', borderRadius:T.rxs, padding:'4px 9px',
-                    fontSize:11, fontWeight:700, cursor:'pointer', transition:'all .13s',
+                    fontSize:11, fontWeight:700, cursor:onDraft ? 'pointer' : 'default', opacity:onDraft ? 1 : .45, transition:'all .13s',
                   }}>Draft</button>
                 )}
               </span>
@@ -1241,6 +1241,15 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   const [showAuction,      setShowAuction]      = React.useState(false);
   const [showEngine,       setShowEngine]       = React.useState(false);
   const [hint,             setHint]             = React.useState('');
+  const [live, setLive] = React.useState({ on:false, busy:false, ok:null, msg:null, status:'', unmatched:0 });
+  const liveRef = React.useRef({ controller:null });
+  const provider = linkedProvider(league);
+  const canLiveSync = provider === 'Sleeper' && (league.draftType || 'snake') === 'snake';
+  const canDraftSync = provider === 'Sleeper' || provider === 'ESPN';
+  const draftComplete = league.pickSource !== 'rosters' && picks.length >= rosterTotal(league.rosterSlots) * league.numTeams;
+  const trackingBlocked = league.teamSelectionRequired || !league.draftPosition
+    || draftComplete || league.draftHasTradedPicks || league.pickSource === 'rosters' || (league.draftType || 'snake') !== 'snake';
+  const editingBlocked = live.on || live.busy || trackingBlocked;
 
   const { isMobile, isTablet, isDesktop } = useLayout();
 
@@ -1250,7 +1259,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   const draftedIds = React.useMemo(() => new Set(picks.map(p=>p.playerId)), [picks]);
   const { round, pickInRound } = getCurrentRoundPick(picks.length, league.numTeams);
   const currentTeam = getSnakeTeam(picks.length + 1, league.numTeams);
-  const isMyPick    = currentTeam === league.draftPosition;
+  const isMyPick    = !trackingBlocked && currentTeam === league.draftPosition;
 
   const playersWithProj = React.useMemo(() => withProjections(allPlayers, league), [allPlayers, league]);
   const playersWithVORP = React.useMemo(() => withVORP(playersWithProj, league), [playersWithProj, league]);
@@ -1301,7 +1310,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     // A recommendation means "draft this player now", so only compute it on the
     // user's actual turn. Computing one pick early let the rollout reserve
     // candidates through an opponent selection and overstated availability.
-    if (untilMyTurn !== 0) {
+    if (trackingBlocked || untilMyTurn !== 0) {
       setSuggest(s => ({ ...s, loading: false, stale: true }));
       return undefined;
     }
@@ -1359,7 +1368,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
         });
     }, 120);
     return () => { ctrl.abort(); clearTimeout(timer); };
-  }, [picks, untilMyTurn, league.numTeams, league.draftPosition, league.rosterSlots,
+  }, [picks, untilMyTurn, trackingBlocked, league.numTeams, league.draftPosition, league.rosterSlots,
       league.scoringType, league.customScoring, refreshNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tweakSig = `${tweaks.sims}|${tweaks.autoDrafters}`;
@@ -1405,6 +1414,8 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   }, [scored, playersWithVORP, draftedIds]);
 
   const handleDraft = p => {
+    if (editingBlocked) { toast('Stop live sync and check your team and draft settings before recording picks.', 'info'); return; }
+    if (draftedIds.has(p.id)) return;
     const pickNum = picks.length + 1;
     const team    = getSnakeTeam(pickNum, league.numTeams);
     onAddPick({ pickNum, teamNum: team, playerId: p.id });
@@ -1438,13 +1449,12 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
         if (d.error) { toast(d.error, 'error'); return; }
         const keys = Array.isArray(d.picks) ? d.picks : [];
         const known = new Set(allPlayers.map(p => p.id));
-        const loaded = keys
-          .filter(k => known.has(k))
-          .map((k, i) => ({ pickNum: i + 1, teamNum: getSnakeTeam(i + 1, league.numTeams), playerId: k }));
+        const loaded = keys.map((k, i) => ({ pickNum: i + 1,
+          teamNum: getSnakeTeam(i + 1, league.numTeams), playerId: k, unmatched:!known.has(k) }));
         onReplacePicks(loaded);
-        const skipped = keys.length - loaded.length;
-        toast(skipped > 0
-          ? `Restored ${loaded.length} picks (${skipped} unknown players skipped).`
+        const unknown = keys.filter(k => !known.has(k)).length;
+        toast(unknown > 0
+          ? `Restored ${loaded.length} picks (${unknown} players not on the board retained as placeholders).`
           : `Restored ${loaded.length} picks.`, 'ok');
       })
       .catch(() => toast('Restore failed.', 'error'));
@@ -1458,6 +1468,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   };
 
   const handleBatchDraft = confirmedItems => {
+    if (editingBlocked) return;
     let count = picks.length;
     confirmedItems.forEach(item => {
       count++;
@@ -1466,38 +1477,40 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     });
   };
 
-  // ── Sleeper live draft sync ────────────────────────────────────────────
-  // Sleeper hands back real pick numbers and seats, so the board can simply
-  // mirror the draft while it happens instead of being typed in.
-  const canLiveSync = Boolean(league.sleeperDraftId || league.sleeperLeagueId);
-  const [live, setLive] = React.useState({ on:false, busy:false, ok:null, msg:null, status:'', unmatched:0 });
-  const liveRef = React.useRef({ inFlight:false });
-  // The apply guard compares Sleeper against the board as it stands *now*, not
-  // against the last payload we applied. Caching the payload signature instead
-  // meant an Undo (or any local edit) could never be re-synced: Sleeper would
-  // report the same picks, the signature would match, and the board stayed
-  // desynced until Sleeper's own pick count moved.
+  // Only Sleeper exposes a live feed. ESPN syncs its published draft history.
   const picksRef = React.useRef(picks);
   picksRef.current = picks;
-  const picksSig = list => (list || []).map(pk => `${pk.pickNum}:${pk.playerId || ''}`).join(',');
+  const picksSig = list => (list || []).map(pk => `${pk.pickNum}:${pk.teamNum}:${pk.playerId || ''}`).join(',');
 
-  const syncSleeperDraft = ({ manual = false } = {}) => {
-    if (liveRef.current.inFlight) return;
-    liveRef.current.inFlight = true;
-    if (manual) setLive(s => ({ ...s, busy:true, msg:null }));
-    fetch('/api/sleeper/draft', {
+  const syncProviderDraft = () => {
+    if (liveRef.current.controller) return;
+    const controller = new AbortController();
+    liveRef.current.controller = controller;
+    setLive(s => ({ ...s, busy:true }));
+    const timeout = setTimeout(() => controller.abort('timeout'), 65000);
+    fetch('/api/draft-sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ league }),
+      body: JSON.stringify({ league, ...getEspnAccess(league.id) }),
+      signal:controller.signal,
     })
       .then(r => r.json())
       .then(d => {
-        if (d.error) { setLive(s => ({ ...s, busy:false, ok:false, msg:d.error })); return; }
+        if (controller.signal.aborted) return;
+        if (d.error) {
+          setLive(s => ({ ...s, busy:false, ok:false, msg:d.error,
+            on:['espn_auth_required','espn_live_unavailable','unsupported_draft_type'].includes(d.code) ? false : s.on }));
+          return;
+        }
+        if (!Array.isArray(d.picks) || d.leagueId !== league.id) throw new Error('The draft response did not match this league.');
         const synced = d.picks || [];
         // Only push when Sleeper and the board actually differ — replacing
         // picks re-runs the rollout, which is the expensive part.
-        if (picksSig(synced) !== picksSig(picksRef.current)) {
-          onReplacePicks(synced);
+        const patch = d.leaguePatch || {};
+        const nextLeague = mergeLeagueSettings(league, patch);
+        if (picksSig(synced) !== picksSig(picksRef.current) || league.pickSource === 'rosters'
+            || Object.keys(patch).some(key => JSON.stringify(nextLeague[key]) !== JSON.stringify(league[key]))) {
+          onReplacePicks(synced, patch);
         }
         const unknown = (d.unmatched || []).length;
         setLive(s => ({
@@ -1509,14 +1522,22 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
             + (d.status === 'complete' ? ' · draft complete' : ''),
         }));
       })
-      .catch(() => setLive(s => ({ ...s, busy:false, ok:false, msg:'Sync failed' })))
-      .finally(() => { liveRef.current.inFlight = false; });
+      .catch(error => {
+        if (controller.signal.aborted && controller.signal.reason !== 'timeout') return;
+        setLive(s => ({ ...s, busy:false, ok:false, msg:controller.signal.aborted
+          ? 'Sync timed out. Retrying while live is on.' : `Sync failed. ${error.message || 'Check your connection.'}` }));
+      })
+      .finally(() => {
+        clearTimeout(timeout);
+        if (liveRef.current.controller === controller) liveRef.current.controller = null;
+      });
   };
 
   // Keep the poller pointed at a fresh closure without restarting the interval
   // on every render (league/picks change constantly mid-draft).
-  const syncRef = React.useRef(syncSleeperDraft);
-  syncRef.current = syncSleeperDraft;
+  const syncRef = React.useRef(syncProviderDraft);
+  syncRef.current = syncProviderDraft;
+  React.useEffect(() => () => liveRef.current.controller?.abort(), []);
   React.useEffect(() => {
     if (!live.on) return undefined;
     syncRef.current();
@@ -1525,7 +1546,10 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   }, [live.on]);
 
   const toggleLive = () => {
-    if (live.on) { setLive(s => ({ ...s, on:false, msg:null })); return; }
+    if (live.on) {
+      liveRef.current.controller?.abort(); liveRef.current.controller = null;
+      setLive(s => ({ ...s, on:false, busy:false, msg:'Live sync stopped.' })); return;
+    }
     const start = () => setLive(s => ({ ...s, on:true, msg:'Connecting…' }));
     if (picks.length === 0) { start(); return; }
     confirmDialog({
@@ -1533,6 +1557,13 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       body: 'Sleeper becomes the source of truth: the picks on this board are replaced by whatever Sleeper reports, and keep updating every 5 seconds.',
       confirmLabel: 'Go live',
     }).then(ok => { if (ok) start(); });
+  };
+
+  const syncOnce = () => {
+    if (picks.length === 0) { syncProviderDraft(); return; }
+    confirmDialog({title:'Replace picks with provider history?',
+      body:`This replaces the ${picks.length} recorded entries only after ${provider} returns a valid draft history.`,
+      confirmLabel:'Sync draft'}).then(ok => { if (ok) syncProviderDraft(); });
   };
 
   const handleExportLog = () => {
@@ -1567,8 +1598,8 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     { type:'label', label:'Live draft' },
     canLiveSync && { label: live.on ? 'Stop following Sleeper' : 'Follow Sleeper live',
       hint: live.on ? 'on' : null, onClick: toggleLive },
-    canLiveSync && !live.on && { label: 'Sync picks once', onClick: () => syncSleeperDraft({ manual:true }) },
-    { label: 'Paste draft history', onClick: () => setShowPasteModal(true) },
+    canDraftSync && !live.on && { label: provider === 'ESPN' ? 'Sync completed ESPN draft' : 'Sync picks once', disabled:live.busy, onClick: syncOnce },
+    { label: 'Paste draft history', disabled:editingBlocked, onClick: () => setShowPasteModal(true) },
     { type:'sep' },
     { type:'label', label:'View' },
     { label: 'Full draft board', onClick: () => setShowDraftBoard(true) },
@@ -1581,9 +1612,9 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     { label: 'Pull player data', onClick: () => setShowPullModal(true) },
     { label: 'Export draft log (CSV)', disabled: picks.length === 0, onClick: handleExportLog },
     { label: 'Save snapshot to disk', onClick: handleSaveSnapshot },
-    { label: 'Restore snapshot', onClick: handleRestoreSnapshot },
+    { label: 'Restore snapshot', disabled:editingBlocked, onClick: handleRestoreSnapshot },
     { type:'sep' },
-    { label: 'Clear all picks', tone:'danger', disabled: picks.length === 0, onClick: onResetPicks },
+    { label: 'Clear all picks', tone:'danger', disabled: live.on || live.busy || picks.length === 0, onClick: onResetPicks },
   ].filter(Boolean);
 
   return (
@@ -1597,10 +1628,10 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
         }}>
           <div style={{fontSize:9, fontWeight:800, letterSpacing:.5,
             color: isMyPick ? 'rgba(255,255,255,.85)' : T.muted}}>
-            {isMyPick ? 'YOUR PICK' : `TEAM ${currentTeam}`}
+            {draftComplete ? 'DRAFT COMPLETE' : trackingBlocked ? 'CHECK SETUP' : isMyPick ? 'YOUR PICK' : `TEAM ${currentTeam}`}
           </div>
           <div className="da-num" style={{fontSize:11.5, fontWeight:700, color: isMyPick ? '#fff' : T.text}}>
-            R{round} · {pickInRound}/{league.numTeams}
+            {trackingBlocked ? `${picks.length} entries` : `R${round} · ${pickInRound}/${league.numTeams}`}
           </div>
         </div>
 
@@ -1612,15 +1643,24 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
             <Btn variant="secondary" size="sm" onClick={() => setShowOppDrawer(true)}>Picks</Btn>
           </>
         )}
-        <Btn variant="secondary" size="sm" onClick={onUndoPick} disabled={picks.length === 0}>Undo</Btn>
+        {canLiveSync && <Btn size="sm" onClick={toggleLive} disabled={!live.on && live.busy}>{live.on ? 'Stop live' : 'Go live'}</Btn>}
+        <Btn variant="secondary" size="sm" onClick={onUndoPick} disabled={live.on || live.busy || league.pickSource === 'rosters' || picks.length === 0}>Undo</Btn>
         <Menu label="More" items={menuItems} />
       </AppBar>
 
-      {!isMobile && <PickTicker league={league} picks={picks} playersById={playersById} />}
+      {trackingBlocked && <Note tone={draftComplete ? 'ok' : 'warn'}>
+        {draftComplete ? 'Draft complete. Your roster and draft history are saved in this browser.'
+          : league.pickSource === 'rosters' ? 'These entries are a roster snapshot, not draft history. Sync the real draft or clear the entries before recording picks.'
+          : league.teamSelectionRequired || !league.draftPosition ? 'Choose your team in League settings before using draft recommendations.'
+          : league.draftHasTradedPicks ? 'Synced player ownership includes traded picks. Recommendations are paused because the engine assumes an untraded snake schedule.'
+          : 'Draft recommendations support standard snake drafts. This league uses a different format.'}
+      </Note>}
+      {provider === 'ESPN' && !draftComplete && <Note>ESPN publishes draft results after completion. More → Sync completed ESPN draft imports the final results. {!trackingBlocked && 'During the draft, use More → Paste draft history or record picks.'}</Note>}
+      {!isMobile && !trackingBlocked && <PickTicker league={league} picks={picks} playersById={playersById} />}
 
       <div style={{flex:1, display:'flex', minHeight:0}}>
         {isDesktop && (
-          <MyTeamPanel league={league} myPlayers={myPlayers} round={round} hint={hint} onGetHint={handleGetHint} />
+          <MyTeamPanel league={league} myPlayers={myPlayers} round={round} hint={hint} onGetHint={trackingBlocked ? null : handleGetHint} />
         )}
 
         <div style={{flex:1, display:'flex', flexDirection:'column', minWidth:0}}>
@@ -1628,19 +1668,21 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
             padding:'4px 12px', fontSize:11, color:T.muted, background:T.surface,
             borderBottom:`1px solid ${T.border}`, display:'flex', gap:8, alignItems:'center',
           }}>
-            {suggest.err
+            {trackingBlocked
+              ? <span>{draftComplete ? 'Draft history' : 'Recommendations paused'}</span>
+              : suggest.err
               ? <span style={{color:T.red}}>Recommendations failed: {suggest.err}</span>
               : suggest.loading
                 ? <span>Computing rollout…</span>
                 : suggest.stale
                   ? <span>Board held — recomputes when your pick is up</span>
                   : <span>Rollout engine · {suggest.sims} sims per pick</span>}
-            {canLiveSync && (live.on || live.msg) && (
+            {canDraftSync && (live.on || live.msg) && (
               <span style={{
                 paddingLeft:8, borderLeft:`1px solid ${T.border}`,
                 color: live.ok === false ? T.red : live.on ? T.green : T.muted,
               }}>
-                {live.on ? '● ' : ''}Sleeper: {live.msg || 'connecting…'}
+                {live.on ? '● ' : ''}{provider}: {live.msg || 'connecting…'}
               </span>
             )}
             {suggest.newsStale && (
@@ -1655,18 +1697,18 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
                 ⚠ Player news stale — free-agent and injury filtering may be out of date
               </span>
             )}
-            <button onClick={handleRefreshRecs} title="Recompute recommendations now"
+            <button onClick={handleRefreshRecs} disabled={trackingBlocked} title="Recompute recommendations now"
               style={{marginLeft:'auto', background:'none', border:`1px solid ${T.border}`, borderRadius:T.rxs,
                 padding:'1px 7px', cursor:'pointer', color:T.muted, fontSize:10.5}}>
               Refresh
             </button>
           </div>
 
-          <RecommendationBar scored={scored} myPlayers={myPlayers} league={league} oppData={oppData}
-            onDraft={handleDraft} stale={suggest.stale && !suggest.err}
-            untilMyTurn={untilMyTurn} loading={suggest.loading} />
+          {!trackingBlocked && <RecommendationBar scored={scored} myPlayers={myPlayers} league={league} oppData={oppData}
+            onDraft={editingBlocked ? null : handleDraft} stale={suggest.stale && !suggest.err}
+            untilMyTurn={untilMyTurn} loading={suggest.loading} />}
 
-          <PlayerList players={enriched} onDraft={handleDraft}
+          <PlayerList players={enriched} onDraft={editingBlocked ? null : handleDraft}
             showDrafted={showDrafted} onToggleDrafted={() => setShowDrafted(v => !v)} />
         </div>
 
@@ -1679,7 +1721,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       {showMyTeamDrawer && (
         <Drawer title="My team" onClose={() => setShowMyTeamDrawer(false)}>
           <MyTeamPanel league={league} myPlayers={myPlayers} round={round}
-            hint={hint} onGetHint={handleGetHint} fullWidth />
+            hint={hint} onGetHint={trackingBlocked ? null : handleGetHint} fullWidth />
         </Drawer>
       )}
 

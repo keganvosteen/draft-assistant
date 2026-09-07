@@ -19,9 +19,7 @@ class TestComputePoints(unittest.TestCase):
             _make_player("RB1", "RB", {"rush_yd": 1200, "rush_td": 10, "rec": 40, "rec_yd": 300}),
         ]
         pts = compute_points(players, SCORING, use_historical=False)
-        self.assertEqual(len(pts), 2)
-        self.assertGreater(pts["QB1|QB"], 0)
-        self.assertGreater(pts["RB1|RB"], 0)
+        self.assertEqual(pts, {"QB1|QB": 280.0, "RB1|RB": 230.0})
 
 
 class TestReplacementLevels(unittest.TestCase):
@@ -37,19 +35,6 @@ class TestReplacementLevels(unittest.TestCase):
         # QB2 is the replacement level (2nd QB drafted out of 2 teams)
         pts = compute_points(players, SCORING, use_historical=False)
         self.assertAlmostEqual(repl["QB"], pts["QB2|QB"], places=1)
-
-    def test_flex_allocation(self):
-        players = [
-            _make_player("RB1", "RB", {"rush_yd": 1500, "rush_td": 14, "rec": 50, "rec_yd": 400}),
-            _make_player("RB2", "RB", {"rush_yd": 1200, "rush_td": 10, "rec": 40, "rec_yd": 300}),
-            _make_player("WR1", "WR", {"rec": 100, "rec_yd": 1400, "rec_td": 10}),
-            _make_player("TE1", "TE", {"rec": 80, "rec_yd": 900, "rec_td": 7}),
-        ]
-        roster = {"QB": 0, "RB": 1, "WR": 1, "TE": 1, "FLEX": 1, "K": 0, "DST": 0}
-        # With 1 team, 1 FLEX: replacement should account for flex usage
-        repl = replacement_levels(players, SCORING, teams=1, roster=roster)
-        self.assertIn("RB", repl)
-        self.assertIn("WR", repl)
 
     def test_flex_allocation_uses_players_after_mandatory_starters(self):
         scoring = {"rush_yd": 1.0, "rec_yd": 1.0}

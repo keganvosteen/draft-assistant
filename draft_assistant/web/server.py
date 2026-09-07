@@ -17,7 +17,8 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlsplit
 
 from .. import __version__
 from ..context import (
@@ -44,6 +45,10 @@ from ..sample_data import sample_players
 from ..scoring import fantasy_points
 from ..storage import load_players, load_state, save_players, update_players, update_state
 from ..update_checker import check_for_update
+from ..workspace_state import (
+    WorkspaceConflictError, WorkspaceStorageError, WorkspaceValidationError,
+    WorkspaceVersionError, load_workspace, save_workspace,
+)
 from .scoring import STANDARD_SCORING, scoring_for_league
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -60,6 +65,58 @@ MAX_PICKS = 1024
 MAX_TEAMS = 32
 MAX_ROSTER_SLOTS = 50
 MAX_WEB_SIMS = 96
+
+
+def _espn_reference(value) -> str:
+    """Accept a league id or the ESPN league URL shown in the browser."""
+    reference = str(value or "").strip()
+    if reference.isascii() and reference.isdigit():
+        return reference
+    parsed = urlsplit(reference)
+    if parsed.scheme in {"http", "https"} and parsed.hostname in {"fantasy.espn.com", "www.espn.com"}:
+        league_id = parse_qs(parsed.query).get("leagueId", [""])[0]
+        if league_id.isascii() and league_id.isdigit():
+            return league_id
+    raise ValueError("Enter the numeric ESPN league ID or its ESPN league URL.")
+
+
+def _league_platform(league: dict) -> str:
+    if league.get("sleeperDraftId"):
+        return "sleeper"
+    for key, platform in (("sleeperLeagueId", "sleeper"), ("espnLeagueId", "espn"),
+                          ("yahooLeagueKey", "yahoo")):
+        if league.get(key):
+            return platform
+    return str(league.get("platform") or "").lower()
+
+
+def _import_scoring_type(info: dict) -> dict:
+    rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
+    return {**info, "scoringType": "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"}
+
+
+def _draft_league_patch(info: dict, league: dict) -> dict:
+    """Keep the selected team attached to its identity when seats change."""
+    patch = {key: info[key] for key in (
+        "teamNames", "teamIds", "numTeams", "draftOrderReady", "draftType",
+        "draftStatus", "sleeperDraftId",
+    ) if key in info}
+    old_ids, new_ids = league.get("teamIds") or [], info.get("teamIds") or []
+    old_names, new_names = league.get("teamNames") or [], info.get("teamNames") or []
+    slot = int(league.get("draftPosition") or 0) - 1
+    new_ids = [str(value) for value in new_ids]
+    has_id = 0 <= slot < len(old_ids) and old_ids[slot] not in (None, "")
+    if has_id and new_ids.count(str(old_ids[slot])) == 1:
+        patch["draftPosition"] = new_ids.index(str(old_ids[slot])) + 1
+    elif not has_id and 0 <= slot < len(old_names) and old_names[slot] and old_names.count(old_names[slot]) == 1 and new_names.count(old_names[slot]) == 1:
+        patch["draftPosition"] = new_names.index(old_names[slot]) + 1
+    elif "draftPosition" in info:
+        patch["draftPosition"] = info["draftPosition"]
+    else:
+        patch.update(draftPosition=None, teamSelectionRequired=True)
+    if patch.get("draftPosition"):
+        patch["teamSelectionRequired"] = False
+    return patch
 
 
 class PayloadTooLarge(ValueError):
@@ -371,6 +428,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_config()
         elif self.path == "/api/state":
             self._handle_get_state()
+        elif self.path == "/api/workspace":
+            self._handle_workspace()
         elif self.path == "/api/yahoo/status":
             self._handle_yahoo_status()
         elif self.path == "/api/context":
@@ -403,6 +462,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             return
         if self.path == "/api/state":
             self._handle_save_state()
+        elif self.path == "/api/workspace":
+            self._handle_workspace(save=True)
         elif self.path == "/api/pull-free-data":
             self._handle_pull_free_data()
         elif self.path == "/api/collect-all":
@@ -421,6 +482,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_sync_league()
         elif self.path == "/api/import-espn":
             self._handle_import_espn()
+        elif self.path == "/api/league-settings":
+            self._handle_league_settings()
+        elif self.path == "/api/draft-sync":
+            self._handle_draft_sync()
         elif self.path == "/api/sleeper/leagues":
             self._handle_sleeper_leagues()
         elif self.path == "/api/sleeper/import":
@@ -545,6 +610,18 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     # ── existing endpoints ────────────────────────────────────────────────
+
+    def _handle_workspace(self, save=False):
+        try:
+            self._send_json(save_workspace(self._read_body()) if save else load_workspace())
+        except WorkspaceConflictError as exc:
+            self._send_json({"error": str(exc), "code": "workspace_conflict", "currentRevision": exc.revision}, 409)
+        except WorkspaceVersionError as exc:
+            self._send_json({"error": str(exc), "code": "workspace_newer_version"}, 409)
+        except WorkspaceValidationError as exc:
+            self._send_json({"error": str(exc), "code": "workspace_invalid"}, 400)
+        except WorkspaceStorageError as exc:
+            self._send_json({"error": str(exc), "code": "workspace_storage_error"}, 500)
 
     def _handle_players(self):
         try:
@@ -807,10 +884,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 self._send_json({"error": "league must be an object"}, 400)
                 return
 
-            platform = str(league.get("platform") or "").lower()
+            platform = _league_platform(league)
             players, _config = _load_players(self.profile)
 
-            if platform == "yahoo" or league.get("yahooLeagueKey"):
+            if platform == "yahoo":
                 league_key = str(league.get("yahooLeagueKey") or body.get("leagueKey") or "").strip()
                 if not league_key:
                     self._send_json({"error": "Yahoo league is missing yahooLeagueKey"}, 400)
@@ -818,21 +895,22 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 from ..importers import yahoo
                 rosters = yahoo.fetch_league_rosters(self._yahoo_access_token(), league_key)
                 source = "Yahoo"
-            elif platform == "espn" or league.get("espnLeagueId"):
+            elif platform == "espn":
                 league_id = str(league.get("espnLeagueId") or body.get("leagueId") or "").strip()
                 if not league_id:
                     self._send_json({"error": "ESPN league is missing espnLeagueId"}, 400)
                     return
                 from ..importers.free_sources import default_projection_season, fetch_espn_rosters
-                season = int(league.get("season") or body.get("season") or 0) or default_projection_season()
+                league_id = _espn_reference(league_id)
+                season = _bounded_int(league.get("season") or body.get("season") or default_projection_season(), "season", 2000, 2100)
                 rosters = fetch_espn_rosters(
                     season,
                     league_id,
-                    espn_s2=body.get("espnS2") or league.get("espnS2"),
-                    swid=body.get("swid") or league.get("swid"),
+                    espn_s2=body.get("espnS2"),
+                    swid=body.get("swid"),
                 )
                 source = "ESPN"
-            elif platform == "sleeper" or league.get("sleeperLeagueId"):
+            elif platform == "sleeper":
                 league_id = str(league.get("sleeperLeagueId") or body.get("leagueId") or "").strip()
                 if not league_id:
                     self._send_json({"error": "Sleeper league is missing sleeperLeagueId"}, 400)
@@ -855,35 +933,73 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             })
             self._send_json(result)
         except Exception as exc:
-            self._send_json({"error": str(exc)}, 500)
+            self._send_platform_error(exc, _league_platform(league) if isinstance(league, dict) else "")
+
+    def _send_platform_error(self, exc: Exception, platform: str = ""):
+        """Make provider failures actionable without echoing authentication data."""
+        if isinstance(exc, HTTPError):
+            exc.close()
+            if platform == "espn" and exc.code in {401, 403}:
+                self._send_json({
+                    "error": "ESPN denied access to this league. For a private league, enter your espn_s2 and SWID session cookies in League settings → Import. Check the league ID and season, and use an ESPN account that belongs to the league.",
+                    "code": "espn_auth_required",
+                }, 401)
+            elif exc.code == 404:
+                self._send_json({"error": "League or draft not found. Check the league ID and season."}, 404)
+            elif exc.code == 429:
+                self._send_json({"error": "The provider is limiting requests. Wait a moment and retry."}, 429)
+            else:
+                self._send_json({"error": f"The league provider returned HTTP {exc.code}. Please retry."}, 502)
+        elif isinstance(exc, (URLError, TimeoutError)):
+            self._send_json({"error": "Could not reach the league provider. Check your connection and retry."}, 502)
+        elif isinstance(exc, ValueError):
+            self._send_json({"error": str(exc)}, 400)
+        else:
+            self._send_json({"error": "Could not read this league from the provider. Check its settings and try again."}, 502)
+
+    def _espn_settings(self, body: dict, league: dict) -> dict:
+        from ..importers.free_sources import default_projection_season, fetch_espn_league
+        league_id = _espn_reference(league.get("espnLeagueId") or body.get("leagueId"))
+        season = _bounded_int(league.get("season") or body.get("season") or default_projection_season(), "season", 2000, 2100)
+        info = fetch_espn_league(season, league_id, espn_s2=body.get("espnS2"), swid=body.get("swid"))
+        return _import_scoring_type({**info, "espnLeagueId": league_id, "season": season})
 
     def _handle_import_espn(self):
-        """Read a public ESPN league's settings to auto-fill a league in the UI.
+        """Read public or authenticated ESPN league settings for the editor."""
+        try:
+            self._send_json(self._espn_settings(self._read_body(), {}))
+        except Exception as exc:
+            self._send_platform_error(exc, "espn")
 
-        Body: {leagueId, season?}. Returns name / numTeams / rosterSlots /
-        scoringType / teamNames / espnLeagueId for the LeagueSetup form.
-        """
-        # Bound before the try: the error path below interpolates it, so a
-        # malformed body (which makes _read_body raise) used to blow up inside
-        # the except handler with UnboundLocalError and drop the connection
-        # instead of returning an error.
-        league_id = ""
+    def _handle_league_settings(self):
+        """Refresh settings/order without mutating any league or recorded picks."""
+        platform = ""
         try:
             body = self._read_body()
-            league_id = str(body.get("leagueId") or "").strip()
-            if not league_id:
-                self._send_json({"error": "leagueId required"}, 400)
-                return
-            from ..importers.free_sources import default_projection_season, fetch_espn_league
-            season = int(body.get("season") or 0) or default_projection_season()
-            info = fetch_espn_league(season, league_id)
-            rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
-            info["scoringType"] = "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"
-            info["espnLeagueId"] = league_id
-            info["season"] = season
-            self._send_json(info)
+            league = body.get("league")
+            if not isinstance(league, dict):
+                raise ValueError("league must be an object")
+            platform = _league_platform(league)
+            if platform == "espn":
+                info = self._espn_settings(body, league)
+            elif platform == "sleeper":
+                from ..importers import sleeper
+                league_id = str(league.get("sleeperLeagueId") or "").strip()
+                if not league_id:
+                    raise ValueError("Sleeper league is missing sleeperLeagueId")
+                info = _import_scoring_type(sleeper.fetch_league(league_id, username=league.get("sleeperUsername") or None))
+            elif platform == "yahoo":
+                from ..importers import yahoo
+                league_key = str(league.get("yahooLeagueKey") or "").strip()
+                if not league_key:
+                    raise ValueError("Yahoo league is missing yahooLeagueKey")
+                info = _import_scoring_type(yahoo.fetch_league(self._yahoo_access_token(), league_key))
+                info["draftOrderReady"] = False
+            else:
+                raise ValueError("Import an ESPN, Sleeper, or Yahoo league first.")
+            self._send_json({**info, **_draft_league_patch(info, league)})
         except Exception as exc:
-            self._send_json({"error": f"Could not import league {league_id!r}: {exc}"}, 500)
+            self._send_platform_error(exc, platform)
 
     # ── Sleeper import + live draft sync ──────────────────────────────────
     # Sleeper's league API is public and read-only, so these need no auth at
@@ -928,54 +1044,94 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 return
             from ..importers import sleeper
             info = sleeper.fetch_league(league_id, username=body.get("username") or None)
-            rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
-            info["scoringType"] = "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"
-            self._send_json(info)
+            self._send_json(_import_scoring_type(info))
         except Exception as exc:
             self._send_json({"error": f"Could not import league {league_id!r}: {exc}"}, 500)
 
     def _handle_sleeper_draft(self):
-        """Live draft sync: the real picks made so far, in real draft order.
+        """Compatibility route for clients using the original Sleeper endpoint."""
+        self._handle_draft_sync(platform="sleeper")
 
-        Body: {league} (or {leagueId}/{draftId}). Safe to poll — it's a couple
-        of small reads against Sleeper's public API.
+    def _handle_draft_sync(self, platform: str = ""):
+        """Read real provider draft picks; never reconstruct them from rosters.
+
+        Sleeper can be polled live. ESPN's available endpoint publishes results
+        after completion, so an empty in-progress response must not erase picks.
         """
         try:
             body = self._read_body()
             league = body.get("league") or {}
             if not isinstance(league, dict):
-                self._send_json({"error": "league must be an object"}, 400)
-                return
-            from ..importers import sleeper
-            draft_id = str(
-                body.get("draftId") or league.get("sleeperDraftId") or "").strip()
-            if not draft_id:
-                league_id = str(
-                    body.get("leagueId") or league.get("sleeperLeagueId") or "").strip()
-                if not league_id:
-                    self._send_json({"error": "Sleeper league is missing sleeperLeagueId"}, 400)
+                raise ValueError("league must be an object")
+            platform = platform or _league_platform(league)
+            if platform == "espn":
+                from ..importers.free_sources import default_projection_season, fetch_espn_draft
+                league_id = _espn_reference(league.get("espnLeagueId") or body.get("leagueId"))
+                season = _bounded_int(league.get("season") or body.get("season") or default_projection_season(), "season", 2000, 2100)
+                info = fetch_espn_draft(season, league_id, espn_s2=body.get("espnS2"), swid=body.get("swid"))
+                if info.get("status") != "complete":
+                    self._send_json({
+                        "error": "ESPN has not published completed draft results yet. Its available API does not provide reliable live picks. Use Paste draft history or record picks during the draft, then sync results after it finishes.",
+                        "code": "espn_live_unavailable", "liveAvailable": False,
+                        "status": info.get("status") or "", "leaguePatch": _draft_league_patch(info, league),
+                    }, 409)
                     return
-                draft_id = sleeper.league_draft_id(league_id) or ""
+                draft_picks = info["draftPicks"]
+                draft_id = f"espn:{season}:{league_id}"
+                live_available = False
+            elif platform == "sleeper":
+                from ..importers import sleeper
+                draft_id = str(body.get("draftId") or league.get("sleeperDraftId") or "").strip()
                 if not draft_id:
-                    self._send_json({"error": "This Sleeper league has no draft yet"}, 400)
-                    return
+                    league_id = str(body.get("leagueId") or league.get("sleeperLeagueId") or "").strip()
+                    if not league_id:
+                        raise ValueError("Sleeper league is missing sleeperLeagueId")
+                    draft_id = sleeper.league_draft_id(league_id) or ""
+                    if not draft_id:
+                        raise ValueError("This Sleeper league has no draft yet")
+                draft = sleeper.fetch_draft(draft_id)
+                saved = league
+                if not league.get("teamIds") and league.get("sleeperLeagueId"):
+                    # Upgrade existing imports once; subsequent polls need only
+                    # the draft and its picks, not every user's league metadata.
+                    saved = {**league, **sleeper.fetch_league(str(league["sleeperLeagueId"]))}
+                info = sleeper.draft_order_patch(draft, saved)
+                info.update(status=draft.get("status") or "", lastPicked=draft.get("last_picked"))
+                draft_picks = sleeper.fetch_draft_picks(draft_id, draft)
+                live_available = True
+            else:
+                raise ValueError("Draft sync supports imported ESPN and Sleeper leagues. Yahoo supports roster sync.")
 
-            draft = sleeper.fetch_draft(draft_id)
-            draft_picks = sleeper.fetch_draft_picks(draft_id, draft)
+            if info.get("status") != "complete" and info.get("draftType") not in {None, "", "snake"}:
+                self._send_json({
+                    "error": "Automatic draft tracking currently supports standard snake drafts. This league uses a different draft format.",
+                    "code": "unsupported_draft_type", "liveAvailable": False,
+                }, 409)
+                return
+            if not info.get("draftOrderReady"):
+                self._send_json({
+                    "error": "The provider has not published a complete draft order yet. Refresh the order when it is set.",
+                    "code": "draft_order_unavailable",
+                }, 409)
+                return
+            patch = _draft_league_patch(info, league)
             players, _config = _load_players(self.profile)
-            result = synced_draft_to_picks(draft_picks, players, league)
+            result = synced_draft_to_picks(draft_picks, players, {**league, **patch})
+            patch["draftHasTradedPicks"] = result.pop("hasTradedPicks")
             result.update({
                 "ok": True,
-                "source": "Sleeper",
+                "source": "Sleeper" if platform == "sleeper" else "ESPN",
                 "draftId": draft_id,
-                "status": draft.get("status") or "",
-                "draftType": draft.get("type") or "",
-                "lastPicked": draft.get("last_picked"),
+                "status": info.get("status") or "",
+                "draftType": info.get("draftType") or "snake",
+                "lastPicked": info.get("lastPicked"),
                 "leagueId": league.get("id"),
+                "leaguePatch": patch,
+                "liveAvailable": live_available,
             })
             self._send_json(result)
         except Exception as exc:
-            self._send_json({"error": str(exc)}, 500)
+            self._send_platform_error(exc, platform)
 
     # ── Yahoo OAuth import ────────────────────────────────────────────────
     # Credentials + tokens are stored in the profile dir (local machine only).
@@ -1085,9 +1241,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 self._send_json({"error": "Authorize with Yahoo first"}, 400)
                 return
             info = yahoo.fetch_league(self._yahoo_access_token(), league_key)
-            rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
-            info["scoringType"] = "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"
-            self._send_json(info)
+            self._send_json(_import_scoring_type(info))
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 

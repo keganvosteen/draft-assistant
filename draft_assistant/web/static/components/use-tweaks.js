@@ -19,10 +19,14 @@ function useTweaks(defaults) {
       const next = typeof keyOrObj === 'string'
         ? { ...prev, [keyOrObj]: val }
         : { ...prev, ...keyOrObj };
-      try { localStorage.setItem('fda_tweaks', JSON.stringify(next)); } catch {}
       return next;
     });
   }, []);
+
+  React.useEffect(() => {
+    try { localStorage.setItem('fda_tweaks', JSON.stringify(values)); } catch {}
+    window.dispatchEvent(new CustomEvent('fda-tweaks-changed', {detail:values}));
+  }, [values]);
 
   return [values, update];
 }

@@ -22,6 +22,35 @@ def _state():
 
 
 class TestRecordPick(unittest.TestCase):
+    def test_blank_pick_leaves_the_draft_unchanged(self):
+        state = _state()
+        tracker = DraftTracker(_config(), state, [_make_player("Josh Allen", "QB")])
+        for query in ("", "   "):
+            self.assertIsNone(tracker.record_pick(query, my_pick=True))
+        self.assertEqual(state.picks, [])
+        self.assertEqual(state.my_picks, [])
+
+    def test_repeated_exact_pick_does_not_select_a_similar_name(self):
+        players = [_make_player("John Smith", "WR"), _make_player("Josh Smith", "WR")]
+        state = _state()
+        tracker = DraftTracker(_config(), state, players)
+        self.assertIs(tracker.record_pick("John Smith"), players[0])
+        self.assertIsNone(tracker.record_pick("John Smith", my_pick=True))
+        self.assertEqual(state.picks, [players[0].key()])
+        self.assertEqual(state.my_picks, [])
+        self.assertEqual(tracker.available_players(), [players[1]])
+
+    def test_fuzzy_distance_takes_priority_over_adp(self):
+        players = [_make_player("John Smith", "WR", adp=150),
+                   _make_player("Josh Smith", "WR", adp=10)]
+        tracker = DraftTracker(_config(), _state(), players)
+        self.assertIs(tracker.record_pick("Jon Smith"), players[0])
+
+    def test_position_filter_applies_before_fuzzy_matching(self):
+        players = [_make_player("John Smith", "QB"), _make_player("Josh Smith", "WR")]
+        tracker = DraftTracker(_config(), _state(), players)
+        self.assertIs(tracker.record_pick("Jon Smith", position=" wr "), players[1])
+
     def test_stable_provider_id_is_persisted(self):
         player = Player(id="sleeper:123", name="Renamed Player", position="WR")
         state = _state()
@@ -93,6 +122,15 @@ class TestRecordPick(unittest.TestCase):
 
 
 class TestUndo(unittest.TestCase):
+    def test_undo_resolves_legacy_and_stable_keys_for_personal_roster(self):
+        player = Player(id="sleeper:123", name="Renamed Player", position="WR")
+        state = DraftState("Me", ["Me"], picks=[player.key()],
+                           my_picks=[player.legacy_key()])
+        tracker = DraftTracker(_config(), state, [player])
+        self.assertEqual(tracker.undo(), [player.key()])
+        self.assertEqual(state.my_picks, [])
+        self.assertEqual(tracker.my_roster(), {})
+
     def test_single_undo(self):
         players = [_make_player("Josh Allen", "QB"), _make_player("CeeDee Lamb", "WR")]
         state = _state()

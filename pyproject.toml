@@ -34,6 +34,7 @@ version = {attr = "draft_assistant.__version__"}
 [tool.setuptools.package-data]
 draft_assistant = [
   "web/static/*.html",
+  "web/static/*.css",
   "web/static/*.jsx",
   "web/static/components/*.js",
   "web/static/components/*.jsx",

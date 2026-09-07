@@ -171,6 +171,58 @@ function getSnakeTeam(pickNum, numTeams) {
   return round % 2 === 1 ? pos : numTeams - pos + 1;
 }
 
+// ESPN cookies belong to this page session, never a persisted league object.
+const espnAccess = new Map();
+function getEspnAccess(leagueId) { return { ...(espnAccess.get(leagueId) || {}) }; }
+function setEspnAccess(leagueId, credentials) {
+  if (!credentials) espnAccess.delete(leagueId);
+  else espnAccess.set(leagueId, { espnS2: credentials.espnS2 || '', swid: credentials.swid || '' });
+}
+
+function linkedProvider(league) {
+  if (league.platform === 'ESPN' && league.espnLeagueId) return 'ESPN';
+  if (league.platform === 'Sleeper' && (league.sleeperLeagueId || league.sleeperDraftId)) return 'Sleeper';
+  if (league.platform === 'Yahoo' && league.yahooLeagueKey) return 'Yahoo';
+  return null;
+}
+
+// A seat can change while the same owner remains selected. Prefer provider IDs;
+// older browser leagues can recover by a unique exact team name once.
+function remappedTeamSlot(previous, next, slot) {
+  const id = (previous.teamIds || [])[slot - 1];
+  if (id != null && id !== '') {
+    const index = (next.teamIds || []).findIndex(value => String(value) === String(id));
+    return index < 0 ? null : index + 1;
+  }
+  const name = (previous.teamNames || [])[slot - 1];
+  if (!name || (previous.teamNames || []).filter(value => value === name).length !== 1) return null;
+  const matches = (next.teamNames || []).map((value, index) => value === name ? index + 1 : null).filter(Boolean);
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function mergeLeagueSettings(league, patch) {
+  const next = { ...league, ...patch };
+  // Only imports contain raw scoring; live patches contain draft metadata only.
+  if (patch.scoring) { next.importedScoring = patch.scoring; delete next.scoring; }
+  if (patch.teamIds || patch.teamNames) {
+    next.draftPosition = remappedTeamSlot(league, next, league.draftPosition)
+      || patch.draftPosition || null;
+    next.teamSelectionRequired = !next.draftPosition;
+  }
+  return next;
+}
+
+function remapLeaguePicks(picks, previous, next) {
+  const unchanged = JSON.stringify(previous.teamIds || []) === JSON.stringify(next.teamIds || [])
+    && JSON.stringify(previous.teamNames || []) === JSON.stringify(next.teamNames || []);
+  if (unchanged) return picks;
+  return picks.map(pick => {
+    const teamNum = remappedTeamSlot(previous, next, pick.teamNum);
+    if (!teamNum) throw new Error('Could not match a team with recorded picks. Check the team names and draft order before refreshing.');
+    return { ...pick, teamNum };
+  });
+}
+
 function getCurrentRoundPick(totalPicks, numTeams) {
   const round = Math.ceil((totalPicks + 1) / numTeams);
   const pickInRound = ((totalPicks) % numTeams) + 1;
