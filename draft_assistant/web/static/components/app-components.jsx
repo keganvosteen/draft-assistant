@@ -366,7 +366,7 @@ function ImportPanel({ form, setForm }) {
           <div style={{display:'flex', gap:8, alignItems:'center'}}>
             <Input value={espnId} onChange={e=>setEspnId(e.target.value)}
               aria-label="ESPN league ID"
-              placeholder="ESPN League ID (e.g. 75034031)" style={{flex:1}} />
+              placeholder="League ID or ESPN league URL" style={{flex:1}} />
             <Btn onClick={importEspn} disabled={importing || !espnId.trim()}>
               {importing ? 'Importing…' : 'Import'}
             </Btn>
