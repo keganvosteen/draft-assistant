@@ -1244,8 +1244,8 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   const [live, setLive] = React.useState({ on:false, busy:false, ok:null, msg:null, status:'', unmatched:0 });
   const liveRef = React.useRef({ controller:null });
   const provider = linkedProvider(league);
-  const canLiveSync = provider === 'Sleeper' && (league.draftType || 'snake') === 'snake';
-  const canDraftSync = provider === 'Sleeper' || provider === 'ESPN';
+  const canLiveSync = (provider === 'Sleeper' || provider === 'Yahoo') && (league.draftType || 'snake') === 'snake';
+  const canDraftSync = provider === 'Sleeper' || provider === 'ESPN' || provider === 'Yahoo';
   const draftComplete = league.pickSource !== 'rosters' && picks.length >= rosterTotal(league.rosterSlots) * league.numTeams;
   const trackingBlocked = league.teamSelectionRequired || !league.draftPosition
     || draftComplete || league.draftHasTradedPicks || league.pickSource === 'rosters' || (league.draftType || 'snake') !== 'snake';
@@ -1477,7 +1477,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     });
   };
 
-  // Only Sleeper exposes a live feed. ESPN syncs its published draft history.
+  // Sleeper and Yahoo expose live feeds. ESPN syncs its published draft history.
   const picksRef = React.useRef(picks);
   picksRef.current = picks;
   const picksSig = list => (list || []).map(pk => `${pk.pickNum}:${pk.teamNum}:${pk.playerId || ''}`).join(',');
@@ -1504,7 +1504,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
         }
         if (!Array.isArray(d.picks) || d.leagueId !== league.id) throw new Error('The draft response did not match this league.');
         const synced = d.picks || [];
-        // Only push when Sleeper and the board actually differ — replacing
+        // Only push when the provider and the board actually differ — replacing
         // picks re-runs the rollout, which is the expensive part.
         const patch = d.leaguePatch || {};
         const nextLeague = mergeLeagueSettings(league, patch);
@@ -1552,9 +1552,10 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     }
     const start = () => setLive(s => ({ ...s, on:true, msg:'Connecting…' }));
     if (picks.length === 0) { start(); return; }
+    const providerName = league.yahooLeagueKey ? 'Yahoo' : 'Sleeper';
     confirmDialog({
-      title: 'Follow the Sleeper draft live?',
-      body: 'Sleeper becomes the source of truth: the picks on this board are replaced by whatever Sleeper reports, and keep updating every 5 seconds.',
+      title: `Follow the ${providerName} draft live?`,
+      body: `${providerName} becomes the source of truth: the picks on this board are replaced by whatever ${providerName} reports, and keep updating every 5 seconds.`,
       confirmLabel: 'Go live',
     }).then(ok => { if (ok) start(); });
   };
@@ -1596,7 +1597,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     isMobile && { label: 'Picks & opponents', onClick: () => setShowOppDrawer(true) },
     isMobile && { type:'sep' },
     { type:'label', label:'Live draft' },
-    canLiveSync && { label: live.on ? 'Stop following Sleeper' : 'Follow Sleeper live',
+    canLiveSync && { label: live.on ? `Stop following ${provider}` : `Follow ${provider} live`,
       hint: live.on ? 'on' : null, onClick: toggleLive },
     canDraftSync && !live.on && { label: provider === 'ESPN' ? 'Sync completed ESPN draft' : 'Sync picks once', disabled:live.busy, onClick: syncOnce },
     { label: 'Paste draft history', disabled:editingBlocked, onClick: () => setShowPasteModal(true) },

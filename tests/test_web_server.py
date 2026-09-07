@@ -294,5 +294,43 @@ class TestContextAndUpdateEndpoints(_ServerFixture):
         self.assertFalse(payload["updateAvailable"])
 
 
+class TestYahooEndpoints(_ServerFixture):
+    def test_yahoo_status_endpoint(self):
+        status, body = self.request("GET", "/api/yahoo/status")
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertIn("hasCredentials", payload)
+        self.assertIn("hasToken", payload)
+        self.assertIn("redirectUri", payload)
+
+    def test_yahoo_import_requires_league_key(self):
+        status, body = self.request("POST", "/api/yahoo/import", {"leagueKey": ""})
+        self.assertEqual(status, 400)
+        self.assertIn(b"leagueKey required", body)
+
+    def test_yahoo_draft_requires_league_key(self):
+        status, body = self.request("POST", "/api/yahoo/draft", {"league": {}})
+        self.assertEqual(status, 400)
+        self.assertIn(b"missing yahooLeagueKey", body)
+
+    def test_yahoo_draft_sync_requires_league_key(self):
+        status, body = self.request("POST", "/api/draft-sync", {"league": {"platform": "Yahoo"}})
+        self.assertEqual(status, 400)
+        self.assertIn(b"missing yahooLeagueKey", body)
+
+    def test_yahoo_draft_sync_success(self):
+        from unittest.mock import patch
+        with patch.object(DraftAPIHandler, "_yahoo_access_token", return_value="fake-token"), \
+             patch("draft_assistant.importers.yahoo.fetch_draft_picks", return_value=[]):
+            status, body = self.request("POST", "/api/draft-sync", {
+                "league": {"platform": "Yahoo", "yahooLeagueKey": "nfl.l.12345", "numTeams": 10, "draftPosition": 1}
+            })
+            self.assertEqual(status, 200)
+            payload = json.loads(body.decode("utf-8"))
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["source"], "Yahoo")
+            self.assertEqual(payload["leagueKey"], "nfl.l.12345")
+
+
 if __name__ == "__main__":
     unittest.main()

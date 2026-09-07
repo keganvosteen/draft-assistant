@@ -321,7 +321,11 @@ function ImportPanel({ form, setForm }) {
       : { clientId: yh.clientId.trim(), clientSecret: yh.clientSecret.trim(), redirectUri: yh.redirectUri.trim() };
     yhPost('/api/yahoo/connect', body, d => {
       yhSet({ authUrl: d.authUrl, msg: { ok: true, text: 'Authorize in the opened tab, then paste the code below.' } });
-      window.open(d.authUrl, '_blank');
+      if (window.pywebview?.api?.open_external_url) {
+        window.pywebview.api.open_external_url(d.authUrl);
+      } else {
+        window.open(d.authUrl, '_blank');
+      }
     });
   };
   const yahooExchange = () => {
@@ -335,7 +339,8 @@ function ImportPanel({ form, setForm }) {
     if (!yh.leagueKey) return;
     yhPost('/api/yahoo/import', { leagueKey: yh.leagueKey }, d => {
       setForm(f => importedLeague(f, d, 'Yahoo'));
-      yhSet({ msg: { ok: true, text: `Imported “${d.name}” — ${d.numTeams} teams, ${(d.teamNames || []).length} names, ${d.scoringType}` } });
+      const seat = d.draftPosition ? `, your seat #${d.draftPosition}` : '';
+      yhSet({ msg: { ok: true, text: `Imported “${d.name}” — ${d.numTeams} teams${seat}, ${(d.teamNames || []).length} names, ${d.scoringType}` } });
     });
   };
 

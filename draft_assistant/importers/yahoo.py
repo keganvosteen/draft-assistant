@@ -17,31 +17,101 @@ import json
 import time
 from typing import Dict, List, Optional
 from urllib.error import HTTPError
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
-from ..platform_sync import SyncedRosterPlayer, SyncedRosterTeam
+from ..platform_sync import SyncedDraftPick, SyncedRosterPlayer, SyncedRosterTeam
 
 AUTH_URL = "https://api.login.yahoo.com/oauth2/request_auth"
 TOKEN_URL = "https://api.login.yahoo.com/oauth2/get_token"
 API_BASE = "https://fantasysports.yahooapis.com/fantasy/v2"
 DEFAULT_REDIRECT = "oob"  # also works with a registered https://localhost/ URI
 
-# Yahoo NFL stat_id -> app scoring key. The high-confidence offensive set; the
-# stat_modifiers values become the per-unit weights. (K/DST stat ids vary and
-# are left to the consensus' own K/DST handling.)
+# Yahoo NFL stat_id -> app scoring key. Comprehensive league-specific mapping
+# covering passing, rushing, receiving, fumbles, kicking, and defense/special teams.
 YAHOO_STAT_IDS = {
-    4: "pass_yd", 5: "pass_td", 6: "pass_int",
-    9: "rush_yd", 10: "rush_td",
-    11: "rec", 12: "rec_yd", 13: "rec_td",
+    # Passing
+    4: "pass_yd", 5: "pass_td", 6: "pass_int", 7: "pass_2pt",
+    # Rushing
+    9: "rush_yd", 10: "rush_td", 14: "rush_2pt",
+    # Receiving
+    11: "rec", 12: "rec_yd", 13: "rec_td", 15: "rec_2pt",
+    # Misc / Turnovers
+    16: "fumbles", 17: "fumbles_total",
+    # Kicking
+    19: "fg_0_19", 20: "fg_20_29", 21: "fg_30_39", 22: "fg_40_49",
+    23: "fg_50_plus", 24: "fg_60_plus",
+    25: "pat_made", 26: "fg_miss",
+    # Defense / Special Teams
+    27: "sack", 28: "def_int", 29: "fumble_recovery",
+    30: "int_ret_td", 31: "safety", 32: "blk_kick", 33: "krt_td",
+}
+
+# Standard Yahoo stat names for dynamic matching against stat_categories definitions
+YAHOO_STAT_NAMES = {
+    "passing yards": "pass_yd",
+    "passing touchdowns": "pass_td",
+    "passing interceptions": "pass_int",
+    "passing 2-point conversions": "pass_2pt",
+    "2-point conversions": "pass_2pt",
+    "rushing yards": "rush_yd",
+    "rushing touchdowns": "rush_td",
+    "rushing 2-point conversions": "rush_2pt",
+    "receptions": "rec",
+    "receiving yards": "rec_yd",
+    "receiving touchdowns": "rec_td",
+    "receiving 2-point conversions": "rec_2pt",
+    "fumbles lost": "fumbles",
+    "total fumbles": "fumbles_total",
+    "fumbles": "fumbles_total",
+    "field goals 0-19 yards": "fg_0_19",
+    "field goals 20-29 yards": "fg_20_29",
+    "field goals 30-39 yards": "fg_30_39",
+    "field goals 40-49 yards": "fg_40_49",
+    "field goals 50+ yards": "fg_50_plus",
+    "field goals 50 yards or more": "fg_50_plus",
+    "field goals 60+ yards": "fg_60_plus",
+    "point after attempt made": "pat_made",
+    "pat made": "pat_made",
+    "point after attempt missed": "pat_miss",
+    "field goals missed": "fg_miss",
+    "sacks": "sack",
+    "fumble recoveries": "fumble_recovery",
+    "fumbles recovered": "fumble_recovery",
+    "safeties": "safety",
+    "blocked kicks": "blk_kick",
+    "defensive touchdowns": "int_ret_td",
+    "kickoff and punt return touchdowns": "krt_td",
+    "return touchdowns": "krt_td",
 }
 
 # Yahoo roster-position label -> our roster key (typed flex preserved).
 YAHOO_POS = {
-    "QB": "QB", "RB": "RB", "WR": "WR", "TE": "TE", "K": "K", "DEF": "DST",
-    "W/R/T": "FLEX", "W/R": "RBWR", "W/T": "WRTE", "Q/W/R/T": "SUPERFLEX",
-    "BN": "BN", "IR": "IR",
+    "QB": "QB", "RB": "RB", "WR": "WR", "TE": "TE", "K": "K", "DEF": "DST", "D": "DST",
+    "W/R/T": "FLEX", "W/R": "RBWR", "W/T": "WRTE", "Q/W/R/T": "SUPERFLEX", "OP": "SUPERFLEX",
+    "FLEX": "FLEX", "BN": "BN", "IR": "IR",
 }
+
+
+def extract_code(code_or_url: str) -> str:
+    """Extract authorization code from either a raw code or a full redirect URL.
+
+    Users frequently copy the full address bar after Yahoo redirects (e.g.
+    ``https://localhost/?code=xyz123``). This reliably pulls out the code parameter.
+    """
+    raw = (code_or_url or "").strip()
+    if "?" in raw or raw.startswith("http://") or raw.startswith("https://"):
+        try:
+            parsed = urlparse(raw)
+            qs = parse_qs(parsed.query)
+            if "code" in qs and qs["code"]:
+                return qs["code"][0].strip()
+        except Exception:
+            pass
+    if "code=" in raw:
+        part = raw.split("code=", 1)[1]
+        return part.split("&", 1)[0].strip()
+    return raw
 
 
 # ── OAuth ─────────────────────────────────────────────────────────────────────
@@ -199,6 +269,85 @@ def fetch_league_rosters(access_token: str, league_key: str) -> List[SyncedRoste
     return teams
 
 
+def _parse_scoring(settings: Dict) -> Dict[str, float]:
+    """Parse league-specific scoring settings from Yahoo stat_modifiers and stat_categories."""
+    id_map: Dict[int, str] = dict(YAHOO_STAT_IDS)
+
+    # Enhance with named stat definitions from stat_categories if available
+    for st in _find_all(settings, "stat"):
+        if not isinstance(st, dict):
+            continue
+        sid = _to_int(st.get("stat_id"))
+        if not sid:
+            continue
+        name = str(st.get("name") or "").strip().lower()
+        pos_type = str(st.get("position_type") or "").strip().upper()
+        if not name:
+            continue
+        if "interception" in name:
+            id_map[sid] = "def_int" if pos_type in ("DT", "DEF", "DST") else "pass_int"
+        elif "fumble" in name and "lost" in name:
+            id_map[sid] = "fumbles"
+        elif name in YAHOO_STAT_NAMES:
+            id_map[sid] = YAHOO_STAT_NAMES[name]
+
+    scoring: Dict[str, float] = {}
+    for st in _find_all(settings, "stat"):
+        if not isinstance(st, dict):
+            continue
+        sid = _to_int(st.get("stat_id"))
+        val = st.get("value")
+        if sid in id_map and val is not None:
+            try:
+                scoring[id_map[sid]] = float(val)
+            except (TypeError, ValueError):
+                pass
+
+    # Bucket short field goals: if 0-19, 20-29, 30-39 are specified, take average for fg_0_39
+    short_fgs = [scoring[k] for k in ("fg_0_19", "fg_20_29", "fg_30_39") if k in scoring]
+    if short_fgs:
+        scoring["fg_0_39"] = round(sum(short_fgs) / len(short_fgs), 3)
+
+    # 50+ kicks: spread across fg_50_59 and fg_60_plus if not separately configured
+    if "fg_50_plus" in scoring:
+        val = scoring.pop("fg_50_plus")
+        scoring.setdefault("fg_50_59", val)
+        scoring.setdefault("fg_60_plus", val)
+
+    # Defensive & return TDs: ensure both interception and fumble return TDs are credited
+    if "int_ret_td" in scoring:
+        scoring.setdefault("fum_ret_td", scoring["int_ret_td"])
+    if "krt_td" in scoring:
+        scoring.setdefault("prt_td", scoring["krt_td"])
+
+    return scoring
+
+
+def _parse_teams(teams: Dict) -> List[Dict]:
+    """Parse team metadata: team_key, name, draft_position, and user login ownership."""
+    parsed: List[Dict] = []
+    seen = set()
+    for tb in _find_all(teams, "team"):
+        team_key = _first(tb, "team_key")
+        if not team_key or team_key in seen:
+            continue
+        name = _first(tb, "name") or team_key
+        draft_pos = _to_int(_first(tb, "draft_position"))
+        # Check current login ownership at team level and within manager blocks
+        is_owned = _first(tb, "is_owned_by_current_login") in (1, "1", True)
+        for mgr in _find_all(tb, "manager"):
+            if isinstance(mgr, dict) and mgr.get("is_current_login") in (1, "1", True):
+                is_owned = True
+        seen.add(team_key)
+        parsed.append({
+            "team_key": str(team_key),
+            "name": str(name),
+            "draft_position": draft_pos,
+            "is_current_login": is_owned,
+        })
+    return parsed
+
+
 def _parse_league(settings: Dict, teams: Dict, league_key: str) -> Dict[str, object]:
     """Pure parse of Yahoo's nested settings/teams JSON (testable offline)."""
     name = _first(settings, "name") or league_key
@@ -215,36 +364,124 @@ def _parse_league(settings: Dict, teams: Dict, league_key: str) -> Dict[str, obj
     for key in ("QB", "RB", "WR", "TE", "FLEX", "K", "DST", "BN"):
         roster.setdefault(key, 0)
 
-    # Scoring: stat_modifiers value per stat_id -> app key.
-    scoring: Dict[str, float] = {}
-    for st in _find_all(settings, "stat"):
-        if not isinstance(st, dict):
-            continue
-        sid = _to_int(st.get("stat_id"))
-        if sid in YAHOO_STAT_IDS and st.get("value") is not None:
-            try:
-                scoring[YAHOO_STAT_IDS[sid]] = float(st["value"])
-            except (TypeError, ValueError):
-                pass
+    scoring = _parse_scoring(settings)
 
-    # Team names (each team block carries name + a managers list).
-    team_names: List[str] = []
-    for tb in _find_all(teams, "team"):
-        nm = _first(tb, "name")
-        if isinstance(nm, str) and nm:
-            team_names.append(nm)
-    # de-dup preserving order
-    seen = set()
-    team_names = [n for n in team_names if not (n in seen or seen.add(n))]
+    parsed_teams = _parse_teams(teams)
+    # When Yahoo provides draft_position on teams, sort by it so teamNames are in draft order
+    has_positions = any(t.get("draft_position") is not None for t in parsed_teams)
+    if has_positions:
+        parsed_teams.sort(key=lambda t: t.get("draft_position") or 999)
 
-    return {
+    team_names = [t["name"] for t in parsed_teams if t.get("name")]
+
+    # Detect user's own team and draft seat
+    user_team = next((t for t in parsed_teams if t.get("is_current_login")), None)
+    draft_position = None
+    if user_team:
+        if user_team.get("draft_position"):
+            draft_position = user_team["draft_position"]
+        elif user_team["name"] in team_names:
+            draft_position = team_names.index(user_team["name"]) + 1
+
+    draft_type_raw = str(_first(settings, "draft_type") or "").lower()
+    draft_type = "auction" if "auction" in draft_type_raw else "snake"
+    draft_status = str(_first(settings, "draft_status") or "")
+    season = str(_first(settings, "season") or "")
+
+    out: Dict[str, object] = {
         "name": name,
         "numTeams": num_teams or len(team_names) or 10,
         "rosterSlots": roster,
         "scoring": scoring,
         "teamNames": team_names,
         "yahooLeagueKey": league_key,
+        "draftType": draft_type,
     }
+    if season:
+        out["season"] = season
+    if draft_status:
+        out["draftStatus"] = draft_status
+    if draft_position:
+        out["draftPosition"] = draft_position
+    if user_team and user_team.get("name"):
+        out["myTeamName"] = user_team["name"]
+
+    return out
+
+
+def fetch_draft_picks(access_token: str, league_key: str) -> List[SyncedDraftPick]:
+    """Fetch real draft picks from Yahoo's draftresults API in pick order."""
+    draft_data = _api_get(access_token, f"league/{_seg(league_key)}/draftresults")
+    teams_data = _api_get(access_token, f"league/{_seg(league_key)}/teams")
+    rosters: Optional[List[SyncedRosterTeam]] = None
+    try:
+        rosters = fetch_league_rosters(access_token, league_key)
+    except Exception:
+        pass
+    return _parse_draft_picks(draft_data, teams_data, rosters)
+
+
+def _parse_draft_picks(
+    draft_data: Dict,
+    teams_data: Dict,
+    rosters: Optional[List[SyncedRosterTeam]] = None,
+) -> List[SyncedDraftPick]:
+    """Pure parse of Yahoo draft results into SyncedDraftPick objects."""
+    parsed_teams = _parse_teams(teams_data)
+    seat_by_team: Dict[str, int] = {}
+    for idx, t in enumerate(parsed_teams, 1):
+        seat = t.get("draft_position") or idx
+        seat_by_team[t["team_key"]] = seat
+
+    player_by_key: Dict[str, SyncedRosterPlayer] = {}
+    if rosters:
+        for team in rosters:
+            for p in team.players:
+                if p.provider_id:
+                    pid = p.provider_id.split(":", 1)[-1]
+                    player_by_key[pid] = p
+                    player_by_key[p.provider_id] = p
+                if p.name:
+                    player_by_key[p.name] = p
+
+    picks: List[SyncedDraftPick] = []
+    for dr in _find_all(draft_data, "draft_result"):
+        if not isinstance(dr, dict):
+            continue
+        pick_no = _to_int(dr.get("pick"))
+        if not pick_no:
+            continue
+        team_key = str(dr.get("team_key") or "")
+        team_num = seat_by_team.get(team_key, 0)
+        player_key = str(dr.get("player_key") or "")
+        player_id = player_key.split(".p.", 1)[-1] if ".p." in player_key else player_key
+
+        flat = _flatten_yahoo_player(dr)
+        name = flat.get("name")
+        position = flat.get("position")
+        team = flat.get("team")
+
+        if (not name or not position) and (player_id in player_by_key or player_key in player_by_key):
+            matched_rp = player_by_key.get(player_id) or player_by_key.get(player_key)
+            if matched_rp:
+                name = name or matched_rp.name
+                position = position or matched_rp.position
+                team = team or matched_rp.team
+
+        provider_id = f"yahoo:{player_id}" if player_id else None
+        picks.append(SyncedDraftPick(
+            pick_no=pick_no,
+            team_num=team_num,
+            player=SyncedRosterPlayer(
+                name=name or f"Player {player_id}",
+                position=position or "",
+                team=team,
+                provider_id=provider_id,
+            ),
+        ))
+
+    picks.sort(key=lambda p: p.pick_no)
+    return picks
 
 
 def _team_key_names(teams: Dict) -> List[tuple[str, str]]:

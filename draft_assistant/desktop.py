@@ -91,13 +91,19 @@ class DesktopAPI:
         return None
 
     def open_external_url(self, url: str) -> bool:
-        """Open only this project's HTTPS release links outside pywebview."""
+        """Open project HTTPS release links and Yahoo OAuth in the system browser."""
         parsed = urlsplit(str(url or ""))
-        if (
-            parsed.scheme != "https"
-            or parsed.hostname != "github.com"
-            or not parsed.path.startswith("/keganvosteen/draft-assistant/releases/")
-        ):
+        if parsed.scheme != "https":
+            return False
+        is_release = (
+            parsed.hostname == "github.com"
+            and parsed.path.startswith("/keganvosteen/draft-assistant/releases/")
+        )
+        is_yahoo_auth = (
+            parsed.hostname in ("api.login.yahoo.com", "login.yahoo.com")
+            and parsed.path.startswith("/oauth2/")
+        )
+        if not (is_release or is_yahoo_auth):
             return False
         return bool(webbrowser.open(url))
 

@@ -73,3 +73,21 @@ class DesktopPersistenceTests(unittest.TestCase):
                     run_desktop()
             server.shutdown.assert_called_once()
             server.server_close.assert_called_once()
+
+    def test_open_external_url_allowlist(self):
+        api = DesktopAPI()
+        with patch("webbrowser.open", return_value=True) as mock_open:
+            # Valid GitHub releases
+            self.assertTrue(api.open_external_url("https://github.com/keganvosteen/draft-assistant/releases/tag/v0.6.0"))
+            mock_open.assert_called_with("https://github.com/keganvosteen/draft-assistant/releases/tag/v0.6.0")
+
+            # Valid Yahoo OAuth
+            self.assertTrue(api.open_external_url("https://api.login.yahoo.com/oauth2/request_auth?client_id=abc"))
+            self.assertTrue(api.open_external_url("https://login.yahoo.com/oauth2/request_auth?client_id=abc"))
+
+            # Disallowed URLs
+            self.assertFalse(api.open_external_url("http://api.login.yahoo.com/oauth2/request_auth"))
+            self.assertFalse(api.open_external_url("https://evil.com/oauth2/request_auth"))
+            self.assertFalse(api.open_external_url("https://login.yahoo.com/account/security"))
+            self.assertFalse(api.open_external_url("https://github.com/malicious/repo"))
+

@@ -505,6 +505,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_yahoo_exchange()
         elif self.path == "/api/yahoo/import":
             self._handle_yahoo_import()
+        elif self.path == "/api/yahoo/draft":
+            self._handle_yahoo_draft()
         elif self.path == "/api/save-draft":
             self._handle_save_draft()
         elif self.path == "/api/load-draft":
@@ -972,7 +974,23 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     self._send_json({"error": "Yahoo league is missing yahooLeagueKey"}, 400)
                     return
                 from ..importers import yahoo
-                rosters = yahoo.fetch_league_rosters(self._yahoo_access_token(), league_key)
+                access_token = self._yahoo_access_token()
+                try:
+                    draft_picks = yahoo.fetch_draft_picks(access_token, league_key)
+                except Exception:
+                    draft_picks = []
+                if draft_picks:
+                    result = synced_draft_to_picks(draft_picks, players, league)
+                    result.update({
+                        "ok": True,
+                        "source": "Yahoo",
+                        "leagueId": league.get("id"),
+                        "leagueName": league.get("name"),
+                        "rostered": len(draft_picks),
+                    })
+                    self._send_json(result)
+                    return
+                rosters = yahoo.fetch_league_rosters(access_token, league_key)
                 source = "Yahoo"
             elif platform == "espn":
                 league_id = str(league.get("espnLeagueId") or body.get("leagueId") or "").strip()
@@ -1073,7 +1091,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 if not league_key:
                     raise ValueError("Yahoo league is missing yahooLeagueKey")
                 info = _import_scoring_type(yahoo.fetch_league(self._yahoo_access_token(), league_key))
-                info["draftOrderReady"] = False
+                info.setdefault("draftOrderReady", bool(info.get("draftPosition") or info.get("draftOrderReady")))
             else:
                 raise ValueError("Import an ESPN, Sleeper, or Yahoo league first.")
             self._send_json({**info, **_draft_league_patch(info, league)})
@@ -1178,8 +1196,27 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 info.update(status=draft.get("status") or "", lastPicked=draft.get("last_picked"))
                 draft_picks = sleeper.fetch_draft_picks(draft_id, draft)
                 live_available = True
+            elif platform == "yahoo":
+                from ..importers import yahoo
+                league_key = str(body.get("leagueKey") or league.get("yahooLeagueKey") or "").strip()
+                if not league_key:
+                    raise ValueError("Yahoo league is missing yahooLeagueKey")
+                access_token = self._yahoo_access_token()
+                draft_picks = yahoo.fetch_draft_picks(access_token, league_key)
+                status = "complete" if (league.get("draftStatus") == "postdraft" or (
+                    draft_picks and len(draft_picks) >= int(league.get("numTeams") or 10) * max(1, sum(int(v or 0) for k, v in (league.get("rosterSlots") or {}).items() if k != "IR"))
+                )) else "in_progress"
+                info = {
+                    "draftType": league.get("draftType") or "snake",
+                    "draftOrderReady": True,
+                    "status": status,
+                    "teamNames": league.get("teamNames"),
+                    "draftPosition": league.get("draftPosition"),
+                }
+                draft_id = f"yahoo:{league_key}"
+                live_available = True
             else:
-                raise ValueError("Draft sync supports imported ESPN and Sleeper leagues. Yahoo supports roster sync.")
+                raise ValueError("Draft sync supports imported ESPN, Sleeper, and Yahoo leagues.")
 
             if info.get("status") != "complete" and info.get("draftType") not in {None, "", "snake"}:
                 self._send_json({
@@ -1199,7 +1236,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             patch["draftHasTradedPicks"] = result.pop("hasTradedPicks")
             result.update({
                 "ok": True,
-                "source": "Sleeper" if platform == "sleeper" else "ESPN",
+                "source": "Sleeper" if platform == "sleeper" else "ESPN" if platform == "espn" else "Yahoo",
                 "draftId": draft_id,
                 "status": info.get("status") or "",
                 "draftType": info.get("draftType") or "snake",
@@ -1208,6 +1245,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 "leaguePatch": patch,
                 "liveAvailable": live_available,
             })
+            if platform == "yahoo":
+                result["leagueKey"] = league_key
             self._send_json(result)
         except Exception as exc:
             self._send_platform_error(exc, platform)
@@ -1290,7 +1329,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         try:
             from ..importers import yahoo
             body = self._read_body()
-            code = str(body.get("code") or "").strip()
+            code = yahoo.extract_code(str(body.get("code") or ""))
             data = self._yahoo_load()
             if not data.get("client_id"):
                 self._send_json({"error": "Enter your Yahoo credentials first"}, 400)
@@ -1323,6 +1362,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._send_json(_import_scoring_type(info))
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
+
+    def _handle_yahoo_draft(self):
+        """Compatibility route for clients using the Yahoo draft endpoint."""
+        self._handle_draft_sync(platform="yahoo")
 
     def _get_draft_state(self) -> dict:
         paths = ensure_profile(self.profile)
