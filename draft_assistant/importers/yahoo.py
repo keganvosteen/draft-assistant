@@ -648,6 +648,65 @@ def _to_float(value) -> Optional[float]:
         return None
 
 
+# Yahoo writes ".25", "-1" and "30 yards per point" — a leading-dot decimal is
+# a real value there, so requiring a digit before the point silently drops it.
+_NUMBER_RE = r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)"
+
+
+def _split_settings_row(line: str) -> List[str]:
+    """Split a settings line into its label and value cells."""
+    if "\t" in line:
+        return [cell.strip() for cell in line.split("\t")]
+    if ":" in line:
+        label, _, rest = line.partition(":")
+        return [label.strip(), rest.strip()]
+    return [cell.strip() for cell in re.split(r" {2,}", line.strip())]
+
+
+def _settings_rows(raw: str) -> Dict[str, List[str]]:
+    """Map each settings label to the value cells on its row.
+
+    Yahoo's scoring table renders a stat the league left alone on one line
+    ("Passing Touchdowns\t4\t") but splits an *overridden* one across three:
+    the label, a "Yahoo Default" marker, then a values row carrying the
+    league's value first and Yahoo's default second. Reading rows this way is
+    what lets the league's own number win.
+    """
+    rows: Dict[str, List[str]] = {}
+    lines = raw.splitlines()
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        cells = _split_settings_row(line)
+        label = cells[0].rstrip(":").strip().lower() if cells else ""
+        if not label or label in rows:
+            continue
+        values = [cell for cell in cells[1:] if cell]
+        if not any(re.search(_NUMBER_RE, cell) for cell in values):
+            # Look just far enough ahead to clear the "Yahoo Default" marker.
+            for ahead in lines[index + 1:index + 3]:
+                if ahead.strip().lower() == "yahoo default":
+                    continue
+                if re.search(_NUMBER_RE, ahead):
+                    values = [c for c in _split_settings_row(ahead) if c]
+                break
+        if values:
+            rows[label] = values
+    return rows
+
+
+def _row_value(rows: Dict[str, List[str]], label: str) -> Optional[float]:
+    """First number on a label's row — the league value, not Yahoo's default."""
+    for cell in rows.get(label.lower(), []):
+        match = re.search(_NUMBER_RE, cell)
+        if match:
+            try:
+                return float(match.group())
+            except ValueError:
+                return None
+    return None
+
+
 def parse_settings_text(text: str) -> Dict[str, object]:
     """Parse copied/pasted text from a Yahoo Fantasy league settings page."""
     raw = text.strip()
@@ -721,6 +780,8 @@ def parse_settings_text(text: str) -> Dict[str, object]:
 
     # 5. Scoring settings
     scoring = {}
+    rows = _settings_rows(raw)
+
     def _parse_num(pat, default=None):
         m = re.search(pat, raw, re.I)
         if not m:
@@ -730,75 +791,131 @@ def parse_settings_text(text: str) -> Dict[str, object]:
         except (ValueError, TypeError):
             return default
 
+    def _stat(labels, pat, default=None):
+        """The league's value for a stat, falling back to a loose search.
+
+        Reading the settings table row-wise is what picks up an *overridden*
+        stat: Yahoo puts a "Yahoo Default" marker line between the label and
+        the values, which the flat regex cannot bridge, so every customized
+        scoring rule silently kept Yahoo's default instead.
+        """
+        for label in labels:
+            value = _row_value(rows, label)
+            if value is not None:
+                return value
+        return _parse_num(pat, default)
+
     # Passing
-    pass_yd_raw = _parse_num(r"Passing Yards?\s*[:\t]?\s*(\d+(?:\.\d+)?)")
+    pass_yd_raw = _stat(["Passing Yards"], r"Passing Yards?\s*[:\t]?\s*(\d+(?:\.\d+)?)")
     if pass_yd_raw is not None:
         scoring["pass_yd"] = round(1.0 / pass_yd_raw, 4) if pass_yd_raw >= 1 else pass_yd_raw
     else:
         scoring["pass_yd"] = 0.04
 
-    scoring["pass_td"] = _parse_num(r"Passing Touchdowns?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 4.0)
-    scoring["pass_int"] = _parse_num(r"(?:Interceptions|Interceptions Thrown|Pass Int)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", -2.0)
+    scoring["pass_td"] = _stat(["Passing Touchdowns"], r"Passing Touchdowns?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 4.0)
+    scoring["pass_int"] = _stat(["Interceptions", "Interceptions Thrown", "Pass Int"], r"(?:Interceptions|Interceptions Thrown|Pass Int)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", -2.0)
+    # An offensive "Sacks" row is the sack a QB takes, not a defensive sack.
+    sack_taken = _row_value(rows, "Sacks")
+    if sack_taken is not None:
+        scoring["sack_taken"] = sack_taken
 
     # Rushing
-    rush_yd_raw = _parse_num(r"Rushing Yards?\s*[:\t]?\s*(\d+(?:\.\d+)?)")
+    rush_yd_raw = _stat(["Rushing Yards"], r"Rushing Yards?\s*[:\t]?\s*(\d+(?:\.\d+)?)")
     if rush_yd_raw is not None:
         scoring["rush_yd"] = round(1.0 / rush_yd_raw, 4) if rush_yd_raw >= 1 else rush_yd_raw
     else:
         scoring["rush_yd"] = 0.1
 
-    scoring["rush_td"] = _parse_num(r"Rushing Touchdowns?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 6.0)
+    scoring["rush_td"] = _stat(["Rushing Touchdowns"], r"Rushing Touchdowns?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 6.0)
 
     # Receiving
-    rec = _parse_num(r"Receptions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 0.5)
+    rec = _stat(["Receptions", "Reception"], r"Receptions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 0.5)
     scoring["rec"] = rec
-    rec_yd_raw = _parse_num(r"Receiving Yards?\s*[:\t]?\s*(\d+(?:\.\d+)?)")
+    rec_yd_raw = _stat(["Receiving Yards"], r"Receiving Yards?\s*[:\t]?\s*(\d+(?:\.\d+)?)")
     if rec_yd_raw is not None:
         scoring["rec_yd"] = round(1.0 / rec_yd_raw, 4) if rec_yd_raw >= 1 else rec_yd_raw
     else:
         scoring["rec_yd"] = 0.1
-    scoring["rec_td"] = _parse_num(r"Receiving Touchdowns?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 6.0)
+    scoring["rec_td"] = _stat(["Receiving Touchdowns"], r"Receiving Touchdowns?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 6.0)
 
     # 2PT & Fumbles
     two_pt = _parse_num(r"(?:2-Point Conversions?|2PT Conversions?)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
     scoring["pass_2pt"] = _parse_num(r"Passing 2-Point Conversions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", two_pt)
     scoring["rush_2pt"] = _parse_num(r"Rushing 2-Point Conversions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", two_pt)
     scoring["rec_2pt"] = _parse_num(r"Receiving 2-Point Conversions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", two_pt)
-    scoring["fumbles"] = _parse_num(r"Fumbles Lost\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", -2.0)
+    scoring["fumbles"] = _stat(["Fumbles Lost"], r"Fumbles Lost\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", -2.0)
     fumbles_tot = _parse_num(r"(?:Total Fumbles|Fumbles Total|Fumbles \(Total\))\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
     if fumbles_tot is not None:
         scoring["fumbles_total"] = fumbles_tot
 
     # Defense
-    scoring["sack"] = _parse_num(r"Sacks?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 1.0)
+    scoring["sack"] = _stat(["Sack"], r"Sacks?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 1.0)
     scoring["def_int"] = _parse_num(r"(?:Interception Return|Interceptions? \(DEF\))\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
-    scoring["fumble_recovery"] = _parse_num(r"Fumble Recover(?:y|ies)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
+    scoring["fumble_recovery"] = _stat(["Fumble Recovery", "Fumble Recoveries"], r"Fumble Recover(?:y|ies)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
     def_td = _parse_num(r"(?:Touchdown \(DEF\)|Defensive Touchdowns?)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 6.0)
     scoring["int_ret_td"] = def_td
     scoring["fum_ret_td"] = def_td
-    scoring["safety"] = _parse_num(r"Safet(?:y|ies)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
-    scoring["blk_kick"] = _parse_num(r"Blocked? Kicks?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
+    scoring["safety"] = _stat(["Safety", "Safeties"], r"Safet(?:y|ies)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
+    scoring["blk_kick"] = _stat(["Block Kick", "Blocked Kick", "Blocked Kicks"], r"Blocked? Kicks?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
 
     # Kicking
-    fg_0_19 = _parse_num(r"Field Goals? 0-19 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
-    fg_20_29 = _parse_num(r"Field Goals? 20-29 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
-    fg_30_39 = _parse_num(r"Field Goals? 30-39 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
+    fg_0_19 = _stat(["Field Goals 0-19 Yards"], r"Field Goals? 0-19 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
+    fg_20_29 = _stat(["Field Goals 20-29 Yards"], r"Field Goals? 20-29 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
+    fg_30_39 = _stat(["Field Goals 30-39 Yards"], r"Field Goals? 30-39 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
     fg_short = [v for v in (fg_0_19, fg_20_29, fg_30_39) if v is not None]
     if fg_short:
         scoring["fg_0_39"] = round(sum(fg_short) / len(fg_short), 2)
     else:
         scoring["fg_0_39"] = 3.0
 
-    scoring["fg_40_49"] = _parse_num(r"Field Goals? 40-49 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 4.0)
-    fg_50 = _parse_num(r"Field Goals? 50\+ Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 5.0)
+    scoring["fg_40_49"] = _stat(["Field Goals 40-49 Yards"], r"Field Goals? 40-49 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 4.0)
+    fg_50 = _stat(["Field Goals 50+ Yards"], r"Field Goals? 50\+ Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 5.0)
     scoring["fg_50_59"] = fg_50
     scoring["fg_60_plus"] = fg_50
-    scoring["pat_made"] = _parse_num(r"(?:Point After Attempt Made|PAT Made)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 1.0)
+    scoring["pat_made"] = _stat(["Point After Attempt Made", "PAT Made"], r"(?:Point After Attempt Made|PAT Made)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 1.0)
     fg_miss = _parse_num(r"Field Goals? Missed\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
     if fg_miss is not None:
         scoring["fg_miss"] = fg_miss
 
-    scoring_type = "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"
+    # A reception value that is not one of the three named formats has to be
+    # carried as custom scoring: the UI rewrites rec from the scoring type
+    # (standard -> 0, half -> 0.5, ppr -> 1), so calling a 0.25-per-reception
+    # league "standard" would silently drop the quarter point per catch.
+    custom_scoring = None
+    if abs(rec - 1.0) < 0.01:
+        scoring_type = "ppr"
+    elif abs(rec - 0.5) < 0.01:
+        scoring_type = "half-ppr"
+    elif rec <= 0.01:
+        scoring_type = "standard"
+    else:
+        scoring_type = "custom"
+
+        def _denominator(per_point: Optional[float], fallback: float) -> float:
+            # customScoring stores yards-per-point; scoring stores points-per-yard.
+            # Snap back to the whole number the settings page showed: 1/30
+            # rounded to 4dp inverts to 30.03, which reads as a typo in the form.
+            if not per_point:
+                return fallback
+            yards = 1.0 / per_point
+            nearest = round(yards)
+            return float(nearest) if abs(yards - nearest) < 0.15 else round(yards, 2)
+
+        custom_scoring = {
+            "passYds": _denominator(scoring.get("pass_yd"), 25),
+            "passTD": scoring.get("pass_td", 4.0),
+            "passInt": scoring.get("pass_int", -2.0),
+            "sackTaken": scoring.get("sack_taken", 0.0),
+            "rushYds": _denominator(scoring.get("rush_yd"), 10),
+            "rushTD": scoring.get("rush_td", 6.0),
+            "recYds": _denominator(scoring.get("rec_yd"), 10),
+            "recTD": scoring.get("rec_td", 6.0),
+            "reception": rec,
+            "twoPt": scoring.get("rec_2pt", 2.0),
+            "fumbleLost": scoring.get("fumbles", -2.0),
+            "fumble": scoring.get("fumbles_total", 0.0),
+            "fumRetTD": scoring.get("fum_ret_td", 6.0),
+        }
 
     # Team names if present
     team_names = []
@@ -819,6 +936,8 @@ def parse_settings_text(text: str) -> Dict[str, object]:
         "scoring": scoring,
         "scoringType": scoring_type,
     }
+    if custom_scoring:
+        out["customScoring"] = custom_scoring
     if team_names and len(team_names) >= 2:
         out["teamNames"] = team_names[:num_teams]
     return out
