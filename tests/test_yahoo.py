@@ -564,6 +564,38 @@ class TestSettingsTextRosterParsing(unittest.TestCase):
         self.assertEqual(roster["FLEX"], 1)
         self.assertEqual(roster["BN"], 6)
 
+    def test_full_page_select_all_ignores_navigation_chrome(self):
+        """The UI tells users to Ctrl+A the whole settings page, so the parser
+        has to find the league inside nav links, footer text and unrelated
+        rows — not treat the first line ("Yahoo Fantasy") as the name."""
+        from draft_assistant.importers.yahoo import parse_settings_text
+        info = parse_settings_text("\n".join([
+            "Yahoo Fantasy", "Sports", "Fantasy", "Mail", "Sign In",
+            "Home", "My Team", "League", "Players", "Scores", "Draft",
+            "Lega di Paca",
+            "League Settings",
+            "League Name", "Lega di Paca",
+            "League ID#", "1088234",
+            "Draft Type", "Live Standard Draft",
+            "Max Teams", "12",
+            "Trade End Date", "Week 11",
+            "Playoff Start Week", "Week 15",
+            "Roster Positions",
+            "QB, WR, WR, RB, RB, TE, W/R/T, K, DEF, BN, BN, BN, BN, BN, BN, IR",
+            "Passing Yards", "25 yards per point",
+            "Interceptions", "-1",
+            "Receptions", "0.5",
+            "Terms of Service", "Privacy Policy", "Help",
+        ]))
+        self.assertEqual(info["name"], "Lega di Paca")
+        self.assertEqual(info["numTeams"], 12)
+        self.assertEqual(info["scoringType"], "half-ppr")
+        self.assertEqual(info["scoring"]["pass_yd"], 0.04)   # "25 yards per point"
+        self.assertEqual(info["scoring"]["pass_int"], -1.0)  # league-specific
+        roster = info["rosterSlots"]
+        self.assertEqual((roster["QB"], roster["RB"], roster["WR"], roster["TE"]), (1, 2, 2, 1))
+        self.assertEqual((roster["FLEX"], roster["K"], roster["DST"], roster["BN"]), (1, 1, 1, 6))
+
 
 if __name__ == "__main__":
     unittest.main()
