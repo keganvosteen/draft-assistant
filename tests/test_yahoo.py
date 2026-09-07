@@ -482,3 +482,64 @@ class TestApplyYahooAdp(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class TestSettingsTextRosterParsing(unittest.TestCase):
+    """The paste fallback is what a user falls back on when Yahoo has not
+    approved their app for API access, so its roster must be exact — a wrong
+    slot count changes the draft's round count and every replacement level."""
+
+    LINE_LAYOUT = "\n".join([
+        "League Settings",
+        "League Name        Anonymous",
+        "Max Teams          12",
+        # Both of these used to donate their number to a position: "Date" ends
+        # in "te" (TE) and "Week" ends in "k" (K).
+        "Trade End Date     Week 11",
+        "Playoffs Start     Week 15",
+        "Quarterback        1",
+        "Running Back       2",
+        "Wide Receiver      2",
+        "Tight End          1",
+        "W/R/T              1",
+        "Kicker             1",
+        "Defense/Special Teams 1",
+        "Bench              6",
+    ])
+
+    def test_unrelated_lines_do_not_donate_counts(self):
+        from draft_assistant.importers.yahoo import parse_settings_text
+        roster = parse_settings_text(self.LINE_LAYOUT)["rosterSlots"]
+        self.assertEqual(roster["TE"], 1)   # not 11, from "Trade End Date"
+        self.assertEqual(roster["K"], 1)    # not 15, from "Playoffs ... Week"
+        self.assertEqual(roster["BN"], 6)
+
+    def test_typed_flex_is_claimed_once(self):
+        from draft_assistant.importers.yahoo import parse_settings_text
+        roster = parse_settings_text(self.LINE_LAYOUT)["rosterSlots"]
+        self.assertEqual(roster["FLEX"], 1)
+        # "W/R/T" also contains "W/R"; it must not add a phantom RBWR slot.
+        self.assertEqual(roster.get("RBWR", 0), 0)
+
+    def test_league_name_survives_the_settings_heading(self):
+        from draft_assistant.importers.yahoo import parse_settings_text
+        # "League Settings" precedes the real row and used to win, leaving the
+        # placeholder name behind.
+        self.assertEqual(parse_settings_text(self.LINE_LAYOUT)["name"], "Anonymous")
+
+    def test_first_line_names_the_league_when_no_label_row(self):
+        from draft_assistant.importers.yahoo import parse_settings_text
+        info = parse_settings_text(
+            "Anonymous\nMax Teams 12\nRoster Positions QB, RB, RB, WR, WR, TE, W/T, K, DEF, BN, BN\n")
+        self.assertEqual(info["name"], "Anonymous")
+        self.assertEqual(info["rosterSlots"]["WRTE"], 1)   # typed flex preserved
+        self.assertEqual(info["rosterSlots"]["BN"], 2)
+
+    def test_one_slot_per_line_layout_counts_each_line(self):
+        from draft_assistant.importers.yahoo import parse_settings_text
+        roster = parse_settings_text(
+            "My Dynasty League\nMax Teams 12\nQB\nRB\nRB\nWR\nWR\nTE\nW/R/T\nK\nDEF\n")["rosterSlots"]
+        self.assertEqual(roster["RB"], 2)
+        self.assertEqual(roster["WR"], 2)
+        self.assertEqual(roster["FLEX"], 1)
+        self.assertEqual(roster["DST"], 1)
