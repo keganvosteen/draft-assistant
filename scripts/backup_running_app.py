@@ -1,4 +1,8 @@
-"""Rescue legacy browser-only league data without restarting its app window.
+"""Rescue legacy league data from an existing session that supports page reload.
+
+Standard older native desktop windows disable Ctrl+R, F5, context menus, and
+developer tools. This bridge cannot reload or rescue those windows. Keep them
+open and follow docs/UPGRADING.md instead; restarting loses the private session.
 
 Run from this checkout with --index pointing at the installed static/index.html,
 --origin the *running* app's http://127.0.0.1:PORT origin, and --data-dir its
@@ -298,7 +302,8 @@ def main() -> int:
             script_url = f"http://127.0.0.1:{server.server_port}/{nonce}/backup.js"
             backup = recovery_dir / f"original-index-{label}.html"
             with temporary_bridge(args.index.resolve(), script_url, backup):
-                print("Keep the existing Draft Assistant window open. Press Ctrl+R in that same window now.", flush=True)
+                print("Reload the same existing Draft Assistant window using its supported reload control.", flush=True)
+                print("Standard older native windows disable reload; do not restart them. See docs/UPGRADING.md.", flush=True)
                 print(f"Waiting up to {args.timeout} seconds for a verified local backup.", flush=True)
                 deadline = time.monotonic() + args.timeout
                 while recovery.result is None and time.monotonic() < deadline:
