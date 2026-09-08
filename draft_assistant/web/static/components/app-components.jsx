@@ -1512,7 +1512,16 @@ function App() {
         if (generation !== workspaceGeneration.current) throw new Error('Roster sync was superseded by restoring a backup.');
         setPicks(prev => ({ ...prev, [lg.id]: d.picks || [] }));
         setLeagues(prev => prev.map(l => l.id === lg.id ? {...l, pickSource:'rosters'} : l));
-        return `Synced ${d.matched || 0} of ${d.rostered || 0} rostered players from ${d.source || lg.platform}.`;
+        const source = d.source || lg.platform;
+        // A sync that finds nothing is not a failure the server can report —
+        // the provider answered, the rosters were simply empty. Say which of
+        // the two causes it is instead of a bare "Synced 0 of 0".
+        if (!d.rostered) {
+          return source === 'ESPN'
+            ? `${source} returned no rostered players. If this league has already drafted, re-enter your espn_s2 and SWID cookies (Edit league → Import) — they are held in memory only and clear whenever the app restarts. If it has not drafted yet, there is nothing to sync.`
+            : `${source} returned no rostered players — nothing to sync until the league drafts.`;
+        }
+        return `Synced ${d.matched || 0} of ${d.rostered} rostered players from ${source}.`;
       });
   }, []);
 

@@ -1094,7 +1094,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             exc.close()
             if platform == "espn" and exc.code in {401, 403}:
                 self._send_json({
-                    "error": "ESPN denied access to this league. For a private league, enter your espn_s2 and SWID session cookies in League settings → Import. Check the league ID and season, and use an ESPN account that belongs to the league.",
+                    "error": "ESPN denied access to this league. For a private league, enter your espn_s2 and SWID session cookies in League settings → Import — they are kept in memory only, so they clear whenever the app restarts and have to be pasted again. Check the league ID and season, use an ESPN account that belongs to the league, and re-copy the cookies if you have signed out of ESPN since.",
                     "code": "espn_auth_required",
                 }, 401)
             elif exc.code == 404:
