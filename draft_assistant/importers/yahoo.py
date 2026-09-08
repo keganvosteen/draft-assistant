@@ -133,6 +133,28 @@ YAHOO_POS = {
 }
 
 
+# Page headings and field labels that are never a league's actual name.
+_NAME_NON_VALUES = ("settings", "name", "http", "draft", "scoring", "roster", "league")
+
+# Roster labels for the line-per-position settings layout, most specific first:
+# parse_settings_text takes the first label that matches a line, so "W/R/T" must
+# be offered as FLEX before "W/R" can claim it as RBWR.
+_LINE_POSITION_LABELS = (
+    (r"Q/W/R/T|Superflex|OP", "SUPERFLEX"),
+    (r"W/R/T|Flex", "FLEX"),
+    (r"W/T", "WRTE"),
+    (r"W/R|R/W", "RBWR"),
+    (r"Quarterbacks?|QB", "QB"),
+    (r"Running Backs?|RB", "RB"),
+    (r"Wide Receivers?|WR", "WR"),
+    (r"Tight Ends?|TE", "TE"),
+    (r"Kickers?|K", "K"),
+    (r"Defense/Special Teams|Defense|D/ST|DST|DEF", "DST"),
+    (r"Bench|BN", "BN"),
+    (r"Injured Reserve|IR", "IR"),
+)
+
+
 def extract_code(code_or_url: str) -> str:
     """Extract authorization code from either a raw code or a full redirect URL.
 
@@ -666,24 +688,49 @@ def parse_settings_text(text: str) -> Dict[str, object]:
     if not raw:
         raise ValueError("Please paste your Yahoo league settings text")
 
-    def field(*labels: str, scope: str = raw) -> Optional[str]:
-        # Clipboard tables can put a value after a colon, tab, or newline.
-        # Exact, anchored labels avoid confusing League ID with League Name,
-        # or the K at the end of Quarterback with the kicker roster row.
-        pattern = (
-            r"^[ \t]*(?:" + "|".join(re.escape(label) for label in labels) + r")"
-            r"(?:[ \t]*:[ \t]*|[ \t]*\t[ \t]*| {2,}|\r?\n[ \t]*)"
-            r"([^\r\n]+)"
+    warnings = []
+    yard_denominators = {}
+
+    def field(*labels: str, scope: str = raw, plain_space: bool = True) -> Optional[str]:
+        # Read the league's first value cell. Overridden Yahoo rows put a
+        # "Yahoo Default" marker between the label and league/default columns.
+        separator = r"(?:[ \t]*:[ \t]*|[ \t]+|$)" if plain_space else r"(?:[ \t]*[:\t][ \t]*|$)"
+        pattern = re.compile(
+            r"^[ \t]*(?:" + "|".join(re.escape(label) for label in labels) + r")" + separator + r"(.*)$",
+            re.I,
         )
-        values = list(dict.fromkeys(
-            match.group(1).strip()
-            for match in re.finditer(pattern, scope, re.I | re.M)
-        ))
+        lines = scope.splitlines()
+        values = []
+        for index, line in enumerate(lines):
+            match = pattern.match(line)
+            if not match:
+                continue
+            value_row = match.group(1)
+            if not value_row.strip() or value_row.strip().lower() == "yahoo default":
+                for ahead in lines[index + 1:index + 4]:
+                    if not ahead.strip() or ahead.strip().lower() == "yahoo default":
+                        continue
+                    value_row = ahead
+                    break
+            cells = [cell.strip() for cell in re.split(r"\t| {2,}", value_row) if cell.strip()]
+            if cells and cells[0] not in values:
+                values.append(cells[0])
         if len(values) > 1:
             raise ValueError(f"Conflicting values for {labels[0]}; paste one league's settings page.")
         return values[0] if values else None
 
-    name = field("League Name") or field("League")
+    def plausible_name(value: Optional[str]) -> Optional[str]:
+        candidate = str(value or "").strip().strip(":|").strip()
+        if (not candidate or len(candidate) > 60
+                or candidate.lower().startswith(_NAME_NON_VALUES)
+                or candidate.lower() in {"yahoo fantasy", "sports", "fantasy", "mail", "sign in",
+                                         "home", "my team", "players", "scores", "help"}):
+            return None
+        return candidate
+
+    name = (plausible_name(field("League Name"))
+            or plausible_name(field("League", plain_space=False))
+            or plausible_name(raw.splitlines()[0]))
     teams_text = field("Max Teams", "Number of Teams", "Teams")
     if not name or not teams_text:
         raise ValueError("Include League Name and Max Teams when copying your Yahoo settings page.")
@@ -701,27 +748,38 @@ def parse_settings_text(text: str) -> Dict[str, object]:
                 raise ValueError(f"Unsupported roster position '{label}'; review the copied Roster Positions row.")
             roster[key] = roster.get(key, 0) + 1
     else:
-        roster_labels = {
-            "QB": ("Quarterback", "QB", "Quarterback (QB)"),
-            "RB": ("Running Back", "RB", "Running Back (RB)"),
-            "WR": ("Wide Receiver", "WR", "Wide Receiver (WR)"),
-            "TE": ("Tight End", "TE", "Tight End (TE)"),
-            "FLEX": ("Flex", "W/R/T", "Flex (W/R/T)"),
-            "WRTE": ("W/T", "Flex (W/T)"),
-            "RBWR": ("W/R", "R/W", "Flex (W/R)", "Flex (R/W)"),
-            "SUPERFLEX": ("Superflex", "Q/W/R/T", "W/R/T/Q", "Superflex (Q/W/R/T)"),
-            "K": ("Kicker", "K", "Kicker (K)"),
-            "DST": ("Defense/Special Teams", "Defense", "DEF", "DST", "Defense (DEF)"),
-            "BN": ("Bench", "BN", "Bench (BN)"),
-            "IR": ("Injured Reserve", "IR", "Injured Reserve (IR)"),
-        }
-        for key, labels in roster_labels.items():
-            count = field(*labels)
-            if count is None:
-                continue
-            if not count.isdigit() or not 0 <= int(count) <= 30:
-                raise ValueError(f"{labels[0]} roster count must be a whole number from 0 to 30.")
-            roster[key] = int(count)
+        lines = raw.splitlines()
+        explicit_counts = {}
+        bare_counts = {}
+        for index, line in enumerate(lines):
+            for label, key in _LINE_POSITION_LABELS:
+                match = re.fullmatch(
+                    rf"\s*(?:{label})\s*(?:\([^)]*\))?\s*[:\t]?\s*([+-]?\d+)?\s*",
+                    line, re.I,
+                )
+                if not match:
+                    continue
+                count = match.group(1)
+                if count is None and index + 1 < len(lines):
+                    following = lines[index + 1].strip()
+                    if re.fullmatch(r"[+-]?\d+", following):
+                        count = following
+                if count is None:
+                    # Abbreviation-only lists contain one slot per line.
+                    # A bare "Defense" scoring heading is not a roster slot.
+                    if line.strip().upper() in YAHOO_POS:
+                        bare_counts[key] = bare_counts.get(key, 0) + 1
+                    break
+                if not count.isdigit() or not 0 <= int(count) <= 30:
+                    raise ValueError(f"{key} roster count must be a whole number from 0 to 30.")
+                if key in explicit_counts and explicit_counts[key] != int(count):
+                    raise ValueError(f"Conflicting roster counts for {key}; paste one league's settings page.")
+                explicit_counts[key] = int(count)
+                break
+        for key in explicit_counts.keys() | bare_counts.keys():
+            if key in explicit_counts and key in bare_counts:
+                raise ValueError(f"Mixed roster counts for {key}; copy one Roster Positions section.")
+            roster[key] = explicit_counts.get(key, bare_counts.get(key, 0))
     if not any(count for key, count in roster.items() if key != "IR"):
         raise ValueError("No roster positions were found. Copy the complete Yahoo league settings page.")
     if sum(roster.values()) > 50:
@@ -731,14 +789,21 @@ def parse_settings_text(text: str) -> Dict[str, object]:
         value = field(*labels, scope=scope)
         if value is None:
             return None
+        base_value, *bonuses = [part.strip() for part in value.split(";")]
+        number_pattern = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)"
         match = re.fullmatch(
-            r"([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(?:(yards? per point)|(points?(?: per yard)?))?",
-            value, re.I,
+            rf"({number_pattern})\s*(?:(yards? per point)|(points?(?: per yard)?))?",
+            base_value, re.I,
         )
         if not match:
-            raise ValueError(
-                f"Could not import {labels[0]} value '{value}'. "
-                "Bonus formulas or other extra rules need manual review."
+            raise ValueError(f"Could not import {labels[0]} value '{value}'; check the copied scoring row.")
+        if bonuses:
+            bonus_pattern = rf"{number_pattern}\s+points?\s+at\s+{number_pattern}\s+yards?"
+            if not yards or not all(re.fullmatch(bonus_pattern, bonus, re.I) for bonus in bonuses):
+                raise ValueError(f"Could not interpret the additional {labels[0]} rules; review the copied row.")
+            warnings.append(
+                f"{labels[0]}: imported the base yardage rate only. "
+                f"Threshold bonuses ({'; '.join(bonuses)}) are not modeled in recommendations."
             )
         parsed = float(match.group(1))
         if not math.isfinite(parsed):
@@ -746,7 +811,8 @@ def parse_settings_text(text: str) -> Dict[str, object]:
         if match.group(2):
             if not yards or parsed <= 0:
                 raise ValueError(f"{labels[0]} yards per point must be greater than zero.")
-            parsed = round(1.0 / parsed, 6)
+            yard_denominators[labels[0]] = parsed
+            parsed = round(1.0 / parsed, 4)
         return parsed
 
     scoring = {}
@@ -760,7 +826,6 @@ def parse_settings_text(text: str) -> Dict[str, object]:
         "rec_td": ("Receiving Touchdowns", "Receiving Touchdown"),
         "fumbles": ("Fumbles Lost",),
         "fumbles_total": ("Total Fumbles", "Fumbles Total", "Fumbles (Total)"),
-        "sack": ("Sacks", "Sack"),
         "fumble_recovery": ("Fumble Recoveries", "Fumble Recovery"),
         "int_ret_td": ("Touchdown (DEF)", "Defensive Touchdowns", "Defensive Touchdown"),
         "safety": ("Safeties", "Safety"),
@@ -781,14 +846,24 @@ def parse_settings_text(text: str) -> Dict[str, object]:
         if value is not None:
             scoring[key] = value
 
-    # Yahoo uses "Interceptions" in both its offense and defense tables. Keep
-    # those sections separate instead of applying the first value to both.
+    # Explicit table headings distinguish QB sacks taken from defensive sacks.
+    # Older simple pastes start the defense rows at "Sacks" instead.
+    offense_header = re.search(r"^[ \t]*Offense(?:[ \t]+|$)", raw, re.I | re.M)
     defense = re.search(
-        r"^[ \t]*(?:Defense(?:/Special Teams)?[ \t]*$|Sacks?[ \t]*(?::|\t|\r?$))",
+        r"^[ \t]*Defense(?:/Special Teams)?(?:[ \t]+(?:League Value|Yahoo)|[ \t]*$)",
         raw, re.I | re.M,
     )
+    if not defense and not offense_header:
+        defense = re.search(r"^[ \t]*Sacks?[ \t]*(?::|\t|\r?$)", raw, re.I | re.M)
     offense_text = raw[:defense.start()] if defense else raw
     defense_text = raw[defense.start():] if defense else ""
+    if offense_header:
+        sack_taken = number("Sacks", "Sack", scope=offense_text)
+        if sack_taken is not None:
+            scoring["sack_taken"] = sack_taken
+    sack = number("Sacks", "Sack", scope=defense_text)
+    if sack is not None:
+        scoring["sack"] = sack
     pass_int = number("Passing Interceptions", "Interceptions Thrown", "Pass Int")
     if pass_int is None:
         pass_int = number("Interceptions", "Interception", scope=offense_text)
@@ -814,7 +889,7 @@ def parse_settings_text(text: str) -> Dict[str, object]:
     if short_fgs:
         scoring["fg_0_39"] = round(sum(short_fgs) / len(short_fgs), 3)
     if not scoring:
-        raise ValueError("No scoring values were found. Include the scoring tables when copying Yahoo settings.")
+        warnings.append("No scoring values were found; only the league and roster settings were imported.")
 
     out: Dict[str, object] = {
         "name": name,
@@ -832,8 +907,34 @@ def parse_settings_text(text: str) -> Dict[str, object]:
             out["draftType"] = "snake"
         else:
             raise ValueError(f"Unrecognized Draft Type '{draft_type}'; check the copied settings.")
-    rec = scoring.get("rec", 0)
-    out["scoringType"] = "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"
+    rec = scoring.get("rec")
+    if rec is not None:
+        out["scoringType"] = {0.0: "standard", 0.5: "half-ppr", 1.0: "ppr"}.get(rec, "custom")
+    if out.get("scoringType") == "custom":
+        def denominator(label: str, key: str, fallback: float) -> float:
+            if label in yard_denominators:
+                return yard_denominators[label]
+            if key not in scoring:
+                return fallback
+            return 1.0 / scoring[key] if scoring[key] else 0.0
+
+        # The custom form overlays these fields on the imported scoring map.
+        # Keep exact copied yard denominators instead of inverting a rounded rate.
+        out["customScoring"] = {
+            "passYds": denominator("Passing Yards", "pass_yd", 25),
+            "passTD": scoring.get("pass_td", 4.0),
+            "passInt": scoring.get("pass_int", -2.0),
+            "sackTaken": scoring.get("sack_taken", 0.0),
+            "rushYds": denominator("Rushing Yards", "rush_yd", 10),
+            "rushTD": scoring.get("rush_td", 6.0),
+            "recYds": denominator("Receiving Yards", "rec_yd", 10),
+            "recTD": scoring.get("rec_td", 6.0),
+            "reception": rec,
+            "twoPt": scoring.get("rec_2pt", 2.0),
+            "fumbleLost": scoring.get("fumbles", -2.0),
+            "fumble": scoring.get("fumbles_total", 0.0),
+            "fumRetTD": scoring.get("fum_ret_td", 6.0),
+        }
     missing = [
         label for key, label in (
             ("pass_yd", "passing yards"), ("pass_td", "passing touchdowns"),
@@ -843,7 +944,6 @@ def parse_settings_text(text: str) -> Dict[str, object]:
             ("fumbles", "fumbles lost"),
         ) if key not in scoring
     ]
-    warnings = []
     if missing:
         warnings.append("No copied value for " + ", ".join(missing) + "; review scoring before saving.")
     if not draft_type:

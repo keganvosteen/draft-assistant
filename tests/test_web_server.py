@@ -323,6 +323,10 @@ class TestYahooEndpoints(_ServerFixture):
     def test_yahoo_draft_sync_success(self):
         from unittest.mock import patch
         with patch.object(DraftAPIHandler, "_yahoo_access_token", return_value="fake-token"), \
+             patch("draft_assistant.importers.yahoo.fetch_league", return_value={
+                 "numTeams":2, "teamIds":["nfl.l.test.t.1", "nfl.l.test.t.2"],
+                 "teamNames":["First", "Second"], "draftOrderReady":True,
+                 "draftType":"snake", "draftStatus":"postdraft"}), \
              patch("draft_assistant.importers.yahoo.fetch_draft_picks", return_value=[]):
             status, body = self.request("POST", "/api/draft-sync", {
                 "league": {"platform": "Yahoo", "yahooLeagueKey": "nfl.l.12345", "numTeams": 10, "draftPosition": 1}
@@ -332,6 +336,20 @@ class TestYahooEndpoints(_ServerFixture):
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["source"], "Yahoo")
             self.assertEqual(payload["leagueKey"], "nfl.l.12345")
+            self.assertEqual(payload["status"], "complete")
+            self.assertEqual(payload["leaguePatch"]["teamIds"], ["nfl.l.test.t.1", "nfl.l.test.t.2"])
+
+    def test_yahoo_unpublished_order_cannot_replace_the_draft(self):
+        from unittest.mock import patch
+        with patch.object(DraftAPIHandler, "_yahoo_access_token", return_value="fake-token"), \
+             patch("draft_assistant.importers.yahoo.fetch_league", return_value={
+                 "numTeams":2, "draftOrderReady":False, "draftType":"snake", "draftStatus":"predraft"}), \
+             patch("draft_assistant.importers.yahoo.fetch_draft_picks", return_value=[]):
+            status, body = self.request("POST", "/api/draft-sync", {
+                "league":{"platform":"Yahoo", "yahooLeagueKey":"nfl.l.test", "draftOrderReady":True}})
+        self.assertEqual(status, 409)
+        self.assertEqual(json.loads(body)["code"], "draft_order_unavailable")
+        self.assertNotIn("picks", json.loads(body))
 
     def test_yahoo_parse_settings_empty(self):
         status, body = self.request("POST", "/api/yahoo/parse-settings", {"text": ""})

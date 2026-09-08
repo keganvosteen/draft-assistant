@@ -374,15 +374,23 @@ Receptions: 1.0
             "This is not a league settings page",
             "League ID: 123\nMax Teams: 10\nRoster Positions: QB\nReceptions: 1",
             prefix + "Passing Touchdowns: 6",  # no roster
-            prefix + "Roster Positions: QB, RB, WR",  # no scoring
             prefix + "Roster Positions: QB, INVALID\nReceptions: 1",
             prefix + "Roster Positions: QB\nReceptions: 1\nReceptions: 0.5",
             prefix + "Quarterback (QB): -1\nReceptions: 1",
-            prefix + "Roster Positions: QB\nPassing Yards: 25 yards per point; 5 points at 300 yards",
+            prefix + "Roster Positions: QB\nPassing Yards: unknown formula",
         ]
         for text in cases:
             with self.subTest(text=text), self.assertRaises(ValueError):
                 parse_settings_text(text)
+
+    def test_partial_settings_load_without_invented_scoring(self):
+        info = parse_settings_text(
+            "League Name: Example\nMax Teams: 10\nRoster Positions: QB, RB, WR"
+        )
+        self.assertEqual(info["scoring"], {})
+        self.assertNotIn("scoringType", info)
+        self.assertNotIn("draftType", info)
+        self.assertTrue(any("No scoring values" in warning for warning in info["importWarnings"]))
 
     def test_scoring_uses_units_and_separates_offense_from_defense(self):
         info = parse_settings_text(
@@ -538,6 +546,260 @@ class TestApplyYahooAdp(unittest.TestCase):
         self.assertEqual(board[0].metadata["public_adp"], 45.0)  # still original
 
 
+class TestSettingsTextRosterParsing(unittest.TestCase):
+    """The paste fallback is what a user falls back on when Yahoo has not
+    approved their app for API access, so its roster must be exact — a wrong
+    slot count changes the draft's round count and every replacement level."""
+
+    LINE_LAYOUT = "\n".join([
+        "League Settings",
+        "League Name        Anonymous",
+        "Max Teams          12",
+        # Both of these used to donate their number to a position: "Date" ends
+        # in "te" (TE) and "Week" ends in "k" (K).
+        "Trade End Date     Week 11",
+        "Playoffs Start     Week 15",
+        "Quarterback        1",
+        "Running Back       2",
+        "Wide Receiver      2",
+        "Tight End          1",
+        "W/R/T              1",
+        "Kicker             1",
+        "Defense/Special Teams 1",
+        "Bench              6",
+    ])
+
+    def test_unrelated_lines_do_not_donate_counts(self):
+        from draft_assistant.importers.yahoo import parse_settings_text
+        roster = parse_settings_text(self.LINE_LAYOUT)["rosterSlots"]
+        self.assertEqual(roster["TE"], 1)   # not 11, from "Trade End Date"
+        self.assertEqual(roster["K"], 1)    # not 15, from "Playoffs ... Week"
+        self.assertEqual(roster["BN"], 6)
+
+    def test_typed_flex_is_claimed_once(self):
+        from draft_assistant.importers.yahoo import parse_settings_text
+        roster = parse_settings_text(self.LINE_LAYOUT)["rosterSlots"]
+        self.assertEqual(roster["FLEX"], 1)
+        # "W/R/T" also contains "W/R"; it must not add a phantom RBWR slot.
+        self.assertEqual(roster.get("RBWR", 0), 0)
+
+    def test_league_name_survives_the_settings_heading(self):
+        from draft_assistant.importers.yahoo import parse_settings_text
+        # "League Settings" precedes the real row and used to win, leaving the
+        # placeholder name behind.
+        self.assertEqual(parse_settings_text(self.LINE_LAYOUT)["name"], "Anonymous")
+
+    def test_first_line_names_the_league_when_no_label_row(self):
+        from draft_assistant.importers.yahoo import parse_settings_text
+        info = parse_settings_text(
+            "Anonymous\nMax Teams 12\nRoster Positions QB, RB, RB, WR, WR, TE, W/T, K, DEF, BN, BN\n")
+        self.assertEqual(info["name"], "Anonymous")
+        self.assertEqual(info["rosterSlots"]["WRTE"], 1)   # typed flex preserved
+        self.assertEqual(info["rosterSlots"]["BN"], 2)
+
+    def test_one_slot_per_line_layout_counts_each_line(self):
+        from draft_assistant.importers.yahoo import parse_settings_text
+        roster = parse_settings_text(
+            "My Dynasty League\nMax Teams 12\nQB\nRB\nRB\nWR\nWR\nTE\nW/R/T\nK\nDEF\n")["rosterSlots"]
+        self.assertEqual(roster["RB"], 2)
+        self.assertEqual(roster["WR"], 2)
+        self.assertEqual(roster["FLEX"], 1)
+        self.assertEqual(roster["DST"], 1)
+
+    def test_table_copy_puts_each_cell_on_its_own_line(self):
+        """Copying Yahoo's settings table out of a browser yields the label and
+        its value on separate lines. That must parse identically to the inline
+        layout — it is the shape most users actually paste."""
+        from draft_assistant.importers.yahoo import parse_settings_text
+        info = parse_settings_text("\n".join([
+            "Lega di Paca",
+            "League Settings",
+            "League Name",
+            "Lega di Paca",
+            "Max Teams",
+            "12",
+            "Roster Positions",
+            "QB, WR, WR, RB, RB, TE, W/R/T, K, DEF, BN, BN, BN, BN, BN, BN",
+            "Receptions",
+            "0.5",
+        ]))
+        self.assertEqual(info["name"], "Lega di Paca")
+        self.assertEqual(info["numTeams"], 12)
+        self.assertEqual(info["scoringType"], "half-ppr")
+        roster = info["rosterSlots"]
+        self.assertEqual((roster["QB"], roster["RB"], roster["WR"]), (1, 2, 2))
+        self.assertEqual(roster["FLEX"], 1)
+        self.assertEqual(roster["BN"], 6)
+
+    def test_full_page_select_all_ignores_navigation_chrome(self):
+        """The UI tells users to Ctrl+A the whole settings page, so the parser
+        has to find the league inside nav links, footer text and unrelated
+        rows — not treat the first line ("Yahoo Fantasy") as the name."""
+        from draft_assistant.importers.yahoo import parse_settings_text
+        info = parse_settings_text("\n".join([
+            "Yahoo Fantasy", "Sports", "Fantasy", "Mail", "Sign In",
+            "Home", "My Team", "League", "Players", "Scores", "Draft",
+            "Lega di Paca",
+            "League Settings",
+            "League Name", "Lega di Paca",
+            "League ID#", "1088234",
+            "Draft Type", "Live Standard Draft",
+            "Max Teams", "12",
+            "Trade End Date", "Week 11",
+            "Playoff Start Week", "Week 15",
+            "Roster Positions",
+            "QB, WR, WR, RB, RB, TE, W/R/T, K, DEF, BN, BN, BN, BN, BN, BN, IR",
+            "Passing Yards", "25 yards per point",
+            "Interceptions", "-1",
+            "Receptions", "0.5",
+            "Terms of Service", "Privacy Policy", "Help",
+        ]))
+        self.assertEqual(info["name"], "Lega di Paca")
+        self.assertEqual(info["numTeams"], 12)
+        self.assertEqual(info["scoringType"], "half-ppr")
+        self.assertEqual(info["scoring"]["pass_yd"], 0.04)   # "25 yards per point"
+        self.assertEqual(info["scoring"]["pass_int"], -1.0)  # league-specific
+        roster = info["rosterSlots"]
+        self.assertEqual((roster["QB"], roster["RB"], roster["WR"], roster["TE"]), (1, 2, 2, 1))
+        self.assertEqual((roster["FLEX"], roster["K"], roster["DST"], roster["BN"]), (1, 1, 1, 6))
+
+
+class TestOverriddenScoringRows(unittest.TestCase):
+    """Yahoo splits an *overridden* stat across three lines — the label, a
+    "Yahoo Default" marker, then a values row holding the league value first
+    and Yahoo's default second. Reading only the label line meant every
+    customized rule silently kept Yahoo's default."""
+
+    REAL = "\n".join([
+        "Lega di Paca (ID# 828682)",
+        "Scoring & Settings",
+        "Setting \tValue",
+        "League ID#: \t828682",
+        "League Name: \tLega di Paca",
+        "Draft Type: \tLive Standard Draft",
+        "Max Teams: \t16",
+        "Trade End Date: \tNovember 28, 2026",
+        "Roster Positions: \tQB, WR, WR, RB, TE, W/R/T, K, DEF, BN, BN, BN, BN, IR, IR",
+        "Offense \tLeague Value \tYahoo Default Value",
+        "Passing Yards", "Yahoo Default",
+        "\t30 yards per point; 10 points at 450 yards \t25 yards per point",
+        "Passing Touchdowns \t4 \t",
+        "Interceptions", "Yahoo Default", "\t-2 \t-1",
+        "Sacks", "Yahoo Default", "\t-1 \t0",
+        "Rushing Yards \t10 yards per point; 10 points at 170 yards \t",
+        "Rushing Touchdowns \t6 \t",
+        "Receptions", "Yahoo Default", "\t.25 \t0.5",
+        "Receiving Yards \t10 yards per point; 10 points at 180 yards \t",
+        "Receiving Touchdowns \t6 \t",
+        "Fumbles Lost", "Yahoo Default", "\t-1 \t-2",
+        "Kickers \tLeague Value \tYahoo Default Value",
+        "Field Goals 50+ Yards", "Yahoo Default", "\t6 \t5",
+        "Point After Attempt Made \t1 \t",
+        "Defense/Special Teams \tLeague Value \tYahoo Default Value",
+        "Sack \t1 \t",
+        "Safety \t2 \t",
+    ])
+
+    def setUp(self):
+        from draft_assistant.importers.yahoo import parse_settings_text
+        self.info = parse_settings_text(self.REAL)
+        self.scoring = self.info["scoring"]
+
+    def test_league_value_wins_over_the_yahoo_default(self):
+        # ".25" also has no leading digit, which the old number pattern required.
+        self.assertEqual(self.scoring["rec"], 0.25)
+        self.assertEqual(self.scoring["fumbles"], -1.0)      # not Yahoo's -2
+        self.assertEqual(self.scoring["fg_50_59"], 6.0)      # not Yahoo's 5
+        self.assertEqual(self.scoring["pass_int"], -2.0)
+
+    def test_yards_per_point_uses_the_league_column(self):
+        # "30 yards per point" -> 1/30, not Yahoo's default of 25.
+        self.assertEqual(self.scoring["pass_yd"], round(1 / 30, 4))
+        self.assertEqual(self.scoring["rush_yd"], 0.1)
+
+    def test_threshold_bonuses_are_explicitly_reported_as_unmodeled(self):
+        warnings = self.info["importWarnings"]
+        self.assertEqual(len(warnings), 3)
+        for label, threshold in (("Passing Yards", "450"), ("Rushing Yards", "170"),
+                                 ("Receiving Yards", "180")):
+            with self.subTest(label=label):
+                self.assertTrue(any(label in warning and threshold in warning
+                                    and "not modeled" in warning for warning in warnings))
+
+    def test_conflicts_compare_league_values_instead_of_yahoo_defaults(self):
+        # Different default columns are harmless when the league value agrees.
+        info = parse_settings_text(self.REAL + "\nReceptions\nYahoo Default\n\t.25\t1")
+        self.assertEqual(info["scoring"]["rec"], 0.25)
+        with self.assertRaisesRegex(ValueError, "Conflicting values for Receptions"):
+            parse_settings_text(self.REAL + "\nReceptions\nYahoo Default\n\t.75\t.5")
+
+    def test_offensive_sacks_are_not_defensive_sacks(self):
+        self.assertEqual(self.scoring["sack_taken"], -1.0)   # QB sacked
+        self.assertEqual(self.scoring["sack"], 1.0)          # defense sack
+
+    def test_quarter_ppr_is_custom_so_the_value_survives(self):
+        # The UI rewrites rec from the scoring type, so anything but 0/0.5/1
+        # has to arrive as custom or the per-catch points are discarded.
+        self.assertEqual(self.info["scoringType"], "custom")
+        custom = self.info["customScoring"]
+        self.assertEqual(custom["reception"], 0.25)
+        self.assertEqual(custom["passYds"], 30.0)            # whole number, not 30.03
+        self.assertEqual(custom["sackTaken"], -1.0)
+        self.assertEqual(custom["fumbleLost"], -1.0)
+
+    def test_league_shape_still_parses(self):
+        self.assertEqual(self.info["name"], "Lega di Paca")
+        self.assertEqual(self.info["numTeams"], 16)
+        roster = self.info["rosterSlots"]
+        self.assertEqual((roster["QB"], roster["RB"], roster["WR"], roster["TE"]), (1, 1, 2, 1))
+        self.assertEqual((roster["FLEX"], roster["K"], roster["DST"]), (1, 1, 1))
+        self.assertEqual((roster["BN"], roster["IR"]), (4, 2))
+
+
 if __name__ == "__main__":
     unittest.main()
 
+
+class TestYahooDisconnect(unittest.TestCase):
+    """A Yahoo access token keeps the permissions it was minted with, and a
+    refresh preserves them — so an authorization made before Yahoo enabled
+    Fantasy Sports can never see fantasy data, however long you wait after
+    approval. Clearing it has to be possible."""
+
+    def _handler(self, stored):
+        from unittest.mock import MagicMock, patch
+        from draft_assistant.web.server import DraftAPIHandler
+        handler = DraftAPIHandler.__new__(DraftAPIHandler)
+        handler.profile = "default"
+        handler._send_json = MagicMock()
+        handler._read_body = MagicMock(return_value=self.body)
+        handler._yahoo_load = MagicMock(return_value=dict(stored))
+        handler.saved = {}
+        handler._yahoo_save = lambda data: handler.saved.update(data)
+        return handler, patch
+
+    def test_disconnect_drops_the_token_but_keeps_credentials(self):
+        self.body = {}
+        handler, _ = self._handler({
+            "client_id": "abc", "client_secret": "shh",
+            "token": {"access_token": "stale", "refresh_token": "also-stale"},
+        })
+        handler._handle_yahoo_disconnect()
+        # Re-typing the Client ID and Secret is not what this fixes.
+        self.assertEqual(handler.saved.get("client_id"), "abc")
+        self.assertNotIn("token", handler.saved)
+        payload = handler._send_json.call_args[0][0]
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["hasCredentials"])
+        self.assertFalse(payload["hasToken"])
+
+    def test_disconnect_can_forget_credentials_too(self):
+        from unittest.mock import patch
+        self.body = {"forgetCredentials": True}
+        handler, _ = self._handler({"client_id": "abc", "token": {"access_token": "x"}})
+        with patch("draft_assistant.secret_store.forget") as forget:
+            handler._handle_yahoo_disconnect()
+            self.assertEqual(forget.call_count, 1)
+        payload = handler._send_json.call_args[0][0]
+        self.assertFalse(payload["hasCredentials"])
+        self.assertFalse(payload["hasToken"])

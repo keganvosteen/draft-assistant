@@ -57,12 +57,29 @@ function LeagueHub({ league, picks, playerCount, onBack, onOpenDraft, onOpenWaiv
   const isAuction = league.draftType === 'auction';
   const hasNames = (league.teamNames || []).some(Boolean);
 
-  const sync = () => {
+  const runSync = () => {
     setSyncing(true);
     onSyncLeague(league)
       .then(msg => toast(msg, 'ok'))
       .catch(err => toast(String(err && err.message ? err.message : err), 'error', 6000))
       .finally(() => setSyncing(false));
+  };
+
+  // Synced picks are attributed by seat, so without one marked as yours the
+  // rosters land on the board with none of them belonging to you — the league
+  // looks synced but "my team" stays empty, which reads as the sync failing.
+  const sync = () => {
+    if (isAuction || league.draftPosition) { runSync(); return; }
+    // Confirm is the only branch that syncs: dismissing the dialog must not
+    // replace the recorded picks by accident.
+    confirmDialog({
+      title: 'No team is marked as yours',
+      body: `Nothing in ${league.name} is set as your seat yet, and synced players are attributed by seat — `
+        + 'so every roster would belong to someone else and your team would come back empty. '
+        + 'Set your seat first in League settings → Draft order, then sync.',
+      confirmLabel: 'Sync anyway',
+      cancelLabel: 'Not yet',
+    }).then(ok => { if (ok) runSync(); });
   };
 
   const remove = () => {
@@ -82,7 +99,7 @@ function LeagueHub({ league, picks, playerCount, onBack, onOpenDraft, onOpenWaiv
         badges={linkedTo ? <Badge label={`Linked to ${linkedTo}`} color="green" /> : null}>
         {linkedTo && (
           <Btn variant="secondary" size="sm" onClick={sync} disabled={syncing}>
-            {syncing ? 'Syncing…' : 'Sync rosters'}
+            {syncing ? 'Syncing…' : `Sync from ${linkedTo}`}
           </Btn>
         )}
         <Btn variant="secondary" size="sm" onClick={() => onEditLeague(league.id)}>League settings</Btn>
@@ -168,9 +185,10 @@ function LeagueHub({ league, picks, playerCount, onBack, onOpenDraft, onOpenWaiv
           </div>
           {linkedTo && <Note style={{marginTop:14}}>
             Refresh league settings and the published draft order in <b>League settings → Draft order</b>.
-            {linkedTo === 'ESPN' && ' ESPN draft results can be synced after completion. During the draft, use Paste draft history or record picks.'}
-            {linkedTo === 'Sleeper' && ' Open the draft room and choose Go live to follow picks automatically every five seconds.'}
-            {' '}Sync rosters loads current ownership for the waiver wire; it does not recover pick order.
+            {' '}<b>Sync from {linkedTo}</b> pulls the completed draft when {linkedTo} has published one — picks, order and all —
+            and otherwise falls back to current roster ownership for the waiver wire.
+            {linkedTo === 'ESPN' && ' During a live ESPN draft, use Paste draft history or record picks as they happen.'}
+            {linkedTo === 'Sleeper' && ' To follow a draft as it happens, open the draft room and choose Go live.'}
           </Note>}
           {(!hasNames || league.teamSelectionRequired) && !isAuction && (
             <Note style={{ marginTop: 14 }}>

@@ -194,21 +194,57 @@ function DraftOrderEditor({ numTeams, teamNames, teamIds, draftPosition, draftOr
 }
 
 // ─── LEAGUE IMPORT PANELS ────────────────────────────────────────────────────
-function EspnAccessFields({ leagueId }) {
+function EspnAccessFields({ leagueId, espnLeagueId }) {
   const [access, setAccess] = React.useState(() => getEspnAccess(leagueId));
+  const [saved, setSaved] = React.useState(null);
   const change = (key, value) => {
     const next = { ...access, [key]:value };
     setAccess(next); setEspnAccess(leagueId, next);
   };
+
+  // The server keeps a copy in the OS keystore once a working pair reaches it,
+  // so ask whether this ESPN league already has one rather than making the
+  // empty boxes imply "nothing is stored".
+  const refreshSaved = React.useCallback(() => {
+    if (!espnLeagueId) { setSaved(null); return; }
+    fetch('/api/espn/credentials', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ leagueId: String(espnLeagueId) }),
+    }).then(r => r.json()).then(d => { if (!d.error) setSaved(d); }).catch(() => {});
+  }, [espnLeagueId]);
+  React.useEffect(() => { refreshSaved(); }, [refreshSaved]);
+
+  const forget = () => {
+    setAccess({}); setEspnAccess(leagueId, null);
+    if (!espnLeagueId) return;
+    fetch('/api/espn/credentials', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ leagueId: String(espnLeagueId), forget: true }),
+    }).then(() => { refreshSaved(); toast('Saved ESPN credentials removed.', 'ok'); })
+      .catch(() => toast('Could not remove the saved credentials.', 'error'));
+  };
   return (
     <details style={{marginTop:12}}>
       <summary style={{cursor:'pointer', color:T.primary, fontSize:13, fontWeight:600}}>Private ESPN league access (optional)</summary>
-      <Note style={{margin:'10px 0'}}>For a private league or a 401 error, copy these cookies from your signed-in ESPN browser session (Developer tools → Application or Storage → Cookies → espn.com). Paste them as shown — quotes, braces, and %-encoding are cleaned up automatically. They stay in memory until this app page closes or reloads, then click Import again.</Note>
+      <Note style={{margin:'10px 0'}}>For a private league or a 401 error, copy these cookies from your signed-in ESPN browser session (Developer tools → Application or Storage → Cookies → espn.com). Paste them as shown — quotes, braces, and %-encoding are cleaned up automatically.
+        {saved && saved.canSave
+          ? ' Once a working pair reaches ESPN it is remembered on this machine, so this is a one-time step.'
+          : saved && !saved.canSave
+            ? ' This platform has no keystore the app can use, so they are kept in memory only and clear when the app restarts.'
+            : ''}</Note>
+      {saved && saved.saved && (
+        <Note tone="ok" style={{margin:'10px 0'}}>
+          Credentials for this league are saved. {saved.storage}
+          {' '}They still expire when you sign out of espn.com — re-paste them if a sync starts failing.
+        </Note>
+      )}
       <Field label="espn_s2 cookie"><Input type="password" autoComplete="off" value={access.espnS2 || ''}
         aria-label="ESPN espn_s2 cookie" onChange={e => change('espnS2', e.target.value)} /></Field>
       <Field label="SWID cookie"><Input type="password" autoComplete="off" value={access.swid || ''}
         aria-label="ESPN SWID cookie" onChange={e => change('swid', e.target.value)} /></Field>
-      <Btn variant="subtle" size="sm" onClick={() => { setAccess({}); setEspnAccess(leagueId, null); }}>Clear session credentials</Btn>
+      <Btn variant="subtle" size="sm" onClick={forget}>
+        {saved && saved.saved ? 'Forget saved credentials' : 'Clear session credentials'}
+      </Btn>
     </details>
   );
 }
@@ -349,6 +385,16 @@ function ImportPanel({ form, setForm }) {
         : 'Connected, but Yahoo returned no NFL leagues for this account.' } });
   };
   const yahooResume = () => yhPost('/api/yahoo/leagues', {}, showYahooLeagues);
+  // Yahoo grants permissions at authorization time and a refresh keeps them,
+  // so an authorization made before Fantasy Sports was enabled on the app can
+  // never see fantasy data. Dropping it forces a fresh grant.
+  const yahooReconnect = () => {
+    yhPost('/api/yahoo/disconnect', {}, () => {
+      yhSet({ hasToken:false, leagues: null, leagueKey: '', code: '', authUrl: '',
+              msg: { ok: true, text: 'Authorization cleared. Choose Get authorize link to grant access again.' } });
+    });
+  };
+
   const yahooExchange = () => {
     if (!yh.code.trim()) { yhSet({ msg: { ok: false, text: 'Paste the authorization code' } }); return; }
     yhPost('/api/yahoo/exchange', { code: yh.code.trim() }, showYahooLeagues).finally(loadYahooStatus);
@@ -409,7 +455,7 @@ function ImportPanel({ form, setForm }) {
           <div style={{marginTop:8, fontSize:11.5, color:T.muted, lineHeight:1.5}}>
             Find the ID in your ESPN league URL: <code>…/leagues/<b>THIS</b></code> or <code>leagueId=<b>THIS</b></code>. A 401 means ESPN denied access; private leagues need both cookies below.
           </div>
-          <EspnAccessFields leagueId={form.id} />
+          <EspnAccessFields leagueId={form.id} espnLeagueId={form.espnLeagueId || espnId} />
         </div>
       )}
 
@@ -503,6 +549,11 @@ function ImportPanel({ form, setForm }) {
                         background:'none', border:'none', padding:0, color:T.primary,
                         cursor:'pointer', textDecoration:'underline', fontSize:12.5,
                       }}>Use different credentials</button>
+                      {' · '}
+                      <button onClick={yahooReconnect} style={{
+                        background:'none', border:'none', padding:0, color:T.primary,
+                        cursor:'pointer', textDecoration:'underline', fontSize:12.5,
+                      }}>Reconnect</button>
                     </div>
                   ) : (
                     <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
@@ -550,8 +601,7 @@ function ImportPanel({ form, setForm }) {
                   <Btn onClick={yahooImport} disabled={yh.busy || !yh.leagueKey}>Import</Btn>
                 </div>
               ) : <Note>No NFL leagues were found. Authorize the Yahoo account that belongs to your league.</Note>}
-              {yh.leagues && <Btn variant="subtle" disabled={yh.busy} onClick={() =>
-                yhSet({leagues:null, leagueKey:'', authUrl:'', code:'', msg:null})}>Authorize again</Btn>}
+              {yh.leagues && <Btn variant="subtle" disabled={yh.busy} onClick={yahooReconnect}>Authorize again</Btn>}
 
               {yh.needsApproval && (
                 <div style={{marginTop:12, padding:12, borderRadius:T.rsm, background:T.surfaceAlt, border:`1px solid ${T.border}`}}>
@@ -778,7 +828,7 @@ function LeagueSetupModal({ league, onSave, onClose }) {
         {linkedProvider(form) && <div style={{marginBottom:16}}>
           <Btn variant="secondary" onClick={refreshSettings} disabled={refreshing}>{refreshing ? 'Refreshing…' : `Refresh settings from ${linkedProvider(form)}`}</Btn>
           {refreshMessage && <Note tone={refreshMessage.ok ? 'ok' : 'error'} style={{marginTop:10}}>{refreshMessage.text}</Note>}
-          {form.platform === 'ESPN' && <EspnAccessFields leagueId={form.id} />}
+          {form.platform === 'ESPN' && <EspnAccessFields leagueId={form.id} espnLeagueId={form.espnLeagueId} />}
         </div>}
         <DraftOrderEditor
           numTeams={form.numTeams}
@@ -1534,9 +1584,44 @@ function App() {
         if (generation !== workspaceGeneration.current) throw new Error('Roster sync was superseded by restoring a backup.');
         setPicks(prev => ({ ...prev, [lg.id]: d.picks || [] }));
         setLeagues(prev => prev.map(l => l.id === lg.id ? {...l, pickSource:'rosters'} : l));
-        return `Synced ${d.matched || 0} of ${d.rostered || 0} rostered players from ${d.source || lg.platform}.`;
+        const source = d.source || lg.platform;
+        // A sync that finds nothing is not a failure the server can report —
+        // the provider answered, the rosters were simply empty. Say which of
+        // the two causes it is instead of a bare "Synced 0 of 0".
+        if (!d.rostered) {
+          return source === 'ESPN'
+            ? `${source} returned no rostered players. If this league has already drafted, re-enter your espn_s2 and SWID cookies (Edit league → Import) — they are held in memory only and clear whenever the app restarts. If it has not drafted yet, there is nothing to sync.`
+            : `${source} returned no rostered players — nothing to sync until the league drafts.`;
+        }
+        return `Synced ${d.matched || 0} of ${d.rostered} rostered players from ${source}.`;
       });
   }, []);
+
+  // One "Sync" for the league hub. A completed draft is strictly better data
+  // than current ownership — it carries the pick order too — so try the draft
+  // history first and fall back to rosters when the provider has none. Users
+  // were picking between "Sync rosters" and "Sync completed ESPN draft"
+  // without a way to know which one their league needed.
+  const syncLeagueOrDraft = React.useCallback(lg => {
+    const generation = workspaceGeneration.current;
+    return fetch('/api/draft-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ league: lg, ...getEspnAccess(lg.id) }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        // No draft history is the normal pre-draft case, not a failure: fall
+        // through to rosters rather than surfacing the provider's complaint.
+        if (d.error || !Array.isArray(d.picks) || d.picks.length === 0) return null;
+        if (generation !== workspaceGeneration.current) throw new Error('Sync was superseded by restoring a backup.');
+        if (d.leagueId !== lg.id) throw new Error('The draft response did not match this league.');
+        replacePicks(lg.id, d.picks, d.leaguePatch || {});
+        return `Synced ${d.picks.length} draft picks from ${d.source || lg.platform}.`;
+      })
+      .catch(() => null)
+      .then(msg => msg || syncLeague(lg));
+  }, [syncLeague]);
 
   const undoPick = leagueId => {
     setPicks(prev => ({ ...prev, [leagueId]: (prev[leagueId] || []).slice(0, -1) }));
@@ -1626,7 +1711,7 @@ function App() {
         onOpenWaivers={() => setRoute({ screen: 'waivers', leagueId: routeLeague.id })}
         onEditLeague={openEditor}
         onDeleteLeague={deleteLeague}
-        onSyncLeague={syncLeague}
+        onSyncLeague={syncLeagueOrDraft}
         onPullData={() => setShowPull(true)}
       />
     );

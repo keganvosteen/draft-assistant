@@ -98,8 +98,49 @@ def _league_platform(league: dict) -> str:
 
 
 def _import_scoring_type(info: dict) -> dict:
-    rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
-    return {**info, "scoringType": "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"}
+    """Label an imported league's scoring format.
+
+    The UI rewrites the per-reception value from this label (standard -> 0,
+    half -> 0.5, ppr -> 1), so a league that pays anything else per catch —
+    0.25, say — has to come back as "custom" with its own value carried in
+    customScoring, or the reception points are silently discarded.
+    """
+    scoring = info.get("scoring") or {}
+    rec = float(scoring.get("rec", 0) or 0)
+    if abs(rec - 1.0) < 0.01:
+        scoring_type = "ppr"
+    elif abs(rec - 0.5) < 0.01:
+        scoring_type = "half-ppr"
+    elif rec <= 0.01:
+        scoring_type = "standard"
+    else:
+        scoring_type = "custom"
+    out = {**info, "scoringType": scoring_type}
+    if scoring_type == "custom" and not out.get("customScoring"):
+        def _denominator(per_point, fallback):
+            # Yards-per-point, snapped to the whole number the league shows.
+            if not per_point:
+                return fallback
+            yards = 1.0 / per_point
+            nearest = round(yards)
+            return float(nearest) if abs(yards - nearest) < 0.15 else round(yards, 2)
+
+        out["customScoring"] = {
+            "passYds": _denominator(scoring.get("pass_yd"), 25),
+            "passTD": scoring.get("pass_td", 4.0),
+            "passInt": scoring.get("pass_int", -2.0),
+            "sackTaken": scoring.get("sack_taken", 0.0),
+            "rushYds": _denominator(scoring.get("rush_yd"), 10),
+            "rushTD": scoring.get("rush_td", 6.0),
+            "recYds": _denominator(scoring.get("rec_yd"), 10),
+            "recTD": scoring.get("rec_td", 6.0),
+            "reception": rec,
+            "twoPt": scoring.get("rec_2pt", 2.0),
+            "fumbleLost": scoring.get("fumbles", -2.0),
+            "fumble": scoring.get("fumbles_total", 0.0),
+            "fumRetTD": scoring.get("fum_ret_td", 6.0),
+        }
+    return out
 
 
 def _draft_league_patch(info: dict, league: dict) -> dict:
@@ -499,12 +540,16 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_sleeper_import()
         elif self.path == "/api/sleeper/draft":
             self._handle_sleeper_draft()
+        elif self.path == "/api/espn/credentials":
+            self._handle_espn_credentials()
         elif self.path == "/api/yahoo/connect":
             self._handle_yahoo_connect()
         elif self.path == "/api/yahoo/exchange":
             self._handle_yahoo_exchange()
         elif self.path == "/api/yahoo/leagues":
             self._handle_yahoo_leagues()
+        elif self.path == "/api/yahoo/disconnect":
+            self._handle_yahoo_disconnect()
         elif self.path == "/api/yahoo/import":
             self._handle_yahoo_import()
         elif self.path == "/api/yahoo/draft":
@@ -1004,12 +1049,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 from ..importers.free_sources import default_projection_season, fetch_espn_rosters
                 league_id = _espn_reference(league_id)
                 season = _bounded_int(league.get("season") or body.get("season") or default_projection_season(), "season", 2000, 2100)
-                rosters = fetch_espn_rosters(
-                    season,
-                    league_id,
-                    espn_s2=body.get("espnS2"),
-                    swid=body.get("swid"),
-                )
+                espn_s2, swid = self._espn_access(body, league)
+                rosters = fetch_espn_rosters(season, league_id, espn_s2=espn_s2, swid=swid)
                 source = "ESPN"
             elif platform == "sleeper":
                 league_id = str(league.get("sleeperLeagueId") or body.get("leagueId") or "").strip()
@@ -1049,7 +1090,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             exc.close()
             if platform == "espn" and exc.code in {401, 403}:
                 self._send_json({
-                    "error": "ESPN denied access to this league. For a private league, enter your espn_s2 and SWID session cookies in League settings → Import. Check the league ID and season, and use an ESPN account that belongs to the league.",
+                    "error": "ESPN denied access to this league. For a private league, enter your espn_s2 and SWID session cookies in League settings → Import — they are kept in memory only, so they clear whenever the app restarts and have to be pasted again. Check the league ID and season, use an ESPN account that belongs to the league, and re-copy the cookies if you have signed out of ESPN since.",
                     "code": "espn_auth_required",
                 }, 401)
             elif exc.code == 404:
@@ -1069,7 +1110,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         from ..importers.free_sources import default_projection_season, fetch_espn_league
         league_id = _espn_reference(league.get("espnLeagueId") or body.get("leagueId"))
         season = _bounded_int(league.get("season") or body.get("season") or default_projection_season(), "season", 2000, 2100)
-        info = fetch_espn_league(season, league_id, espn_s2=body.get("espnS2"), swid=body.get("swid"))
+        espn_s2, swid = self._espn_access(body, league)
+        info = fetch_espn_league(season, league_id, espn_s2=espn_s2, swid=swid)
         return _import_scoring_type({**info, "espnLeagueId": league_id, "season": season})
 
     def _handle_import_espn(self):
@@ -1175,7 +1217,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 from ..importers.free_sources import default_projection_season, fetch_espn_draft
                 league_id = _espn_reference(league.get("espnLeagueId") or body.get("leagueId"))
                 season = _bounded_int(league.get("season") or body.get("season") or default_projection_season(), "season", 2000, 2100)
-                info = fetch_espn_draft(season, league_id, espn_s2=body.get("espnS2"), swid=body.get("swid"))
+                espn_s2, swid = self._espn_access(body, league)
+                info = fetch_espn_draft(season, league_id, espn_s2=espn_s2, swid=swid)
                 if info.get("status") != "complete":
                     self._send_json({
                         "error": "ESPN has not published completed draft results yet. Its available API does not provide reliable live picks. Use Paste draft history or record picks during the draft, then sync results after it finishes.",
@@ -1257,23 +1300,91 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     # ── Yahoo OAuth import ────────────────────────────────────────────────
     # Credentials + tokens are stored in the profile dir (local machine only).
 
-    def _yahoo_store_path(self) -> str:
+    def _secret_dir(self) -> str:
         paths = ensure_profile(self.profile)
-        return os.path.join(os.path.dirname(str(paths.state_path)), "yahoo.json")
+        return os.path.dirname(str(paths.state_path))
+
+    def _yahoo_store_path(self) -> str:
+        return os.path.join(self._secret_dir(), "yahoo.json")
 
     def _yahoo_load(self) -> dict:
-        path = self._yahoo_store_path()
-        if os.path.exists(path):
-            try:
-                with open(path) as fh:
-                    return json.load(fh)
-            except (OSError, json.JSONDecodeError):
-                return {}
-        return {}
+        from .. import secret_store
+        return secret_store.load(self._yahoo_store_path(), "yahoo")
 
     def _yahoo_save(self, data: dict) -> None:
+        from .. import secret_store
         from ..storage import atomic_write_json
-        atomic_write_json(self._yahoo_store_path(), data)
+        path = self._yahoo_store_path()
+        # These are OAuth tokens for the user's Yahoo account; seal them when
+        # the platform has a keystore rather than leaving them beside the
+        # draft state in the clear. Without one, behave as before.
+        if not secret_store.save(path, "yahoo", data):
+            atomic_write_json(path, data)
+
+    # ── ESPN cookies, remembered between runs ─────────────────────────────
+
+    def _espn_store_path(self) -> str:
+        return os.path.join(self._secret_dir(), "espn.json")
+
+    def _espn_saved(self, league_id: str) -> dict:
+        from .. import secret_store
+        store = secret_store.load(self._espn_store_path(), "espn")
+        entry = store.get(str(league_id or "")) if isinstance(store, dict) else None
+        return entry if isinstance(entry, dict) else {}
+
+    def _espn_remember(self, league_id: str, espn_s2: str, swid: str) -> None:
+        """Keep this league's cookies for next launch, if the OS allows it."""
+        from .. import secret_store
+        if not (league_id and espn_s2 and swid and secret_store.available()):
+            return
+        path = self._espn_store_path()
+        store = secret_store.load(path, "espn")
+        if not isinstance(store, dict):
+            store = {}
+        store[str(league_id)] = {"espnS2": espn_s2, "swid": swid}
+        secret_store.save(path, "espn", store)
+
+    def _espn_access(self, body: dict, league: dict) -> tuple:
+        """Cookies for an ESPN call: whatever the page sent, else what we saved.
+
+        The browser only holds cookies for the session they were typed in, so
+        without this every restart looked like a silently failing sync. A pair
+        that arrives from the page is also remembered here, which is what makes
+        pasting them a one-time step.
+        """
+        # Key on the ESPN league id, not the app's internal one: the very first
+        # import happens before a local league exists, and the ESPN id is what
+        # stays the same across re-imports.
+        league_id = str((league or {}).get("espnLeagueId") or body.get("leagueId") or "").strip()
+        espn_s2 = str(body.get("espnS2") or "").strip()
+        swid = str(body.get("swid") or "").strip()
+        if espn_s2 and swid:
+            self._espn_remember(league_id, espn_s2, swid)
+            return espn_s2, swid
+        saved = self._espn_saved(league_id)
+        return saved.get("espnS2") or None, saved.get("swid") or None
+
+    def _handle_espn_credentials(self):
+        """Report or forget the cookies remembered for a league."""
+        from .. import secret_store
+        try:
+            body = self._read_body()
+            league_id = str(body.get("leagueId") or "").strip()
+            if body.get("forget"):
+                path = self._espn_store_path()
+                store = secret_store.load(path, "espn")
+                if isinstance(store, dict) and store.pop(league_id, None) is not None:
+                    secret_store.save(path, "espn", store)
+                self._send_json({"ok": True, "saved": False})
+                return
+            self._send_json({
+                "ok": True,
+                "saved": bool(self._espn_saved(league_id)),
+                "canSave": secret_store.available(),
+                "storage": secret_store.describe(),
+            })
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
 
     def _yahoo_access_token(self) -> str:
         from ..importers import yahoo
@@ -1392,6 +1503,35 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                                 detail=f"{len(rows)} drafted players; replaces public ADP")
         except Exception as exc:
             return SourceReport("Yahoo ADP", 0, ok=False, detail=str(exc))
+
+    def _handle_yahoo_disconnect(self):
+        """Drop the stored Yahoo authorization so the next connect re-grants.
+
+        An access token carries the permissions it was minted with, and
+        refreshing preserves them — so a token issued before Yahoo enabled
+        Fantasy Sports on the app keeps failing with
+        additional_authorization_required no matter how long you wait after
+        approval. Clearing it is the only way to pick the new grant up.
+        Credentials are kept unless the caller asks to forget those too, since
+        re-typing the Client ID and Secret is not what this fixes.
+        """
+        try:
+            body = self._read_body()
+            data = self._yahoo_load()
+            if body.get("forgetCredentials"):
+                from .. import secret_store
+                secret_store.forget(self._yahoo_store_path(), "yahoo")
+                self._send_json({"ok": True, "hasCredentials": False, "hasToken": False})
+                return
+            data.pop("token", None)
+            self._yahoo_save(data)
+            self._send_json({
+                "ok": True,
+                "hasCredentials": bool(data.get("client_id") and data.get("client_secret")),
+                "hasToken": False,
+            })
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
 
     def _handle_yahoo_import(self):
         """Import a chosen Yahoo league as a form-ready payload (like ESPN)."""

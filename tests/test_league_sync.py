@@ -215,6 +215,26 @@ class TestEspnCookieNormalization(unittest.TestCase):
         self.assertEqual(self._cookie("session", "{owner}"),
                          "espn_s2=session; SWID={owner}")
 
+    def test_devtools_colon_row_is_stripped(self):
+        # Chrome's Application panel shows a cookie as name:"value". Pasting
+        # that whole row sent the literal text 'espn_s2:"AEAw…' as the cookie
+        # value, so ESPN 401'd and the league silently stayed on form defaults.
+        self.assertEqual(
+            self._cookie('espn_s2:"AEAw%2Fabc"', 'SWID:"{C904188A-BE28}"'),
+            "espn_s2=AEAw%2Fabc; SWID={C904188A-BE28}",
+        )
+
+    def test_colon_row_with_space_after_the_name(self):
+        self.assertEqual(
+            self._cookie('espn_s2: "AEAw%2Fabc"', 'SWID: {C904188A-BE28}'),
+            "espn_s2=AEAw%2Fabc; SWID={C904188A-BE28}",
+        )
+
+    def test_quotes_wrapping_the_whole_pair(self):
+        self.assertEqual(self._cookie('"espn_s2=AEAwabc"'), "espn_s2=AEAwabc")
+
     def test_injection_still_rejected_after_cleaning(self):
         with self.assertRaises(ValueError):
             self._cookie('"s2; unauthorized=1"')
+        with self.assertRaises(ValueError):
+            self._cookie('espn_s2:"s2; unauthorized=1"')

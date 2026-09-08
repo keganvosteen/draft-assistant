@@ -188,12 +188,27 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
       .finally(() => setUpdating(false));
   };
 
-  const sync = () => {
+  const runSync = () => {
     setSyncing(true);
     onSyncLeague(league)
       .then(msg => toast(msg, 'ok'))
       .catch(err => toast(String(err && err.message ? err.message : err), 'error', 6000))
       .finally(() => setSyncing(false));
+  };
+
+  // The waiver wire ranks pickups against *your* starters, so a sync with no
+  // seat marked leaves this screen with an empty roster and no way to tell
+  // that the sync itself worked. Only the confirm branch syncs.
+  const sync = () => {
+    if (league.draftType === 'auction' || league.draftPosition) { runSync(); return; }
+    confirmDialog({
+      title: 'No team is marked as yours',
+      body: `Nothing in ${league.name} is set as your seat yet, and synced players are attributed by seat — `
+        + 'so the waiver wire would have no roster to rank pickups against. '
+        + 'Set your seat first in League settings → Draft order, then sync.',
+      confirmLabel: 'Sync anyway',
+      cancelLabel: 'Not yet',
+    }).then(ok => { if (ok) runSync(); });
   };
 
   const allRows = (data && (horizon === 'weekly' ? data.weeklyRecommendations : data.rosRecommendations))
