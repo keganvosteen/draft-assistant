@@ -194,21 +194,57 @@ function DraftOrderEditor({ numTeams, teamNames, teamIds, draftPosition, draftOr
 }
 
 // ─── LEAGUE IMPORT PANELS ────────────────────────────────────────────────────
-function EspnAccessFields({ leagueId }) {
+function EspnAccessFields({ leagueId, espnLeagueId }) {
   const [access, setAccess] = React.useState(() => getEspnAccess(leagueId));
+  const [saved, setSaved] = React.useState(null);
   const change = (key, value) => {
     const next = { ...access, [key]:value };
     setAccess(next); setEspnAccess(leagueId, next);
   };
+
+  // The server keeps a copy in the OS keystore once a working pair reaches it,
+  // so ask whether this ESPN league already has one rather than making the
+  // empty boxes imply "nothing is stored".
+  const refreshSaved = React.useCallback(() => {
+    if (!espnLeagueId) { setSaved(null); return; }
+    fetch('/api/espn/credentials', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ leagueId: String(espnLeagueId) }),
+    }).then(r => r.json()).then(d => { if (!d.error) setSaved(d); }).catch(() => {});
+  }, [espnLeagueId]);
+  React.useEffect(() => { refreshSaved(); }, [refreshSaved]);
+
+  const forget = () => {
+    setAccess({}); setEspnAccess(leagueId, null);
+    if (!espnLeagueId) return;
+    fetch('/api/espn/credentials', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ leagueId: String(espnLeagueId), forget: true }),
+    }).then(() => { refreshSaved(); toast('Saved ESPN credentials removed.', 'ok'); })
+      .catch(() => toast('Could not remove the saved credentials.', 'error'));
+  };
   return (
     <details style={{marginTop:12}}>
       <summary style={{cursor:'pointer', color:T.primary, fontSize:13, fontWeight:600}}>Private ESPN league access (optional)</summary>
-      <Note style={{margin:'10px 0'}}>For a private league or a 401 error, copy these cookies from your signed-in ESPN browser session (Developer tools → Application or Storage → Cookies → espn.com). Paste them as shown — quotes, braces, and %-encoding are cleaned up automatically. They stay in memory until this app page closes or reloads, then click Import again.</Note>
+      <Note style={{margin:'10px 0'}}>For a private league or a 401 error, copy these cookies from your signed-in ESPN browser session (Developer tools → Application or Storage → Cookies → espn.com). Paste them as shown — quotes, braces, and %-encoding are cleaned up automatically.
+        {saved && saved.canSave
+          ? ' Once a working pair reaches ESPN it is remembered on this machine, so this is a one-time step.'
+          : saved && !saved.canSave
+            ? ' This platform has no keystore the app can use, so they are kept in memory only and clear when the app restarts.'
+            : ''}</Note>
+      {saved && saved.saved && (
+        <Note tone="ok" style={{margin:'10px 0'}}>
+          Credentials for this league are saved. {saved.storage}
+          {' '}They still expire when you sign out of espn.com — re-paste them if a sync starts failing.
+        </Note>
+      )}
       <Field label="espn_s2 cookie"><Input type="password" autoComplete="off" value={access.espnS2 || ''}
         aria-label="ESPN espn_s2 cookie" onChange={e => change('espnS2', e.target.value)} /></Field>
       <Field label="SWID cookie"><Input type="password" autoComplete="off" value={access.swid || ''}
         aria-label="ESPN SWID cookie" onChange={e => change('swid', e.target.value)} /></Field>
-      <Btn variant="subtle" size="sm" onClick={() => { setAccess({}); setEspnAccess(leagueId, null); }}>Clear session credentials</Btn>
+      <Btn variant="subtle" size="sm" onClick={forget}>
+        {saved && saved.saved ? 'Forget saved credentials' : 'Clear session credentials'}
+      </Btn>
     </details>
   );
 }
@@ -341,6 +377,16 @@ function ImportPanel({ form, setForm }) {
       }
     });
   };
+  // Yahoo grants permissions at authorization time and a refresh keeps them,
+  // so an authorization made before Fantasy Sports was enabled on the app can
+  // never see fantasy data. Dropping it forces a fresh grant.
+  const yahooReconnect = () => {
+    yhPost('/api/yahoo/disconnect', {}, () => {
+      yhSet({ leagues: null, leagueKey: '', code: '', authUrl: '',
+              msg: { ok: true, text: 'Authorization cleared. Choose Get authorize link to grant access again.' } });
+    });
+  };
+
   const yahooExchange = () => {
     if (!yh.code.trim()) { yhSet({ msg: { ok: false, text: 'Paste the authorization code' } }); return; }
     yhPost('/api/yahoo/exchange', { code: yh.code.trim() }, d => {
@@ -403,7 +449,7 @@ function ImportPanel({ form, setForm }) {
           <div style={{marginTop:8, fontSize:11.5, color:T.muted, lineHeight:1.5}}>
             Find the ID in your ESPN league URL: <code>…/leagues/<b>THIS</b></code> or <code>leagueId=<b>THIS</b></code>. A 401 means ESPN denied access; private leagues need both cookies below.
           </div>
-          <EspnAccessFields leagueId={form.id} />
+          <EspnAccessFields leagueId={form.id} espnLeagueId={form.espnLeagueId || espnId} />
         </div>
       )}
 
@@ -486,6 +532,11 @@ function ImportPanel({ form, setForm }) {
                         background:'none', border:'none', padding:0, color:T.primary,
                         cursor:'pointer', textDecoration:'underline', fontSize:12.5,
                       }}>Use different credentials</button>
+                      {' · '}
+                      <button onClick={yahooReconnect} style={{
+                        background:'none', border:'none', padding:0, color:T.primary,
+                        cursor:'pointer', textDecoration:'underline', fontSize:12.5,
+                      }}>Reconnect</button>
                     </div>
                   ) : (
                     <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
@@ -756,7 +807,7 @@ function LeagueSetupModal({ league, onSave, onClose }) {
         {linkedProvider(form) && <div style={{marginBottom:16}}>
           <Btn variant="secondary" onClick={refreshSettings} disabled={refreshing}>{refreshing ? 'Refreshing…' : `Refresh settings from ${linkedProvider(form)}`}</Btn>
           {refreshMessage && <Note tone={refreshMessage.ok ? 'ok' : 'error'} style={{marginTop:10}}>{refreshMessage.text}</Note>}
-          {form.platform === 'ESPN' && <EspnAccessFields leagueId={form.id} />}
+          {form.platform === 'ESPN' && <EspnAccessFields leagueId={form.id} espnLeagueId={form.espnLeagueId} />}
         </div>}
         <DraftOrderEditor
           numTeams={form.numTeams}

@@ -675,3 +675,48 @@ class TestOverriddenScoringRows(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestYahooDisconnect(unittest.TestCase):
+    """A Yahoo access token keeps the permissions it was minted with, and a
+    refresh preserves them — so an authorization made before Yahoo enabled
+    Fantasy Sports can never see fantasy data, however long you wait after
+    approval. Clearing it has to be possible."""
+
+    def _handler(self, stored):
+        from unittest.mock import MagicMock, patch
+        from draft_assistant.web.server import DraftAPIHandler
+        handler = DraftAPIHandler.__new__(DraftAPIHandler)
+        handler.profile = "default"
+        handler._send_json = MagicMock()
+        handler._read_body = MagicMock(return_value=self.body)
+        handler._yahoo_load = MagicMock(return_value=dict(stored))
+        handler.saved = {}
+        handler._yahoo_save = lambda data: handler.saved.update(data)
+        return handler, patch
+
+    def test_disconnect_drops_the_token_but_keeps_credentials(self):
+        self.body = {}
+        handler, _ = self._handler({
+            "client_id": "abc", "client_secret": "shh",
+            "token": {"access_token": "stale", "refresh_token": "also-stale"},
+        })
+        handler._handle_yahoo_disconnect()
+        # Re-typing the Client ID and Secret is not what this fixes.
+        self.assertEqual(handler.saved.get("client_id"), "abc")
+        self.assertNotIn("token", handler.saved)
+        payload = handler._send_json.call_args[0][0]
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["hasCredentials"])
+        self.assertFalse(payload["hasToken"])
+
+    def test_disconnect_can_forget_credentials_too(self):
+        from unittest.mock import patch
+        self.body = {"forgetCredentials": True}
+        handler, _ = self._handler({"client_id": "abc", "token": {"access_token": "x"}})
+        with patch("draft_assistant.secret_store.forget") as forget:
+            handler._handle_yahoo_disconnect()
+            self.assertEqual(forget.call_count, 1)
+        payload = handler._send_json.call_args[0][0]
+        self.assertFalse(payload["hasCredentials"])
+        self.assertFalse(payload["hasToken"])
