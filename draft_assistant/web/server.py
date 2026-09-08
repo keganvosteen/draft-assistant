@@ -546,6 +546,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_yahoo_connect()
         elif self.path == "/api/yahoo/exchange":
             self._handle_yahoo_exchange()
+        elif self.path == "/api/yahoo/disconnect":
+            self._handle_yahoo_disconnect()
         elif self.path == "/api/yahoo/import":
             self._handle_yahoo_import()
         elif self.path == "/api/yahoo/draft":
@@ -1079,9 +1081,13 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         if "additional_authorization_required" in err_msg:
             self._send_json({
                 "error": (
-                    "Yahoo Fantasy Sports API access is not enabled for your Developer App ID yet. "
-                    "Yahoo requires submitting the access request form at https://sports.yahoo.com/developer/access/ "
-                    "to approve your Client ID for Fantasy Sports access."
+                    "Yahoo has not granted this app Fantasy Sports access. Two things cause this. "
+                    "If the app's API Permissions list on developer.yahoo.com shows no Fantasy Sports "
+                    "option, the Yahoo account itself is not enabled yet — request it at "
+                    "https://sports.yahoo.com/developer/access/. If Fantasy Sports IS listed and ticked, "
+                    "the saved authorization predates the grant: an access token keeps the permissions it "
+                    "was issued with, and refreshing preserves them, so choose Reconnect to authorize "
+                    "again and pick up the new access."
                 ),
                 "code": "yahoo_additional_authorization_required",
                 "needsApproval": True,
@@ -1511,6 +1517,35 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                                 detail=f"{len(rows)} drafted players; replaces public ADP")
         except Exception as exc:
             return SourceReport("Yahoo ADP", 0, ok=False, detail=str(exc))
+
+    def _handle_yahoo_disconnect(self):
+        """Drop the stored Yahoo authorization so the next connect re-grants.
+
+        An access token carries the permissions it was minted with, and
+        refreshing preserves them — so a token issued before Yahoo enabled
+        Fantasy Sports on the app keeps failing with
+        additional_authorization_required no matter how long you wait after
+        approval. Clearing it is the only way to pick the new grant up.
+        Credentials are kept unless the caller asks to forget those too, since
+        re-typing the Client ID and Secret is not what this fixes.
+        """
+        try:
+            body = self._read_body()
+            data = self._yahoo_load()
+            if body.get("forgetCredentials"):
+                from .. import secret_store
+                secret_store.forget(self._yahoo_store_path(), "yahoo")
+                self._send_json({"ok": True, "hasCredentials": False, "hasToken": False})
+                return
+            data.pop("token", None)
+            self._yahoo_save(data)
+            self._send_json({
+                "ok": True,
+                "hasCredentials": bool(data.get("client_id") and data.get("client_secret")),
+                "hasToken": False,
+            })
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
 
     def _handle_yahoo_import(self):
         """Import a chosen Yahoo league as a form-ready payload (like ESPN)."""

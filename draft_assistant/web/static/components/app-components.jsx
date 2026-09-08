@@ -377,6 +377,16 @@ function ImportPanel({ form, setForm }) {
       }
     });
   };
+  // Yahoo grants permissions at authorization time and a refresh keeps them,
+  // so an authorization made before Fantasy Sports was enabled on the app can
+  // never see fantasy data. Dropping it forces a fresh grant.
+  const yahooReconnect = () => {
+    yhPost('/api/yahoo/disconnect', {}, () => {
+      yhSet({ leagues: null, leagueKey: '', code: '', authUrl: '',
+              msg: { ok: true, text: 'Authorization cleared. Choose Get authorize link to grant access again.' } });
+    });
+  };
+
   const yahooExchange = () => {
     if (!yh.code.trim()) { yhSet({ msg: { ok: false, text: 'Paste the authorization code' } }); return; }
     yhPost('/api/yahoo/exchange', { code: yh.code.trim() }, d => {
@@ -522,6 +532,11 @@ function ImportPanel({ form, setForm }) {
                         background:'none', border:'none', padding:0, color:T.primary,
                         cursor:'pointer', textDecoration:'underline', fontSize:12.5,
                       }}>Use different credentials</button>
+                      {' · '}
+                      <button onClick={yahooReconnect} style={{
+                        background:'none', border:'none', padding:0, color:T.primary,
+                        cursor:'pointer', textDecoration:'underline', fontSize:12.5,
+                      }}>Reconnect</button>
                     </div>
                   ) : (
                     <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
