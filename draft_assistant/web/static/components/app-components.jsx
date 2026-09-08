@@ -1512,9 +1512,44 @@ function App() {
         if (generation !== workspaceGeneration.current) throw new Error('Roster sync was superseded by restoring a backup.');
         setPicks(prev => ({ ...prev, [lg.id]: d.picks || [] }));
         setLeagues(prev => prev.map(l => l.id === lg.id ? {...l, pickSource:'rosters'} : l));
-        return `Synced ${d.matched || 0} of ${d.rostered || 0} rostered players from ${d.source || lg.platform}.`;
+        const source = d.source || lg.platform;
+        // A sync that finds nothing is not a failure the server can report —
+        // the provider answered, the rosters were simply empty. Say which of
+        // the two causes it is instead of a bare "Synced 0 of 0".
+        if (!d.rostered) {
+          return source === 'ESPN'
+            ? `${source} returned no rostered players. If this league has already drafted, re-enter your espn_s2 and SWID cookies (Edit league → Import) — they are held in memory only and clear whenever the app restarts. If it has not drafted yet, there is nothing to sync.`
+            : `${source} returned no rostered players — nothing to sync until the league drafts.`;
+        }
+        return `Synced ${d.matched || 0} of ${d.rostered} rostered players from ${source}.`;
       });
   }, []);
+
+  // One "Sync" for the league hub. A completed draft is strictly better data
+  // than current ownership — it carries the pick order too — so try the draft
+  // history first and fall back to rosters when the provider has none. Users
+  // were picking between "Sync rosters" and "Sync completed ESPN draft"
+  // without a way to know which one their league needed.
+  const syncLeagueOrDraft = React.useCallback(lg => {
+    const generation = workspaceGeneration.current;
+    return fetch('/api/draft-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ league: lg, ...getEspnAccess(lg.id) }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        // No draft history is the normal pre-draft case, not a failure: fall
+        // through to rosters rather than surfacing the provider's complaint.
+        if (d.error || !Array.isArray(d.picks) || d.picks.length === 0) return null;
+        if (generation !== workspaceGeneration.current) throw new Error('Sync was superseded by restoring a backup.');
+        if (d.leagueId !== lg.id) throw new Error('The draft response did not match this league.');
+        replacePicks(lg.id, d.picks, d.leaguePatch || {});
+        return `Synced ${d.picks.length} draft picks from ${d.source || lg.platform}.`;
+      })
+      .catch(() => null)
+      .then(msg => msg || syncLeague(lg));
+  }, [syncLeague]);
 
   const undoPick = leagueId => {
     setPicks(prev => ({ ...prev, [leagueId]: (prev[leagueId] || []).slice(0, -1) }));
@@ -1604,7 +1639,7 @@ function App() {
         onOpenWaivers={() => setRoute({ screen: 'waivers', leagueId: routeLeague.id })}
         onEditLeague={openEditor}
         onDeleteLeague={deleteLeague}
-        onSyncLeague={syncLeague}
+        onSyncLeague={syncLeagueOrDraft}
         onPullData={() => setShowPull(true)}
       />
     );
