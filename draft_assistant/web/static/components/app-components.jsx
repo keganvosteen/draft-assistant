@@ -92,8 +92,23 @@ function DraftOrderEditor({ numTeams, teamNames, teamIds, draftPosition, draftOr
       : draftPosition;
     onChange({ teamNames: order.map(idx => names[idx]), teamIds: order.map(idx => (teamIds || [])[idx]), draftPosition: dp });
   };
+  // A row copied from a league's teams table carries far more than the name:
+  // "logo <team>\t<manager>\t<email>\t-\t0\t0\t<date>". Keep the first cell and
+  // drop the image's alt text, so pasting the table works as well as pasting a
+  // bare list of names.
+  const teamNameFromRow = line => {
+    let cell = String(line).split('\t')[0].trim();
+    cell = cell.replace(/^(logo|image|avatar|team\s+logo)\b[\s:.-]*/i, '').trim();
+    return cell;
+  };
+  const HEADER_CELLS = ['team name', 'team', 'manager', 'email', 'waiver priority'];
+
   const bulkPaste = text => {
-    const nextNames = text.split('\n').map(s => s.trim()).slice(0, numTeams);
+    const nextNames = text.split('\n')
+      .map(teamNameFromRow)
+      // The header row copies along with the table; it is not a team.
+      .filter((name, index) => !(index === 0 && HEADER_CELLS.includes(name.toLowerCase())))
+      .slice(0, numTeams);
     const next = {teamNames:nextNames, teamIds:nextNames.map(name =>
       name && names.filter(value => value === name).length === 1 ? (teamIds || [])[names.indexOf(name)] : null)};
     next.draftPosition = remappedTeamSlot({teamNames:names, teamIds}, next, draftPosition);
