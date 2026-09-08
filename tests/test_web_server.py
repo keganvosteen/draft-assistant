@@ -7,6 +7,8 @@ guard these tests pin down.
 import json
 import threading
 import unittest
+from io import BytesIO
+from urllib.error import HTTPError
 from functools import partial
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
@@ -361,7 +363,9 @@ class TestYahooEndpoints(_ServerFixture):
         with patch.object(DraftAPIHandler, "_yahoo_load", return_value={"client_id": "test_id", "client_secret": "test_secret"}), \
              patch.object(DraftAPIHandler, "_yahoo_save"), \
              patch("draft_assistant.importers.yahoo.exchange_code", return_value={"access_token": "fake"}), \
-             patch("draft_assistant.importers.yahoo.list_leagues", side_effect=RuntimeError("additional_authorization_required")):
+             patch("draft_assistant.importers.yahoo.urlopen", side_effect=HTTPError(
+                 "https://fantasysports.yahooapis.com/fantasy/v2/users", 401, "Unauthorized", {},
+                 BytesIO(b'{"error":{"description":"oauth_problem=additional_authorization_required"}}'))):
             status, body = self.request("POST", "/api/yahoo/exchange", {"code": "auth-code"})
             self.assertEqual(status, 403)
             payload = json.loads(body.decode("utf-8"))
@@ -373,7 +377,9 @@ class TestYahooEndpoints(_ServerFixture):
         from unittest.mock import patch
         with patch.object(DraftAPIHandler, "_yahoo_load", return_value={"token": {"access_token": "fake"}}), \
              patch.object(DraftAPIHandler, "_yahoo_access_token", return_value="fake-token"), \
-             patch("draft_assistant.importers.yahoo.fetch_league", side_effect=RuntimeError("additional_authorization_required")):
+             patch("draft_assistant.importers.yahoo.urlopen", side_effect=HTTPError(
+                 "https://fantasysports.yahooapis.com/fantasy/v2/league/test", 401, "Unauthorized", {},
+                 BytesIO(b'{"error":{"description":"oauth_problem=additional_authorization_required"}}'))):
             status, body = self.request("POST", "/api/yahoo/import", {"leagueKey": "nfl.l.12345"})
             self.assertEqual(status, 403)
             payload = json.loads(body.decode("utf-8"))

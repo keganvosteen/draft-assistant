@@ -296,18 +296,19 @@ function ImportPanel({ form, setForm }) {
     pasteText: '',
     clientId: '', clientSecret: '', redirectUri: 'https://localhost/',
     authUrl: '', code: '', leagues: null, leagueKey: '', busy: false, msg: null,
-    credsSaved: false, showCredForm: false, needsApproval: false, approvalUrl: '',
+    credsSaved: false, hasToken: false, showCredForm: false, needsApproval: false, approvalUrl: '',
   });
   const yhSet = patch => setYh(s => ({ ...s, ...patch }));
   // Pick up credentials already saved on this machine (so re-auth is one click).
-  React.useEffect(() => {
+  const loadYahooStatus = () =>
     fetch('/api/yahoo/status').then(r => r.json()).then(d => {
-      if (d && d.hasCredentials) yhSet({ credsSaved: true, redirectUri: d.redirectUri || 'https://localhost/' });
+      if (d && !d.error) yhSet({ credsSaved: Boolean(d.hasCredentials), hasToken: Boolean(d.hasToken),
+        redirectUri: d.redirectUri || 'https://localhost/' });
     }).catch(() => {});
-  }, []);
+  React.useEffect(() => { loadYahooStatus(); }, []);
   const yhPost = (url, body, onOk) => {
     yhSet({ busy: true, msg: null });
-    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       .then(r => r.json())
       .then(d => {
         if (d.error) {
@@ -339,14 +340,18 @@ function ImportPanel({ form, setForm }) {
       } else {
         window.open(d.authUrl, '_blank');
       }
-    });
+    }).finally(loadYahooStatus);
   };
+  const showYahooLeagues = d => {
+    const lgs = d.leagues || [];
+    yhSet({ hasToken:true, leagues:lgs, leagueKey:(lgs[0] && lgs[0].league_key) || '', code:'',
+      msg:{ ok:true, text:lgs.length ? `Connected — ${lgs.length} league(s) found.`
+        : 'Connected, but Yahoo returned no NFL leagues for this account.' } });
+  };
+  const yahooResume = () => yhPost('/api/yahoo/leagues', {}, showYahooLeagues);
   const yahooExchange = () => {
     if (!yh.code.trim()) { yhSet({ msg: { ok: false, text: 'Paste the authorization code' } }); return; }
-    yhPost('/api/yahoo/exchange', { code: yh.code.trim() }, d => {
-      const lgs = d.leagues || [];
-      yhSet({ leagues: lgs, leagueKey: (lgs[0] && lgs[0].league_key) || '', msg: { ok: true, text: `Connected — ${lgs.length} league(s) found.` } });
-    });
+    yhPost('/api/yahoo/exchange', { code: yh.code.trim() }, showYahooLeagues).finally(loadYahooStatus);
   };
   const yahooImport = () => {
     if (!yh.leagueKey) return;
@@ -363,7 +368,8 @@ function ImportPanel({ form, setForm }) {
     }
     yhPost('/api/yahoo/parse-settings', { text: yh.pasteText.trim() }, d => {
       setForm(f => importedLeague(f, d, 'Yahoo'));
-      yhSet({ msg: { ok: true, text: `Imported “${d.name}” from settings — ${d.numTeams} teams, ${d.scoringType}. Switch to Draft order tab to enter teams or select your seat.` } });
+      const review = (d.importWarnings || []).join(' ');
+      yhSet({ msg: { ok: true, text: `Loaded “${d.name}” settings — ${d.numTeams} teams. Review Roster & scoring, then enter the draft order and select your team. ${review}`.trim() } });
     });
   };
 
@@ -449,11 +455,15 @@ function ImportPanel({ form, setForm }) {
           {yh.mode === 'paste' ? (
             <div>
               <div style={{fontSize:12.5, color:T.text, lineHeight:1.5, marginBottom:8}}>
-                Open your Yahoo league in a browser, navigate to <b>League → Settings</b> (<code>…/settings</code>), select all (Ctrl+A), copy (Ctrl+C), and paste the text below. Draft Assistant will parse your league name, teams, roster positions, and custom scoring rules immediately.
+                Open your Yahoo league in a browser, navigate to <b>League → Settings</b> (<code>…/settings</code>), select all (Ctrl+A), copy (Ctrl+C), and paste the text below. Include the league name, team count, roster positions, and scoring tables. Review the imported values before saving.
               </div>
+              <Note tone="info" style={{marginBottom:8}}>
+                Pasting settings does not connect your Yahoo account or import rosters and draft picks. Enter your teams and draft order on the Draft order tab. Yahoo API sync requires an approved Yahoo connection.
+              </Note>
               <textarea
                 value={yh.pasteText}
                 onChange={e => yhSet({ pasteText: e.target.value })}
+                aria-label="Yahoo league settings text"
                 placeholder="Paste Yahoo league settings text here (e.g. from football.fantasysports.yahoo.com/f1/.../settings)..."
                 rows={6}
                 style={{
@@ -477,6 +487,13 @@ function ImportPanel({ form, setForm }) {
             </div>
           ) : (
             <div>
+              {yh.hasToken && !yh.showCredForm && (
+                <div style={{marginBottom:10}}>
+                  <Btn variant="secondary" onClick={yahooResume} disabled={yh.busy}>
+                    {yh.busy ? 'Checking…' : 'Use saved Yahoo connection'}
+                  </Btn>
+                </div>
+              )}
               {!yh.leagues ? (
                 <>
                   {yh.credsSaved && !yh.showCredForm ? (
@@ -523,7 +540,7 @@ function ImportPanel({ form, setForm }) {
                     </div>
                   )}
                 </>
-              ) : (
+              ) : yh.leagues.length ? (
                 <div style={{display:'flex', gap:8, alignItems:'center'}}>
                   <div style={{flex:1}}>
                     <Select value={yh.leagueKey} onChange={e=>yhSet({leagueKey:e.target.value})}
@@ -532,15 +549,17 @@ function ImportPanel({ form, setForm }) {
                   </div>
                   <Btn onClick={yahooImport} disabled={yh.busy || !yh.leagueKey}>Import</Btn>
                 </div>
-              )}
+              ) : <Note>No NFL leagues were found. Authorize the Yahoo account that belongs to your league.</Note>}
+              {yh.leagues && <Btn variant="subtle" disabled={yh.busy} onClick={() =>
+                yhSet({leagues:null, leagueKey:'', authUrl:'', code:'', msg:null})}>Authorize again</Btn>}
 
               {yh.needsApproval && (
                 <div style={{marginTop:12, padding:12, borderRadius:T.rsm, background:T.surfaceAlt, border:`1px solid ${T.border}`}}>
                   <div style={{fontSize:12.5, fontWeight:600, color:T.text, marginBottom:4}}>
-                    Yahoo Fantasy API access pending approval
+                    Yahoo Fantasy API permission required
                   </div>
                   <div style={{fontSize:12, color:T.muted, lineHeight:1.4, marginBottom:8}}>
-                    Yahoo recently restricted its Fantasy Sports API for new developer apps. Submit Yahoo's official access form to enable Fantasy Sports permissions for this App ID, or switch to <b>Paste settings</b> above to import immediately without waiting.
+                    Check that Yahoo approved Fantasy Sports read access for this Client ID. If access is already approved, confirm the permissions and authorize again. Pasted settings can import the league setup; automatic roster and draft sync require API access.
                   </div>
                   <Btn size="sm" variant="secondary" onClick={() => {
                     const url = yh.approvalUrl || 'https://sports.yahoo.com/developer/access/';
@@ -548,6 +567,9 @@ function ImportPanel({ form, setForm }) {
                     else window.open(url, '_blank');
                   }}>
                     Open Yahoo Developer Access Form ↗
+                  </Btn>
+                  <Btn size="sm" variant="subtle" onClick={() => yhSet({mode:'paste', msg:null})}>
+                    Use pasted settings
                   </Btn>
                 </div>
               )}

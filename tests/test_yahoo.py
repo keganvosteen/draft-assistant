@@ -341,11 +341,70 @@ Receptions: 1.0
         self.assertEqual(roster["DST"], 1)
         self.assertEqual(roster["BN"], 5)
         self.assertEqual(roster["IR"], 2)
+        # Whole roster labels matter: Quarterback must not create a kicker,
+        # and Superflex must not also create FLEX or RBWR rounds.
+        self.assertEqual(roster["K"], 0)
+        self.assertEqual(roster["FLEX"], 0)
+        self.assertNotIn("RBWR", roster)
 
         sc = info["scoring"]
         self.assertEqual(sc["pass_yd"], 0.05)
         self.assertEqual(sc["pass_td"], 6.0)
         self.assertEqual(sc["rec"], 1.0)
+
+    def test_copied_table_labels_do_not_confuse_league_id_and_name(self):
+        info = parse_settings_text(
+            "League ID:\t123\nLeague Name\nSunday Football\n"
+            "Max Teams\t12\nDraft Type\tLive Standard Draft\n"
+            "Roster Positions\nQB, RB, WR, TE, BN\nReceptions\t0.5\n"
+        )
+        self.assertEqual(info["name"], "Sunday Football")
+        self.assertEqual(info["numTeams"], 12)
+        self.assertEqual(info["rosterSlots"], {
+            "QB": 1, "RB": 1, "WR": 1, "TE": 1,
+            "FLEX": 0, "K": 0, "DST": 0, "BN": 1,
+        })
+        self.assertEqual(info["scoring"], {"rec": 0.5})
+        self.assertFalse(info["draftOrderReady"])
+        self.assertTrue(any("review scoring" in warning for warning in info["importWarnings"]))
+
+    def test_bad_or_incomplete_text_cannot_silently_create_a_default_league(self):
+        prefix = "League Name: Example\nMax Teams: 10\n"
+        cases = [
+            "This is not a league settings page",
+            "League ID: 123\nMax Teams: 10\nRoster Positions: QB\nReceptions: 1",
+            prefix + "Passing Touchdowns: 6",  # no roster
+            prefix + "Roster Positions: QB, RB, WR",  # no scoring
+            prefix + "Roster Positions: QB, INVALID\nReceptions: 1",
+            prefix + "Roster Positions: QB\nReceptions: 1\nReceptions: 0.5",
+            prefix + "Quarterback (QB): -1\nReceptions: 1",
+            prefix + "Roster Positions: QB\nPassing Yards: 25 yards per point; 5 points at 300 yards",
+        ]
+        for text in cases:
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                parse_settings_text(text)
+
+    def test_scoring_uses_units_and_separates_offense_from_defense(self):
+        info = parse_settings_text(
+            "League Name: Custom\nMax Teams: 10\nRoster Positions: QB, DEF, K\n"
+            "Passing Yards: 20 yards per point\nRushing Yards: 2 points per yard\n"
+            "Interceptions: -3\nReceptions: 0\nPassing 2-Point Conversions: 3\n"
+            "Rushing 2-Point Conversions: 4\nReceiving 2-Point Conversions: 5\n"
+            "Sacks: 1\nInterceptions: 4\nField Goals 50+ Yards: 5\n"
+            "Field Goals 60+ Yards: 6\nPoint After Attempt Missed: -1\n"
+        )
+        self.assertEqual(info["scoring"], {
+            "pass_yd": 0.05, "rush_yd": 2.0, "pass_int": -3.0, "rec": 0.0,
+            "pass_2pt": 3.0, "rush_2pt": 4.0, "rec_2pt": 5.0,
+            "sack": 1.0, "def_int": 4.0, "fg_50_59": 5.0,
+            "fg_60_plus": 6.0, "pat_miss": -1.0,
+        })
+
+    def test_invalid_numeric_values_are_rejected(self):
+        prefix = "League Name: Example\nMax Teams: 10\nRoster Positions: QB\n"
+        for value in ("0 yards per point", "-25 yards per point", "NaN", "9" * 400):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                parse_settings_text(prefix + "Passing Yards: " + value)
 
 
 class TestDraftAnalysis(unittest.TestCase):

@@ -503,6 +503,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_yahoo_connect()
         elif self.path == "/api/yahoo/exchange":
             self._handle_yahoo_exchange()
+        elif self.path == "/api/yahoo/leagues":
+            self._handle_yahoo_leagues()
         elif self.path == "/api/yahoo/import":
             self._handle_yahoo_import()
         elif self.path == "/api/yahoo/draft":
@@ -1036,18 +1038,12 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
 
     def _send_platform_error(self, exc: Exception, platform: str = ""):
         """Make provider failures actionable without echoing authentication data."""
-        err_msg = str(exc)
-        if "additional_authorization_required" in err_msg:
-            self._send_json({
-                "error": (
-                    "Yahoo Fantasy Sports API access is not enabled for your Developer App ID yet. "
-                    "Yahoo requires submitting the access request form at https://sports.yahoo.com/developer/access/ "
-                    "to approve your Client ID for Fantasy Sports access."
-                ),
-                "code": "yahoo_additional_authorization_required",
-                "needsApproval": True,
-                "approvalUrl": "https://sports.yahoo.com/developer/access/",
-            }, 403)
+        from ..importers.yahoo import APPROVAL_URL, YahooAPIError
+        if isinstance(exc, YahooAPIError):
+            payload = {"error": str(exc), "code": exc.code}
+            if exc.code == "yahoo_additional_authorization_required":
+                payload.update(needsApproval=True, approvalUrl=APPROVAL_URL)
+            self._send_json(payload, exc.status)
             return
         if isinstance(exc, HTTPError):
             exc.close()
@@ -1106,7 +1102,6 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 if not league_key:
                     raise ValueError("Yahoo league is missing yahooLeagueKey")
                 info = _import_scoring_type(yahoo.fetch_league(self._yahoo_access_token(), league_key))
-                info.setdefault("draftOrderReady", bool(info.get("draftPosition") or info.get("draftOrderReady")))
             else:
                 raise ValueError("Import an ESPN, Sleeper, or Yahoo league first.")
             self._send_json({**info, **_draft_league_patch(info, league)})
@@ -1217,17 +1212,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 if not league_key:
                     raise ValueError("Yahoo league is missing yahooLeagueKey")
                 access_token = self._yahoo_access_token()
+                info = yahoo.fetch_league(access_token, league_key)
                 draft_picks = yahoo.fetch_draft_picks(access_token, league_key)
-                status = "complete" if (league.get("draftStatus") == "postdraft" or (
-                    draft_picks and len(draft_picks) >= int(league.get("numTeams") or 10) * max(1, sum(int(v or 0) for k, v in (league.get("rosterSlots") or {}).items() if k != "IR"))
-                )) else "in_progress"
-                info = {
-                    "draftType": league.get("draftType") or "snake",
-                    "draftOrderReady": True,
-                    "status": status,
-                    "teamNames": league.get("teamNames"),
-                    "draftPosition": league.get("draftPosition"),
-                }
+                info["status"] = {"postdraft":"complete", "predraft":"pre_draft"}.get(
+                    info.get("draftStatus"), "in_progress")
                 draft_id = f"yahoo:{league_key}"
                 live_available = True
             else:
@@ -1292,14 +1280,18 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         data = self._yahoo_load()
         token = data.get("token") or {}
         if not token.get("access_token"):
-            raise RuntimeError("Authorize with Yahoo first")
+            raise yahoo.YahooAPIError("Authorize with Yahoo first.", status=401, code="yahoo_auth_required")
         if yahoo.token_is_expired(token):
+            if not token.get("refresh_token") or not data.get("client_id") or not data.get("client_secret"):
+                raise yahoo.YahooAPIError("Your Yahoo connection needs to be authorized again.",
+                                          status=401, code="yahoo_auth_required")
             token = yahoo.refresh_access_token(
                 data["client_id"],
                 data["client_secret"],
                 token["refresh_token"],
                 data.get("redirect_uri", yahoo.DEFAULT_REDIRECT),
             )
+            token.setdefault("refresh_token", data["token"]["refresh_token"])
             data["token"] = token
             self._yahoo_save(data)
         return token["access_token"]
@@ -1332,6 +1324,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             if not client_id or not client_secret:
                 self._send_json({"error": "clientId and clientSecret are required"}, 400)
                 return
+            if any(data.get(key) != value for key, value in (
+                ("client_id", client_id), ("client_secret", client_secret), ("redirect_uri", redirect),
+            )):
+                data.pop("token", None)
             data.update({"client_id": client_id, "client_secret": client_secret,
                          "redirect_uri": redirect})
             self._yahoo_save(data)
@@ -1356,26 +1352,20 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                                         data.get("redirect_uri", yahoo.DEFAULT_REDIRECT))
             data["token"] = token
             self._yahoo_save(data)
-            try:
-                leagues = yahoo.list_leagues(token["access_token"])
-            except Exception as exc:
-                if "additional_authorization_required" in str(exc):
-                    self._send_json({
-                        "error": (
-                            "Yahoo Fantasy Sports API access is not enabled for your Developer App ID yet. "
-                            "Yahoo requires submitting the access request form at https://sports.yahoo.com/developer/access/ "
-                            "to approve your Client ID for Fantasy Sports access. "
-                            "In the meantime, you can paste your Yahoo league settings text below to import your league immediately."
-                        ),
-                        "code": "yahoo_additional_authorization_required",
-                        "needsApproval": True,
-                        "approvalUrl": "https://sports.yahoo.com/developer/access/",
-                    }, 403)
-                    return
-                raise
+            leagues = yahoo.list_leagues(token["access_token"])
             self._send_json({"ok": True, "leagues": leagues})
         except Exception as exc:
-            self._send_json({"error": str(exc)}, 500)
+            self._send_platform_error(exc, "yahoo")
+
+    def _handle_yahoo_leagues(self):
+        """Resume a saved connection without reusing a one-time authorization code."""
+        try:
+            from ..importers import yahoo
+            self._read_body()
+            leagues = yahoo.list_leagues(self._yahoo_access_token())
+            self._send_json({"ok": True, "leagues": leagues})
+        except Exception as exc:
+            self._send_platform_error(exc, "yahoo")
 
     def _yahoo_adp_report(self, body: dict, players):
         """Overlay Yahoo draft-room ADP when the pulling league is on Yahoo.
@@ -1416,25 +1406,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             if not (data.get("token") or {}).get("access_token"):
                 self._send_json({"error": "Authorize with Yahoo first"}, 400)
                 return
-            try:
-                info = yahoo.fetch_league(self._yahoo_access_token(), league_key)
-            except Exception as exc:
-                if "additional_authorization_required" in str(exc):
-                    self._send_json({
-                        "error": (
-                            "Yahoo Fantasy Sports API access is not enabled for your Developer App ID yet. "
-                            "Yahoo requires submitting the access request form at https://sports.yahoo.com/developer/access/ "
-                            "to approve your Client ID."
-                        ),
-                        "code": "yahoo_additional_authorization_required",
-                        "needsApproval": True,
-                        "approvalUrl": "https://sports.yahoo.com/developer/access/",
-                    }, 403)
-                    return
-                raise
+            info = yahoo.fetch_league(self._yahoo_access_token(), league_key)
             self._send_json(_import_scoring_type(info))
         except Exception as exc:
-            self._send_json({"error": str(exc)}, 500)
+            self._send_platform_error(exc, "yahoo")
 
     def _handle_yahoo_parse_settings(self):
         """Parse copied/pasted text from a Yahoo Fantasy league settings page."""
