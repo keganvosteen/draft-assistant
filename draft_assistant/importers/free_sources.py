@@ -852,10 +852,16 @@ def _clean_espn_cookie(key: str, value: str) -> str:
     URL-*decoded* form some guides hand out. Every one of those silently
     turned into a 401 ("it imported a generic league") — fix them instead.
     """
-    value = str(value).strip().strip('"').strip("'").strip()
-    prefix = key.lower() + "="
-    if value.lower().startswith(prefix):
-        value = value[len(prefix):].strip().strip('"').strip("'").strip()
+    def _unwrap(text: str) -> str:
+        return text.strip().strip('"').strip("'").strip()
+
+    # Copying the whole DevTools row gives 'espn_s2:"AEAw…"' (the Application
+    # panel separates name and value with a colon) or 'espn_s2=AEAw…' (a copied
+    # Cookie header). Unwrap quotes, drop either prefix, then unwrap again for
+    # the quotes that prefix was holding.
+    value = _unwrap(str(value))
+    value = re.sub(rf"^{re.escape(key)}\s*[:=]\s*", "", value, flags=re.I)
+    value = _unwrap(value)
     if key == "SWID":
         value = value.strip("{}")
         if value:

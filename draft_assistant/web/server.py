@@ -98,8 +98,49 @@ def _league_platform(league: dict) -> str:
 
 
 def _import_scoring_type(info: dict) -> dict:
-    rec = float((info.get("scoring") or {}).get("rec", 0) or 0)
-    return {**info, "scoringType": "ppr" if rec >= 0.9 else "half-ppr" if rec >= 0.4 else "standard"}
+    """Label an imported league's scoring format.
+
+    The UI rewrites the per-reception value from this label (standard -> 0,
+    half -> 0.5, ppr -> 1), so a league that pays anything else per catch —
+    0.25, say — has to come back as "custom" with its own value carried in
+    customScoring, or the reception points are silently discarded.
+    """
+    scoring = info.get("scoring") or {}
+    rec = float(scoring.get("rec", 0) or 0)
+    if abs(rec - 1.0) < 0.01:
+        scoring_type = "ppr"
+    elif abs(rec - 0.5) < 0.01:
+        scoring_type = "half-ppr"
+    elif rec <= 0.01:
+        scoring_type = "standard"
+    else:
+        scoring_type = "custom"
+    out = {**info, "scoringType": scoring_type}
+    if scoring_type == "custom" and not out.get("customScoring"):
+        def _denominator(per_point, fallback):
+            # Yards-per-point, snapped to the whole number the league shows.
+            if not per_point:
+                return fallback
+            yards = 1.0 / per_point
+            nearest = round(yards)
+            return float(nearest) if abs(yards - nearest) < 0.15 else round(yards, 2)
+
+        out["customScoring"] = {
+            "passYds": _denominator(scoring.get("pass_yd"), 25),
+            "passTD": scoring.get("pass_td", 4.0),
+            "passInt": scoring.get("pass_int", -2.0),
+            "sackTaken": scoring.get("sack_taken", 0.0),
+            "rushYds": _denominator(scoring.get("rush_yd"), 10),
+            "rushTD": scoring.get("rush_td", 6.0),
+            "recYds": _denominator(scoring.get("rec_yd"), 10),
+            "recTD": scoring.get("rec_td", 6.0),
+            "reception": rec,
+            "twoPt": scoring.get("rec_2pt", 2.0),
+            "fumbleLost": scoring.get("fumbles", -2.0),
+            "fumble": scoring.get("fumbles_total", 0.0),
+            "fumRetTD": scoring.get("fum_ret_td", 6.0),
+        }
+    return out
 
 
 def _draft_league_patch(info: dict, league: dict) -> dict:

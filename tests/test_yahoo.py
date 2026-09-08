@@ -564,6 +564,114 @@ class TestSettingsTextRosterParsing(unittest.TestCase):
         self.assertEqual(roster["FLEX"], 1)
         self.assertEqual(roster["BN"], 6)
 
+    def test_full_page_select_all_ignores_navigation_chrome(self):
+        """The UI tells users to Ctrl+A the whole settings page, so the parser
+        has to find the league inside nav links, footer text and unrelated
+        rows — not treat the first line ("Yahoo Fantasy") as the name."""
+        from draft_assistant.importers.yahoo import parse_settings_text
+        info = parse_settings_text("\n".join([
+            "Yahoo Fantasy", "Sports", "Fantasy", "Mail", "Sign In",
+            "Home", "My Team", "League", "Players", "Scores", "Draft",
+            "Lega di Paca",
+            "League Settings",
+            "League Name", "Lega di Paca",
+            "League ID#", "1088234",
+            "Draft Type", "Live Standard Draft",
+            "Max Teams", "12",
+            "Trade End Date", "Week 11",
+            "Playoff Start Week", "Week 15",
+            "Roster Positions",
+            "QB, WR, WR, RB, RB, TE, W/R/T, K, DEF, BN, BN, BN, BN, BN, BN, IR",
+            "Passing Yards", "25 yards per point",
+            "Interceptions", "-1",
+            "Receptions", "0.5",
+            "Terms of Service", "Privacy Policy", "Help",
+        ]))
+        self.assertEqual(info["name"], "Lega di Paca")
+        self.assertEqual(info["numTeams"], 12)
+        self.assertEqual(info["scoringType"], "half-ppr")
+        self.assertEqual(info["scoring"]["pass_yd"], 0.04)   # "25 yards per point"
+        self.assertEqual(info["scoring"]["pass_int"], -1.0)  # league-specific
+        roster = info["rosterSlots"]
+        self.assertEqual((roster["QB"], roster["RB"], roster["WR"], roster["TE"]), (1, 2, 2, 1))
+        self.assertEqual((roster["FLEX"], roster["K"], roster["DST"], roster["BN"]), (1, 1, 1, 6))
+
+
+class TestOverriddenScoringRows(unittest.TestCase):
+    """Yahoo splits an *overridden* stat across three lines — the label, a
+    "Yahoo Default" marker, then a values row holding the league value first
+    and Yahoo's default second. Reading only the label line meant every
+    customized rule silently kept Yahoo's default."""
+
+    REAL = "\n".join([
+        "Lega di Paca (ID# 828682)",
+        "Scoring & Settings",
+        "Setting \tValue",
+        "League ID#: \t828682",
+        "League Name: \tLega di Paca",
+        "Draft Type: \tLive Standard Draft",
+        "Max Teams: \t16",
+        "Trade End Date: \tNovember 28, 2026",
+        "Roster Positions: \tQB, WR, WR, RB, TE, W/R/T, K, DEF, BN, BN, BN, BN, IR, IR",
+        "Offense \tLeague Value \tYahoo Default Value",
+        "Passing Yards", "Yahoo Default",
+        "\t30 yards per point; 10 points at 450 yards \t25 yards per point",
+        "Passing Touchdowns \t4 \t",
+        "Interceptions", "Yahoo Default", "\t-2 \t-1",
+        "Sacks", "Yahoo Default", "\t-1 \t0",
+        "Rushing Yards \t10 yards per point; 10 points at 170 yards \t",
+        "Rushing Touchdowns \t6 \t",
+        "Receptions", "Yahoo Default", "\t.25 \t0.5",
+        "Receiving Yards \t10 yards per point; 10 points at 180 yards \t",
+        "Receiving Touchdowns \t6 \t",
+        "Fumbles Lost", "Yahoo Default", "\t-1 \t-2",
+        "Kickers \tLeague Value \tYahoo Default Value",
+        "Field Goals 50+ Yards", "Yahoo Default", "\t6 \t5",
+        "Point After Attempt Made \t1 \t",
+        "Defense/Special Teams \tLeague Value \tYahoo Default Value",
+        "Sack \t1 \t",
+        "Safety \t2 \t",
+    ])
+
+    def setUp(self):
+        from draft_assistant.importers.yahoo import parse_settings_text
+        self.info = parse_settings_text(self.REAL)
+        self.scoring = self.info["scoring"]
+
+    def test_league_value_wins_over_the_yahoo_default(self):
+        # ".25" also has no leading digit, which the old number pattern required.
+        self.assertEqual(self.scoring["rec"], 0.25)
+        self.assertEqual(self.scoring["fumbles"], -1.0)      # not Yahoo's -2
+        self.assertEqual(self.scoring["fg_50_59"], 6.0)      # not Yahoo's 5
+        self.assertEqual(self.scoring["pass_int"], -2.0)
+
+    def test_yards_per_point_uses_the_league_column(self):
+        # "30 yards per point" -> 1/30, not Yahoo's default of 25.
+        self.assertEqual(self.scoring["pass_yd"], round(1 / 30, 4))
+        self.assertEqual(self.scoring["rush_yd"], 0.1)
+
+    def test_offensive_sacks_are_not_defensive_sacks(self):
+        self.assertEqual(self.scoring["sack_taken"], -1.0)   # QB sacked
+        self.assertEqual(self.scoring["sack"], 1.0)          # defense sack
+
+    def test_quarter_ppr_is_custom_so_the_value_survives(self):
+        # The UI rewrites rec from the scoring type, so anything but 0/0.5/1
+        # has to arrive as custom or the per-catch points are discarded.
+        self.assertEqual(self.info["scoringType"], "custom")
+        custom = self.info["customScoring"]
+        self.assertEqual(custom["reception"], 0.25)
+        self.assertEqual(custom["passYds"], 30.0)            # whole number, not 30.03
+        self.assertEqual(custom["sackTaken"], -1.0)
+        self.assertEqual(custom["fumbleLost"], -1.0)
+
+    def test_league_shape_still_parses(self):
+        self.assertEqual(self.info["name"], "Lega di Paca")
+        self.assertEqual(self.info["numTeams"], 16)
+        roster = self.info["rosterSlots"]
+        self.assertEqual((roster["QB"], roster["RB"], roster["WR"], roster["TE"]), (1, 1, 2, 1))
+        self.assertEqual((roster["FLEX"], roster["K"], roster["DST"]), (1, 1, 1))
+        self.assertEqual((roster["BN"], roster["IR"]), (4, 2))
+
 
 if __name__ == "__main__":
     unittest.main()
