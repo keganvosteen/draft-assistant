@@ -1525,6 +1525,32 @@ function App() {
       });
   }, []);
 
+  // One "Sync" for the league hub. A completed draft is strictly better data
+  // than current ownership — it carries the pick order too — so try the draft
+  // history first and fall back to rosters when the provider has none. Users
+  // were picking between "Sync rosters" and "Sync completed ESPN draft"
+  // without a way to know which one their league needed.
+  const syncLeagueOrDraft = React.useCallback(lg => {
+    const generation = workspaceGeneration.current;
+    return fetch('/api/draft-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ league: lg, ...getEspnAccess(lg.id) }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        // No draft history is the normal pre-draft case, not a failure: fall
+        // through to rosters rather than surfacing the provider's complaint.
+        if (d.error || !Array.isArray(d.picks) || d.picks.length === 0) return null;
+        if (generation !== workspaceGeneration.current) throw new Error('Sync was superseded by restoring a backup.');
+        if (d.leagueId !== lg.id) throw new Error('The draft response did not match this league.');
+        replacePicks(lg.id, d.picks, d.leaguePatch || {});
+        return `Synced ${d.picks.length} draft picks from ${d.source || lg.platform}.`;
+      })
+      .catch(() => null)
+      .then(msg => msg || syncLeague(lg));
+  }, [syncLeague]);
+
   const undoPick = leagueId => {
     setPicks(prev => ({ ...prev, [leagueId]: (prev[leagueId] || []).slice(0, -1) }));
   };
@@ -1613,7 +1639,7 @@ function App() {
         onOpenWaivers={() => setRoute({ screen: 'waivers', leagueId: routeLeague.id })}
         onEditLeague={openEditor}
         onDeleteLeague={deleteLeague}
-        onSyncLeague={syncLeague}
+        onSyncLeague={syncLeagueOrDraft}
         onPullData={() => setShowPull(true)}
       />
     );
