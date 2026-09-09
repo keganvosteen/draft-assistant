@@ -353,7 +353,8 @@ function ImportPanel({ form, setForm }) {
   // Pick up credentials already saved on this machine (so re-auth is one click).
   React.useEffect(() => {
     fetch('/api/yahoo/status').then(r => r.json()).then(d => {
-      if (d && d.hasCredentials) yhSet({ credsSaved: true, redirectUri: d.redirectUri || 'https://localhost/' });
+      if (d && d.hasCredentials) yhSet({ credsSaved: true, hasToken: !!d.hasToken,
+                                         redirectUri: d.redirectUri || 'https://localhost/' });
     }).catch(() => {});
   }, []);
   const yhPost = (url, body, onOk) => {
@@ -402,13 +403,20 @@ function ImportPanel({ form, setForm }) {
     });
   };
 
+  const showYahooLeagues = d => {
+    const lgs = d.leagues || [];
+    yhSet({ leagues: lgs, hasToken: true, leagueKey: (lgs[0] && lgs[0].league_key) || '',
+            msg: { ok: true, text: `Connected — ${lgs.length} league(s) found.` } });
+  };
+
   const yahooExchange = () => {
     if (!yh.code.trim()) { yhSet({ msg: { ok: false, text: 'Paste the authorization code' } }); return; }
-    yhPost('/api/yahoo/exchange', { code: yh.code.trim() }, d => {
-      const lgs = d.leagues || [];
-      yhSet({ leagues: lgs, leagueKey: (lgs[0] && lgs[0].league_key) || '', msg: { ok: true, text: `Connected — ${lgs.length} league(s) found.` } });
-    });
+    yhPost('/api/yahoo/exchange', { code: yh.code.trim() }, showYahooLeagues);
   };
+
+  // Choosing a league is a separate step from granting access, so a stored
+  // authorization is enough to list them again — no re-authorizing needed.
+  const yahooResume = () => yhPost('/api/yahoo/leagues', {}, showYahooLeagues);
   const yahooImport = () => {
     if (!yh.leagueKey) return;
     yhPost('/api/yahoo/import', { leagueKey: yh.leagueKey }, d => {
@@ -568,6 +576,16 @@ function ImportPanel({ form, setForm }) {
                       {yh.busy ? '…' : 'Get authorize link'}
                     </Btn>
                   </div>
+                  {yh.hasToken && !yh.leagues && (
+                    <div style={{marginTop:10, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'}}>
+                      <Btn onClick={yahooResume} disabled={yh.busy}>
+                        {yh.busy ? '…' : 'Use saved authorization'}
+                      </Btn>
+                      <span style={{fontSize:12.5, color:T.muted}}>
+                        Already authorized on this machine — list your leagues without authorizing again.
+                      </span>
+                    </div>
+                  )}
                   {yh.authUrl && (
                     <div style={{marginTop:10}}>
                       <a href={yh.authUrl} target="_blank" rel="noreferrer"

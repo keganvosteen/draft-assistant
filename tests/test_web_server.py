@@ -385,3 +385,86 @@ class TestYahooEndpoints(_ServerFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestYahooStructuredErrors(_ServerFixture):
+    """Yahoo failures carry their status and code on the exception.
+
+    They used to be rewritten into human text where they were raised, so the
+    marker the web layer matched on was gone by the time it looked, and the
+    specific guidance silently degraded to a generic provider error.
+    """
+
+    def test_approval_error_keeps_its_status_and_code(self):
+        from unittest.mock import patch
+        from draft_assistant.importers.yahoo import YahooAPIError
+        approval = YahooAPIError("needs approval", status=403,
+                                 code="yahoo_additional_authorization_required",
+                                 needs_approval=True)
+        with patch.object(DraftAPIHandler, "_yahoo_load",
+                          return_value={"token": {"access_token": "t"}}), \
+             patch.object(DraftAPIHandler, "_yahoo_access_token", return_value="t"), \
+             patch("draft_assistant.importers.yahoo.list_leagues", side_effect=approval):
+            status, body = self.request("POST", "/api/yahoo/leagues", {})
+        payload = json.loads(body)
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["code"], "yahoo_additional_authorization_required")
+        self.assertTrue(payload["needsApproval"])
+        self.assertIn("sports.yahoo.com/developer/access", payload["approvalUrl"])
+
+    def test_an_ordinary_api_failure_is_not_reported_as_needing_approval(self):
+        from unittest.mock import patch
+        from draft_assistant.importers.yahoo import YahooAPIError
+        with patch.object(DraftAPIHandler, "_yahoo_load",
+                          return_value={"token": {"access_token": "t"}}), \
+             patch.object(DraftAPIHandler, "_yahoo_access_token", return_value="t"), \
+             patch("draft_assistant.importers.yahoo.list_leagues",
+                   side_effect=YahooAPIError("boom", status=502, code="yahoo_api_error")):
+            status, body = self.request("POST", "/api/yahoo/leagues", {})
+        payload = json.loads(body)
+        self.assertEqual(status, 502)
+        self.assertEqual(payload["code"], "yahoo_api_error")
+        self.assertNotIn("needsApproval", payload)
+
+    def test_the_raised_error_reaches_the_client_intact(self):
+        """End to end: an HTTP 401 from Yahoo must arrive as the 403 guidance."""
+        import io
+        from unittest.mock import patch
+        from urllib.error import HTTPError
+        from draft_assistant.importers import yahoo
+        detail = json.dumps({"error": {"description": 'oauth_problem="additional_authorization_required"'}}).encode()
+        failure = HTTPError("http://x", 401, "Unauthorized", {}, io.BytesIO(detail))
+        with patch.object(DraftAPIHandler, "_yahoo_load",
+                          return_value={"token": {"access_token": "t"}}), \
+             patch.object(DraftAPIHandler, "_yahoo_access_token", return_value="t"), \
+             patch.object(yahoo, "urlopen", side_effect=failure):
+            status, body = self.request("POST", "/api/yahoo/leagues", {})
+        payload = json.loads(body)
+        self.assertEqual(status, 403)
+        self.assertEqual(payload["code"], "yahoo_additional_authorization_required")
+        # Both causes have to be named — which one applies is not knowable here.
+        self.assertIn("API Permissions", payload["error"])
+        self.assertIn("predates the grant", payload["error"])
+
+
+class TestYahooLeaguesResume(_ServerFixture):
+    def test_leagues_can_be_relisted_on_a_stored_authorization(self):
+        from unittest.mock import patch
+        leagues = [{"league_key": "nfl.l.828682", "name": "Lega di Paca"}]
+        with patch.object(DraftAPIHandler, "_yahoo_load",
+                          return_value={"token": {"access_token": "t"}}), \
+             patch.object(DraftAPIHandler, "_yahoo_access_token", return_value="t"), \
+             patch("draft_assistant.importers.yahoo.list_leagues", return_value=leagues):
+            status, body = self.request("POST", "/api/yahoo/leagues", {})
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["leagues"], leagues)
+
+    def test_without_an_authorization_it_says_so_rather_than_calling_yahoo(self):
+        from unittest.mock import patch
+        with patch.object(DraftAPIHandler, "_yahoo_load", return_value={}), \
+             patch("draft_assistant.importers.yahoo.list_leagues") as called:
+            status, body = self.request("POST", "/api/yahoo/leagues", {})
+            self.assertEqual(called.call_count, 0)
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body)["code"], "yahoo_not_authorized")

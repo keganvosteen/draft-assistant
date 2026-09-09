@@ -23,6 +23,27 @@ from urllib.request import Request, urlopen
 
 from ..platform_sync import SyncedDraftPick, SyncedRosterPlayer, SyncedRosterTeam
 
+APPROVAL_URL = "https://sports.yahoo.com/developer/access/"
+
+
+class YahooAPIError(RuntimeError):
+    """A Yahoo API failure that already knows how it should be reported.
+
+    Carrying the HTTP status and a stable code on the exception is what keeps
+    the reason intact: the string this used to raise was rewritten for humans
+    at the point it was raised, so the marker the web layer matched on
+    ("additional_authorization_required") was gone by the time it got there and
+    the specific guidance silently degraded to a generic provider error.
+    """
+
+    def __init__(self, message: str, *, status: int = 502,
+                 code: str = "yahoo_api_error", needs_approval: bool = False):
+        super().__init__(message)
+        self.status = status
+        self.code = code
+        self.needs_approval = needs_approval
+
+
 AUTH_URL = "https://api.login.yahoo.com/oauth2/request_auth"
 TOKEN_URL = "https://api.login.yahoo.com/oauth2/get_token"
 API_BASE = "https://fantasysports.yahooapis.com/fantasy/v2"
@@ -221,12 +242,19 @@ def _api_get(access_token: str, path: str) -> Dict:
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:300]
         if "additional_authorization_required" in detail:
-            raise RuntimeError(
-                "Yahoo Fantasy Sports API access is not enabled for your Developer App ID yet. "
-                "Yahoo requires submitting the access request form at https://sports.yahoo.com/developer/access/ "
-                "to approve your Client ID for Fantasy Sports access."
+            raise YahooAPIError(
+                "Yahoo has not granted this app Fantasy Sports access. Two things cause this. "
+                "If the app's API Permissions list on developer.yahoo.com shows no Fantasy Sports "
+                f"option, the Yahoo account itself is not enabled yet — request it at {APPROVAL_URL}. "
+                "If Fantasy Sports IS listed and ticked, the saved authorization predates the grant: "
+                "an access token keeps the permissions it was issued with, and refreshing preserves "
+                "them, so choose Authorize again to re-grant and pick up the new access.",
+                status=403,
+                code="yahoo_additional_authorization_required",
+                needs_approval=True,
             )
-        raise RuntimeError(f"Yahoo API {path} failed ({exc.code}): {detail}")
+        raise YahooAPIError(f"Yahoo API {path} failed ({exc.code}): {detail}",
+                            status=502, code="yahoo_api_error")
 
 
 def _find_all(obj, key: str) -> List:

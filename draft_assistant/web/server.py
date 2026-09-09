@@ -546,6 +546,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_yahoo_connect()
         elif self.path == "/api/yahoo/exchange":
             self._handle_yahoo_exchange()
+        elif self.path == "/api/yahoo/leagues":
+            self._handle_yahoo_leagues()
         elif self.path == "/api/yahoo/disconnect":
             self._handle_yahoo_disconnect()
         elif self.path == "/api/yahoo/import":
@@ -1077,22 +1079,14 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
 
     def _send_platform_error(self, exc: Exception, platform: str = ""):
         """Make provider failures actionable without echoing authentication data."""
-        err_msg = str(exc)
-        if "additional_authorization_required" in err_msg:
-            self._send_json({
-                "error": (
-                    "Yahoo has not granted this app Fantasy Sports access. Two things cause this. "
-                    "If the app's API Permissions list on developer.yahoo.com shows no Fantasy Sports "
-                    "option, the Yahoo account itself is not enabled yet — request it at "
-                    "https://sports.yahoo.com/developer/access/. If Fantasy Sports IS listed and ticked, "
-                    "the saved authorization predates the grant: an access token keeps the permissions it "
-                    "was issued with, and refreshing preserves them, so choose Reconnect to authorize "
-                    "again and pick up the new access."
-                ),
-                "code": "yahoo_additional_authorization_required",
-                "needsApproval": True,
-                "approvalUrl": "https://sports.yahoo.com/developer/access/",
-            }, 403)
+        # The exception already carries its status and code, so the reason
+        # survives the trip instead of being re-derived from message text.
+        from ..importers.yahoo import APPROVAL_URL, YahooAPIError
+        if isinstance(exc, YahooAPIError):
+            payload = {"error": str(exc), "code": exc.code}
+            if exc.needs_approval:
+                payload.update(needsApproval=True, approvalUrl=APPROVAL_URL)
+            self._send_json(payload, exc.status)
             return
         if isinstance(exc, HTTPError):
             exc.close()
@@ -1517,6 +1511,26 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                                 detail=f"{len(rows)} drafted players; replaces public ADP")
         except Exception as exc:
             return SourceReport("Yahoo ADP", 0, ok=False, detail=str(exc))
+
+    def _handle_yahoo_leagues(self):
+        """Re-list the account's NFL leagues on the stored authorization.
+
+        Picking a league is a separate step from granting access, so losing the
+        list (a reload, or coming back later) should not mean re-running the
+        whole authorize-and-paste-a-code dance against a token that is still
+        perfectly valid.
+        """
+        try:
+            from ..importers import yahoo
+            data = self._yahoo_load()
+            if not (data.get("token") or {}).get("access_token"):
+                self._send_json({"error": "Authorize with Yahoo first",
+                                 "code": "yahoo_not_authorized"}, 400)
+                return
+            self._send_json({"ok": True,
+                             "leagues": yahoo.list_leagues(self._yahoo_access_token())})
+        except Exception as exc:
+            self._send_platform_error(exc, "yahoo")
 
     def _handle_yahoo_disconnect(self):
         """Drop the stored Yahoo authorization so the next connect re-grants.
