@@ -615,7 +615,7 @@ def _parse_roster_players(roster: Dict, league_key: str) -> List[SyncedRosterPla
         name = flat.get("name")
         position = flat.get("position")
         player_id = flat.get("player_id")
-        if not name or not position:
+        if not name and not player_id and not flat.get("player_key"):
             continue
         provider_id = f"yahoo:{player_id}" if player_id else None
         # Yahoo player keys are game-scoped ("461.p.1234"). Keep the numeric id
@@ -624,8 +624,8 @@ def _parse_roster_players(roster: Dict, league_key: str) -> List[SyncedRosterPla
             player_key = str(flat["player_key"])
             provider_id = f"yahoo:{player_key.replace(game_key + '.p.', '')}"
         out.append(SyncedRosterPlayer(
-            name=name,
-            position=position,
+            name=name or "",
+            position=position or "",
             team=flat.get("team"),
             provider_id=provider_id,
         ))

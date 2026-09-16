@@ -831,8 +831,7 @@ def _parse_espn_rosters(data: dict) -> List[SyncedRosterTeam]:
         players: List[SyncedRosterPlayer] = []
         for entry in roster:
             player = ((entry or {}).get("playerPoolEntry") or {}).get("player") or {}
-            position = _espn_position(player.get("defaultPositionId"))
-            if not player.get("fullName") or not position:
+            if not player.get("fullName") and player.get("id") is None:
                 continue
             players.append(_espn_roster_player(player))
         out.append(SyncedRosterTeam(

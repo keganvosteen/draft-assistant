@@ -89,6 +89,44 @@ class TestWorkspace(_WorkspaceFixture, unittest.TestCase):
         self.assertEqual(next_state["picks"]["league-b"], initial_state()["picks"]["league-b"])
         self.assertEqual(json.loads((self.root / "backups/workspace-state.1.json").read_bytes())["picks"], initial_state()["picks"])
 
+    def test_current_roster_and_unmatched_players_survive_save_and_backup_restore(self):
+        current = workspace.save_workspace(initial_state())
+        draft_picks = deepcopy(current["picks"])
+        roster = {
+            "source": "ESPN", "syncedAt": "2026-09-15T19:00:00Z",
+            "rostered": 2, "matched": 1,
+            "picks": [
+                {"playerId": "marshawn-lloyd", "teamNum": 2,
+                 "providerPlayerId": "4432446", "sourceName": "MarShawn Lloyd"},
+                {"playerId": "espn:unknown-player", "teamNum": 1,
+                 "providerPlayerId": "unknown-player", "sourceName": "Unprojected Rookie",
+                 "sourcePosition": "RB", "sourceTeam": "GB", "unmatched": True},
+            ],
+            "unmatched": [{"name": "Unprojected Rookie", "id": "unknown-player"}],
+        }
+        current["leagues"][0]["rosterSnapshot"] = deepcopy(roster)
+        saved = workspace.save_workspace(current)
+        reopened = workspace.load_workspace()
+        self.assertEqual(reopened["leagues"][0]["rosterSnapshot"], roster)
+        self.assertEqual(reopened["picks"], draft_picks)
+
+        # Another provider sync replaces ownership while retaining the previous
+        # complete snapshot in the backup, including players without projections.
+        reopened["leagues"][0]["rosterSnapshot"]["picks"].clear()
+        latest = workspace.save_workspace(reopened)
+        backup = json.loads((self.root / "backups/workspace-state.2.json").read_bytes())
+        self.assertEqual(backup["leagues"][0]["rosterSnapshot"], roster)
+        self.assertEqual(saved["leagues"][0]["rosterSnapshot"], roster)
+
+        # A backup restore uses the current optimistic-lock revision, exactly
+        # as the workspace client does when importing an exported backup.
+        backup["revision"] = latest["revision"]
+        workspace.save_workspace(backup)
+        restored = workspace.load_workspace()
+        self.assertEqual(restored["leagues"][0]["rosterSnapshot"], roster)
+        self.assertEqual(restored["picks"], draft_picks)
+        self.assertEqual(restored["leagues"][1], initial_state()["leagues"][1])
+
     def test_stale_browser_cannot_overwrite_current_leagues(self):
         saved = workspace.save_workspace(initial_state())
         with self.assertRaises(workspace.WorkspaceConflictError) as raised:

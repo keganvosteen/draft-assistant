@@ -12,6 +12,8 @@ function WaiverRosterPanel({ league, myPlayers, fullWidth = false }) {
   const needs = getRosterNeeds(myPlayers, league.rosterSlots);
   const starters = lineup.filter(r => !r.slot.bench);
   const bench = lineup.filter(r => r.slot.bench);
+  const assigned = new Set(lineup.filter(r => r.player).map(r => r.player.id));
+  const reserves = myPlayers.filter(player => !assigned.has(player.id));
 
   const row = ({ slot, player }, i, dim) => (
     <div key={i} style={{
@@ -30,6 +32,7 @@ function WaiverRosterPanel({ league, myPlayers, fullWidth = false }) {
           <div style={{ fontSize: 10.5, color: T.muted, display: 'flex', gap: 6 }}>
             <span>{player.pos} · {player.nflTeam || 'FA'}</span>
             {player.byeWeek ? <span style={{ color: T.mutedLight }}>BYE {player.byeWeek}</span> : null}
+            {player.unmatched && <span>No projection yet</span>}
           </div>
         </div>
       ) : (
@@ -52,7 +55,7 @@ function WaiverRosterPanel({ league, myPlayers, fullWidth = false }) {
       <div style={{ padding: '13px 14px', borderBottom: `1px solid ${T.border}` }}>
         {!fullWidth && <SectionLabel>My roster</SectionLabel>}
         <div style={{ fontSize: 12, color: T.muted, marginTop: fullWidth ? 0 : 3 }}>
-          {myPlayers.length} of {lineup.length} slots filled
+          {myPlayers.length} players rostered · {lineup.length} lineup and bench slots
         </div>
       </div>
       <div style={{ padding: '4px 12px 10px', flex: 1 }}>
@@ -60,6 +63,8 @@ function WaiverRosterPanel({ league, myPlayers, fullWidth = false }) {
         {starters.map((r, i) => row(r, i, false))}
         {bench.length > 0 && <SectionLabel style={{ margin: '14px 0 2px' }}>Bench</SectionLabel>}
         {bench.map((r, i) => row(r, `b${i}`, true))}
+        {reserves.length > 0 && <SectionLabel style={{ margin: '14px 0 2px' }}>Other rostered players</SectionLabel>}
+        {reserves.map((player, i) => row({ slot: { label: 'RES' }, player }, `r${i}`, true))}
       </div>
       {needs.length > 0 && (
         <div style={{ padding: '10px 14px', borderTop: `1px solid ${T.border}` }}>
@@ -90,6 +95,7 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
   const [loading, setLoading]     = React.useState(false);
   const [error, setError]         = React.useState(null);
   const [syncing, setSyncing]     = React.useState(false);
+  const [rosterSnapshot, setRosterSnapshot] = React.useState(null);
   const [updating, setUpdating]   = React.useState(false);
   const [showRoster, setShowRoster] = React.useState(false);
   const { isMobile, isDesktop }   = useLayout();
@@ -97,13 +103,23 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
   const linkedTo = league.sleeperLeagueId ? 'Sleeper'
     : league.espnLeagueId ? 'ESPN'
       : league.yahooLeagueKey ? 'Yahoo' : null;
+  const rosterKey = rosterSyncKey(league);
+  // Every visit verifies live ownership before ranking; a saved draft or an
+  // older roster snapshot must never decide who is available in a linked league.
+  const rosterReady = !linkedTo || Boolean(rosterSnapshot && rosterSnapshot.leagueKey === rosterKey);
+  const rosterPicks = React.useMemo(() => linkedTo
+    ? (rosterReady ? rosterSnapshot.picks : []) : picks,
+  [linkedTo, rosterReady, rosterSnapshot, picks]);
 
   const playersWithProj = React.useMemo(
     () => withProjections(allPlayers, league), [allPlayers, league]);
-  const myPlayers = React.useMemo(() => picks
+  const myPlayers = React.useMemo(() => ((data && data.rosterEntries) || rosterPicks)
     .filter(pk => pk.teamNum === league.draftPosition)
-    .map(pk => playersWithProj.find(p => p.id === pk.playerId))
-    .filter(Boolean), [picks, league.draftPosition, playersWithProj]);
+    .map(pk => playersWithProj.find(p => p.id === pk.playerId) || {
+      id: pk.playerId, name: pk.sourceName || pk.playerId,
+      pos: pk.sourcePosition || '?', nflTeam: pk.sourceTeam || '',
+      projPts: null, unmatched: true,
+    }), [data, rosterPicks, league.draftPosition, playersWithProj]);
 
   // Ask for the full window (the API caps at 30) and filter by position in the
   // browser, so switching position tabs is instant instead of a round trip.
@@ -114,14 +130,16 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
   // time on every open. The resolved week is read off `data` instead.
   const scanSeq = React.useRef(0);
   const scan = React.useCallback(() => {
+    if (!rosterReady) return;
     const seq = ++scanSeq.current;
     setLoading(true);
     setError(null);
+    setData(null);
     fetch('/api/free-agents', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        leagues: [league], picks: { [league.id]: picks }, top: 30,
+        leagues: [league], rosters: { [league.id]: rosterPicks }, top: 30,
         ...(week ? { week } : {}),
       }),
     })
@@ -134,15 +152,50 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
         const row = (d.leagues || [])[0] || null;
         setData(row ? { ...row, week: d.week, contextAsOf: d.contextAsOf, contextStale: d.contextStale } : null);
       })
-      .catch(err => { if (seq === scanSeq.current) setError(String(err)); })
+      .catch(err => { if (seq === scanSeq.current) { setError(String(err)); setData(null); } })
       .finally(() => { if (seq === scanSeq.current) setLoading(false); });
-  }, [league, picks, week]);
+  }, [league, rosterPicks, rosterReady, week]);
 
   // Typing "1" then "2" in the week box shouldn't cost two full rankings.
   React.useEffect(() => {
+    if (!rosterReady) return;
     const timer = setTimeout(scan, 150);
-    return () => clearTimeout(timer);
-  }, [scan]);
+    return () => { clearTimeout(timer); scanSeq.current++; };
+  }, [scan, rosterReady]);
+
+  const syncSeq = React.useRef(0);
+  const runSync = (announce = true) => {
+    const seq = ++syncSeq.current;
+    scanSeq.current++;
+    setRosterSnapshot(null);
+    setData(null);
+    setError(null);
+    setLoading(false);
+    setSyncing(true);
+    return onSyncLeague(league)
+      .then(result => {
+        if (seq !== syncSeq.current) return;
+        setRosterSnapshot(result.rosterSnapshot);
+        if (announce) toast(result.message, 'ok');
+      })
+      .catch(err => {
+        if (seq !== syncSeq.current) return;
+        const message = `Could not sync current rosters from ${linkedTo}. `
+          + `${String(err && err.message ? err.message : err)} `
+          + 'Check the league connection in League settings, then retry Sync.';
+        setData(null);
+        setError(message);
+        if (announce) toast(message, 'error', 6000);
+      })
+      .finally(() => { if (seq === syncSeq.current) setSyncing(false); });
+  };
+
+  React.useEffect(() => {
+    if (linkedTo) runSync(false);
+    // Snapshot writes change the league object; only a connection or seat-map
+    // change should repeat this initial sync, not the snapshot it just saved.
+    return () => { syncSeq.current++; scanSeq.current++; };
+  }, [rosterKey, linkedTo, onSyncLeague]);
 
   // What the week box shows and what "Refresh news" asks for: the user's pick
   // if they made one, otherwise whatever week the server said it ranked.
@@ -188,14 +241,6 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
       .finally(() => setUpdating(false));
   };
 
-  const runSync = () => {
-    setSyncing(true);
-    onSyncLeague(league)
-      .then(msg => toast(msg, 'ok'))
-      .catch(err => toast(String(err && err.message ? err.message : err), 'error', 6000))
-      .finally(() => setSyncing(false));
-  };
-
   // The waiver wire ranks pickups against *your* starters, so a sync with no
   // seat marked leaves this screen with an empty roster and no way to tell
   // that the sync itself worked. Only the confirm branch syncs.
@@ -225,7 +270,7 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
         title="Waiver wire"
         subtitle={data
           ? `${horizon === 'weekly' ? `Week ${data.week || week || '—'}` : 'Rest of season'} · ${data.available} available · ${myPlayers.length} on your roster`
-          : 'Scanning the pool…'}
+          : syncing ? 'Syncing current league rosters…' : error ? 'Roster scan needs attention' : 'Scanning the pool…'}
         compact>
         {isMobile && (
           <Btn variant="secondary" size="sm" onClick={() => setShowRoster(true)}>
@@ -237,7 +282,7 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
             {syncing ? 'Syncing…' : `Sync from ${linkedTo}`}
           </Btn>
         )}
-        <Btn variant="secondary" size="sm" onClick={scan} disabled={loading}>
+        <Btn variant="secondary" size="sm" onClick={scan} disabled={loading || syncing || !rosterReady}>
           {loading ? 'Scanning…' : 'Refresh'}
         </Btn>
       </AppBar>
@@ -307,7 +352,7 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
                   ? `Player news as of ${new Date(data.contextAsOf).toLocaleString()}${data.contextStale ? ' · may be stale' : ''}`
                   : 'Player news not refreshed yet'}
               </span>
-              <Btn variant="secondary" size="sm" onClick={refreshUpdates} disabled={updating}>
+              <Btn variant="secondary" size="sm" onClick={refreshUpdates} disabled={updating || syncing || !rosterReady}>
                 {updating ? 'Updating…' : 'Refresh news'}
               </Btn>
             </div>
@@ -316,14 +361,14 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
           <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? 12 : 18 }}>
             {error && <Note tone="error" style={{ marginBottom: 14 }}>{error}</Note>}
 
-            {loading && !data && (
+            {(loading || syncing) && !data && (
               <div className="loading-screen" style={{ height: 260 }}>
                 <Spinner />
-                <span>Ranking the free-agent pool…</span>
+                <span>{syncing ? 'Syncing every team’s current roster…' : 'Ranking the free-agent pool…'}</span>
               </div>
             )}
 
-            {!loading && myPlayers.length === 0 && (
+            {!loading && !syncing && myPlayers.length === 0 && (
               <EmptyState
                 title="No roster loaded for this league"
                 body={linkedTo
@@ -334,7 +379,7 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
                   : <Btn onClick={() => onEditLeague(league.id)}>Open league settings</Btn>} />
             )}
 
-            {!loading && myPlayers.length > 0 && rows.length === 0 && (
+            {!loading && !syncing && !error && data && myPlayers.length > 0 && rows.length === 0 && (
               <EmptyState
                 title="No upgrades available"
                 body={posFilter === 'ALL'

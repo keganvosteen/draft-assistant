@@ -48,12 +48,37 @@ def synced_rosters_to_picks(
     picks: List[dict] = []
     unmatched: List[dict] = []
     seen_player_ids = set()
+    seen_sources = set()
 
     for fallback_idx, team in enumerate(synced_teams, 1):
         team_num = team_nums[fallback_idx - 1]
         for roster_player in team.players:
+            source_id = roster_player.provider_id or (
+                roster_player.name, _position(roster_player.position), roster_player.team)
+            if source_id in seen_sources:
+                continue
+            seen_sources.add(source_id)
             matched = matcher.match(roster_player)
-            if not matched:
+            player_id = matched.key() if matched else None
+            pick = {
+                "pickNum": len(picks) + 1,
+                "teamNum": team_num,
+                "synced": True,
+                "sourceName": roster_player.name,
+                "sourcePosition": roster_player.position,
+                "sourceTeam": roster_player.team,
+                "providerPlayerId": roster_player.provider_id,
+                "providerTeamId": team.provider_id,
+            }
+            if player_id is None or player_id in seen_player_ids:
+                # Ownership survives missing projections and ambiguous name
+                # matches. Keep provider identity so a later data refresh can
+                # resolve the player without treating them as a free agent.
+                player_id = roster_player.provider_id or (
+                    f"{roster_player.name or 'Unknown'}|{_position(roster_player.position)}")
+                if player_id in seen_player_ids:
+                    player_id = f"{player_id}|roster:{team_num}:{len(picks) + 1}"
+                pick["unmatched"] = True
                 unmatched.append({
                     "team": team.name,
                     "name": roster_player.name,
@@ -61,22 +86,13 @@ def synced_rosters_to_picks(
                     "nflTeam": roster_player.team,
                     "id": roster_player.provider_id,
                 })
-                continue
-            player_id = matched.key()
-            if player_id in seen_player_ids:
-                continue
             seen_player_ids.add(player_id)
-            picks.append({
-                "pickNum": len(picks) + 1,
-                "teamNum": team_num,
-                "playerId": player_id,
-                "synced": True,
-                "sourceName": roster_player.name,
-            })
+            pick["playerId"] = player_id
+            picks.append(pick)
 
     return {
         "picks": picks,
-        "matched": len(picks),
+        "matched": len(picks) - len(unmatched),
         "unmatched": unmatched,
         "teams": [
             {
@@ -87,6 +103,43 @@ def synced_rosters_to_picks(
             for i, team in enumerate(synced_teams)
         ],
     }
+
+
+def roster_player_keys(entries: Sequence[dict], players: Sequence[Player]) -> List[str]:
+    """Resolve saved ownership against the current projections, in row order.
+
+    Provider/source fields survive a projection refresh, including players who
+    had no projection when synced. Older snapshots can still use their saved
+    canonical or display-derived player key.
+    """
+    matcher = _PlayerMatcher(players)
+    aliases = {p.legacy_key(): p.key() for p in players}
+    aliases.update({p.key(): p.key() for p in players})
+    keys = []
+    for entry in entries:
+        entry = entry if isinstance(entry, dict) else {"playerId": entry}
+        saved_id = str(entry.get("playerId") or "")
+        matched = matcher.match(SyncedRosterPlayer(
+            name=str(entry.get("sourceName") or ""),
+            position=str(entry.get("sourcePosition") or ""),
+            team=entry.get("sourceTeam"),
+            provider_id=entry.get("providerPlayerId") or saved_id,
+        ))
+        keys.append(matched.key() if matched else aliases.get(saved_id, saved_id))
+    return keys
+
+
+def resolve_roster_entries(entries: Sequence, players: Sequence[Player]) -> List[dict]:
+    """Return snapshot copies whose player IDs resolve to today's player pool."""
+    rows = [dict(entry) if isinstance(entry, dict) else {"playerId": entry}
+            for entry in entries]
+    keys = roster_player_keys(rows, players)
+    known = {player.key() for player in players}
+    for row, key in zip(rows, keys):
+        row["playerId"] = key
+        if key in known:
+            row.pop("unmatched", None)
+    return rows
 
 
 def synced_draft_to_picks(

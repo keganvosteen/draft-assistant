@@ -40,7 +40,9 @@ from ..models import DraftState, FLEX_TYPES, LeagueConfig, PlayerContext
 from ..profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from ..providers.base import build_provider
 from ..free_agents import free_agent_recommendations, rank_recommendations
-from ..platform_sync import synced_draft_to_picks, synced_rosters_to_picks
+from ..platform_sync import (
+    resolve_roster_entries, synced_draft_to_picks, synced_rosters_to_picks,
+)
 from ..rollout import rollout_values
 from ..sample_data import sample_players
 from ..scoring import fantasy_points
@@ -931,7 +933,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     def _handle_free_agents(self):
         """Scan all configured leagues and rank available waiver/free-agent adds.
 
-        Body: {leagues: [{...}], picks: {leagueId: [{playerId, teamNum}...]}, top: int}.
+        Body: {leagues: [{...}], rosters: {leagueId: [{playerId, teamNum}...]}, top: int}.
+        Linked leagues require current roster entries, never draft history.
+        Manual leagues may still supply picks as their ownership records.
         The browser owns the saved league list, while Python owns player data,
         scoring, and roster optimization.
         """
@@ -944,6 +948,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             picks_by_league = body.get("picks") or {}
             if not isinstance(picks_by_league, dict):
                 picks_by_league = {}
+            rosters_by_league = body.get("rosters", {})
+            if not isinstance(rosters_by_league, dict):
+                raise ValueError("rosters must be an object keyed by league id")
             top_n = _bounded_int(body.get("top", 8), "top", 1, 30)
             week = _bounded_int(body.get("week", default_week()), "week", 1, 18)
 
@@ -956,12 +963,26 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 if not isinstance(league, dict):
                     continue
                 league_id = str(league.get("id") or f"league-{index + 1}")
-                league_picks = picks_by_league.get(league_id, [])
+                snapshot = league.get("rosterSnapshot")
+                if league_id in rosters_by_league:
+                    league_roster = rosters_by_league[league_id]
+                elif isinstance(snapshot, dict) and "picks" in snapshot:
+                    league_roster = snapshot["picks"]
+                elif any(league.get(key) for key in (
+                        "espnLeagueId", "yahooLeagueKey", "sleeperLeagueId")):
+                    raise ValueError(
+                        f"Sync current rosters for {league.get('name') or league_id} "
+                        "before scanning the waiver wire.")
+                else:
+                    league_roster = picks_by_league.get(league_id, [])
+                if not isinstance(league_roster, list) or len(league_roster) > 2048:
+                    raise ValueError("Each league roster must be a list of at most 2048 entries")
+                league_roster = resolve_roster_entries(league_roster, players)
                 draft_position = int(league.get("draftPosition") or 1)
                 picked_keys = set(_canonicalize_player_keys(
-                    _pick_player_ids(league_picks), aliases))
-                my_keys = _canonicalize_player_keys(
-                    _my_pick_ids(league_picks, draft_position), aliases)
+                    _pick_player_ids(league_roster), aliases))
+                my_keys = list(dict.fromkeys(_canonicalize_player_keys(
+                    _my_pick_ids(league_roster, draft_position), aliases)))
 
                 eff = self._suggest_config({"league": league}, config)
                 available = [p for key, p in by_key.items() if key not in picked_keys]
@@ -982,6 +1003,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     "name": league.get("name") or f"League {index + 1}",
                     "platform": league.get("platform") or "",
                     "rostered": len(my_keys),
+                    "leagueRostered": len(picked_keys),
+                    "rosterEntries": league_roster,
                     "available": len(available),
                     # recommendations remains the ROS list for old clients.
                     "recommendations": [_free_agent_row(rec, "ros") for rec in ros_recs],
@@ -1024,21 +1047,6 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     return
                 from ..importers import yahoo
                 access_token = self._yahoo_access_token()
-                try:
-                    draft_picks = yahoo.fetch_draft_picks(access_token, league_key)
-                except Exception:
-                    draft_picks = []
-                if draft_picks:
-                    result = synced_draft_to_picks(draft_picks, players, league)
-                    result.update({
-                        "ok": True,
-                        "source": "Yahoo",
-                        "leagueId": league.get("id"),
-                        "leagueName": league.get("name"),
-                        "rostered": len(draft_picks),
-                    })
-                    self._send_json(result)
-                    return
                 rosters = yahoo.fetch_league_rosters(access_token, league_key)
                 source = "Yahoo"
             elif platform == "espn":
