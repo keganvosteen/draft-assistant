@@ -49,16 +49,19 @@ function leagueFromBackendConfig(cfg) {
 // soon as the current player board arrives so renames and punctuation changes
 // no longer orphan picks.
 function migratePickIds(picksByLeague, players) {
-  const aliases = {};
+  const aliases = new Map();
+  const canonical = new Set((players || []).map(player => player.id));
   (players || []).forEach(player => {
-    aliases[player.id] = player.id;
-    if (player.legacyId) aliases[player.legacyId] = player.id;
+    [player.legacyId, ...(player.aliases || [])].filter(Boolean).forEach(alias => {
+      if (canonical.has(alias)) return;
+      aliases.set(alias, !aliases.has(alias) || aliases.get(alias) === player.id ? player.id : null);
+    });
   });
   let changed = false;
   const migrated = {};
   Object.entries(picksByLeague || {}).forEach(([leagueId, leaguePicks]) => {
     migrated[leagueId] = (Array.isArray(leaguePicks) ? leaguePicks : []).map(pick => {
-      const stableId = aliases[pick.playerId] || pick.playerId;
+      const stableId = aliases.get(pick.playerId) || pick.playerId;
       if (stableId === pick.playerId) return pick;
       changed = true;
       return { ...pick, playerId: stableId };
@@ -373,13 +376,14 @@ function ImportPanel({ form, setForm }) {
     pasteText: '',
     clientId: '', clientSecret: '', redirectUri: 'https://localhost/',
     authUrl: '', code: '', leagues: null, leagueKey: '', busy: false, msg: null,
-    credsSaved: false, showCredForm: false, needsApproval: false, approvalUrl: '',
+    credsSaved: false, canSave: false, storage: '', showCredForm: false, needsApproval: false, approvalUrl: '',
   });
   const yhSet = patch => setYh(s => ({ ...s, ...patch }));
   // Pick up credentials already saved on this machine (so re-auth is one click).
   React.useEffect(() => {
     fetch('/api/yahoo/status').then(r => r.json()).then(d => {
       if (d && d.hasCredentials) yhSet({ credsSaved: true, hasToken: !!d.hasToken,
+                                         canSave: !!d.canSave, storage: d.storage || '',
                                          redirectUri: d.redirectUri || 'https://localhost/' });
     }).catch(() => {});
   }, []);
@@ -576,7 +580,8 @@ function ImportPanel({ form, setForm }) {
                 <>
                   {yh.credsSaved && !yh.showCredForm ? (
                     <div style={{fontSize:12.5, color:T.text, marginBottom:8}}>
-                      ✓ Yahoo credentials saved on this machine.{' '}
+                      ✓ {yh.canSave ? 'Yahoo credentials saved on this machine.' : 'Yahoo credentials available for this session.'}{' '}
+                      {yh.storage && <span title={yh.storage}>ⓘ </span>}
                       <button onClick={()=>yhSet({showCredForm:true})} style={{
                         background:'none', border:'none', padding:0, color:T.primary,
                         cursor:'pointer', textDecoration:'underline', fontSize:12.5,
@@ -1562,8 +1567,8 @@ function App() {
       setRestoreBusy(true);
       workspaceGeneration.current++;
       const restored = await workspace.restore(candidate);
-      setLeagues(restored.leagues);
-      setPicks(restored.picks);
+      setLeagues(migrateRosterIds(restored.leagues, players));
+      setPicks(migratePickIds(restored.picks, players));
       setPreferences(restored.preferences);
       try { localStorage.setItem('fda_tweaks', JSON.stringify(restored.preferences.tweaks || {})); } catch {}
       setRoute({screen:'home', leagueId:null});

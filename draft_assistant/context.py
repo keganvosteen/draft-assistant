@@ -19,6 +19,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .fuzzy import normalize_player_name
+from .identity import player_aliases
 from .models import Player, PlayerContext, PlayerSignal
 from .paths import resolve
 from .storage import atomic_write_json
@@ -145,12 +146,14 @@ def _signal_from_dict(raw: object) -> Optional[PlayerSignal]:
 
 def context_to_dict(context: PlayerContext) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "season": context.season,
         "selected_week": context.selected_week,
         "refreshed_at": context.refreshed_at,
         "signals": [_signal_to_dict(signal) for signal in context.signals],
         "weekly_projections": context.weekly_projections,
+        "weekly_projection_season": context.weekly_projection_season,
+        "weekly_projection_week": context.weekly_projection_week,
         "actual_stats": context.actual_stats,
         "source_health": context.source_health,
     }
@@ -171,6 +174,14 @@ def context_from_dict(raw: object) -> PlayerContext:
     projections = raw.get("weekly_projections")
     actuals = raw.get("actual_stats")
     health = raw.get("source_health")
+    # Old caches only recorded selected_week, which may already have been
+    # changed without fetching data. Do not invent provenance for that bucket.
+    projection_season = raw.get("weekly_projection_season")
+    projection_week = raw.get("weekly_projection_week")
+    if (not isinstance(projection_season, int) or isinstance(projection_season, bool)
+            or not isinstance(projection_week, int) or isinstance(projection_week, bool)
+            or not 1 <= projection_week <= 18):
+        projection_season = projection_week = None
     return PlayerContext(
         season=season,
         selected_week=week,
@@ -179,6 +190,8 @@ def context_from_dict(raw: object) -> PlayerContext:
         weekly_projections=projections if isinstance(projections, dict) else {},
         actual_stats=actuals if isinstance(actuals, dict) else {},
         source_health=health if isinstance(health, dict) else {},
+        weekly_projection_season=projection_season,
+        weekly_projection_week=projection_week,
     )
 
 
@@ -214,6 +227,13 @@ def _source_due(context: PlayerContext, source: str, now: datetime, force: bool,
     if force:
         return True
     health = context.source_health.get(source, {})
+    if health.get("ok") is False:
+        return True
+    if source == "sleeper_weekly" and (
+        context.weekly_projection_season != context.season
+        or context.weekly_projection_week != week
+    ):
+        return True
     if week is not None and health.get("week") != week:
         return True
     refreshed = _parse_time(health.get("refreshed_at"))
@@ -384,6 +404,8 @@ def _refresh_sleeper_weekly(context: PlayerContext) -> int:
         for player_id, row in raw.items()
         if (stats := _stats(row))
     }
+    context.weekly_projection_season = context.season
+    context.weekly_projection_week = context.selected_week
     return len(context.weekly_projections)
 
 
@@ -554,6 +576,12 @@ def player_context_ids(player: Player) -> List[str]:
         ids.append(str(player.id).replace("nflverse:", "gsis:", 1))
     if gsis_id:
         ids.append(f"gsis:{gsis_id}")
+    # A refreshed board can retain the old provider only as an identity alias.
+    # Use the same continuity information as draft ownership and roster sync,
+    # keeping canonical/current provider precedence when two sources overlap.
+    ids.extend(sorted(player_aliases(player)))
+    ids.extend(identity.replace("nflverse:", "gsis:", 1)
+               for identity in list(ids) if identity.startswith("nflverse:"))
     ids.append(f"name:{normalize_player_name(player.name, compact=True)}")
     return list(dict.fromkeys(item for item in ids if item))
 
@@ -622,7 +650,29 @@ def _context_stats(context: Optional[PlayerContext], player: Player, bucket: str
 
 
 def weekly_projection_for(context: Optional[PlayerContext], player: Player) -> Optional[Dict[str, float]]:
+    if context is None or (
+        context.weekly_projection_season != context.season
+        or context.weekly_projection_week != context.selected_week
+    ):
+        return None
     return _context_stats(context, player, "weekly")
+
+
+def current_bye_week(player: Player, season: Optional[int]) -> Optional[int]:
+    """Return a bye only when its schedule season and team are known to match."""
+    if season is None:
+        return None
+    try:
+        bye_season = int(player.metadata.get("bye_season"))
+        bye_week = int(player.bye_week)
+    except (TypeError, ValueError):
+        return None
+    bye_team = player.metadata.get("bye_team")
+    if bye_season != season or not 1 <= bye_week <= 18:
+        return None
+    if bye_team and str(bye_team).upper() != str(player.team or "").upper():
+        return None
+    return bye_week
 
 
 def actual_stats_for(context: Optional[PlayerContext], player: Player) -> Optional[Dict[str, float]]:

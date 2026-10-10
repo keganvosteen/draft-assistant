@@ -4,7 +4,7 @@ This collector builds enriched Player objects using free, public data:
   - Historical stats (seasonal) from nflverse play-by-play aggregates
   - Roster data for names, positions, ages, draft capital, team history
   - Injury reports aggregated across seasons
-  - Bye weeks derived from weekly game data
+  - Bye weeks derived from the requested season's schedule
 
 Requires: pip install nfl_data_py pandas
 """
@@ -96,18 +96,30 @@ def _extract_stats(row: dict) -> Dict[str, float]:
     return out
 
 
-def _compute_bye_weeks(weekly_df) -> Dict[str, int]:
-    """Derive team bye weeks from weekly game data.
+def _compute_bye_weeks(schedule_df, season: int) -> Dict[str, int]:
+    """Derive team bye weeks only from a complete requested-season schedule.
 
     Returns {team_abbr: bye_week_number}.
     """
-    import pandas as pd
-
-    reg = weekly_df[weekly_df["season_type"] == "REG"]
-    all_weeks = set(range(1, 19))
+    required = {"season", "game_type", "home_team", "away_team", "week"}
+    if not required.issubset(schedule_df.columns):
+        return {}
+    reg = schedule_df[
+        (schedule_df["game_type"] == "REG") & (schedule_df["season"] == season)
+    ]
+    season_weeks = 18 if season >= 2021 else 17
+    all_weeks = set(range(1, season_weeks + 1))
+    games_by_team: Dict[str, Set[int]] = {}
+    for _, game in reg.iterrows():
+        week = _safe_int(game.get("week"))
+        if week not in all_weeks:
+            continue
+        for column in ("home_team", "away_team"):
+            team = game.get(column)
+            if isinstance(team, str) and team:
+                games_by_team.setdefault(team, set()).add(week)
     byes: Dict[str, int] = {}
-    for team in reg["recent_team"].dropna().unique():
-        played = set(reg[reg["recent_team"] == team]["week"].unique())
+    for team, played in games_by_team.items():
         missing = all_weeks - played
         if len(missing) == 1:
             byes[team] = missing.pop()
@@ -187,12 +199,13 @@ def collect_players(
         print(f"  Warning: could not load seasonal stats: {e}")
         stats_df = pd.DataFrame()
 
-    # 4. Load weekly data for bye week derivation
-    print(f"Loading {last_season} weekly data for bye weeks...")
+    # 4. Current byes must come from this season's schedule. Last season's
+    # weekly player stats are useful history, but never current bye evidence.
+    print(f"Loading {current_season} schedule for bye weeks...")
     bye_weeks: Dict[str, int] = {}
     try:
-        weekly_df = nfl.import_weekly_data([last_season])
-        bye_weeks = _compute_bye_weeks(weekly_df)
+        schedule_df = nfl.import_schedules([current_season])
+        bye_weeks = _compute_bye_weeks(schedule_df, current_season)
         print(f"  Derived bye weeks for {len(bye_weeks)} teams.")
     except Exception as e:
         print(f"  Warning: could not derive bye weeks: {e}")
@@ -248,9 +261,16 @@ def collect_players(
             if extracted:
                 player_history.setdefault(pid, {})[season] = extracted
 
-    # Also pull names/positions from weekly data if roster is sparse
+    # Weekly stats can supply missing historical player identities. This
+    # fallback is independent of the requested season's schedule.
     weekly_player_info: Dict[str, dict] = {}
-    if "weekly_df" in dir() and not weekly_df.empty:
+    weekly_df = pd.DataFrame()
+    if not roster_map or any(pid not in roster_map for pid in player_history):
+        try:
+            weekly_df = nfl.import_weekly_data([last_season])
+        except Exception:
+            pass
+    if not weekly_df.empty:
         for _, row in weekly_df.drop_duplicates(subset=["player_id"]).iterrows():
             pid = row.get("player_id")
             pos = row.get("position", "")
@@ -311,6 +331,8 @@ def collect_players(
             previous_team=previous_team,
             draft_capital=_draft_capital_label(draft_num),
             injury_history=injury_list,
+            metadata=({"bye_season": current_season, "bye_team": team,
+                       "bye_source": "nflverse schedule"} if bye is not None else {}),
         ))
 
     # Filter to players who were on a roster or had stats in the last 2 seasons

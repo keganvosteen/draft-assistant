@@ -8,7 +8,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
 POSITIONS = {"QB", "RB", "WR", "TE", "K", "DST", "DEF"}
-_SUFFIX_RE = re.compile(r"\s+(jr\.?|sr\.?|ii|iii|iv|v)$", re.IGNORECASE)
+_NAME_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"}
 
 
 def _levenshtein(s1: str, s2: str, max_distance: Optional[int] = None) -> int:
@@ -110,8 +110,12 @@ def _name_forms(name: str) -> Tuple[str, Tuple[str, ...]]:
 
 def normalize_player_name(name: str, compact: bool = False) -> str:
     """Normalize player names consistently across importers and sync matching."""
-    normalized = _SUFFIX_RE.sub("", str(name or "").strip())
-    normalized = " ".join(normalized.lower().split())
+    words = str(name or "").lower().split()
+    # Inspect the final token once. An unanchored whitespace/suffix regex
+    # retried at every embedded space when a long name lacked a suffix.
+    if len(words) > 1 and words[-1] in _NAME_SUFFIXES:
+        words.pop()
+    normalized = " ".join(words)
     if compact:
         return re.sub(r"[^a-z0-9]+", "", normalized)
     return normalized

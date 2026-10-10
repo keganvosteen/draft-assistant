@@ -49,17 +49,22 @@ class TestNflverseStatsPlayers(unittest.TestCase):
 
 class TestFillMissingByes(unittest.TestCase):
     def test_teammates_inherit_known_bye(self):
-        a = Player(id="a", name="A", position="WR", team="KC", bye_week=6)
+        a = Player(id="a", name="A", position="WR", team="KC", bye_week=6,
+                   metadata={"bye_season": 2026, "bye_team": "KC"})
         b = Player(id="b", name="B", position="RB", team="KC")
         c = Player(id="c", name="C", position="QB", team="DET")  # no source bye
-        _fill_missing_byes([a, b, c])
+        _fill_missing_byes([a, b, c], 2026)
         self.assertEqual(b.bye_week, 6)
+        self.assertEqual(b.metadata["bye_season"], 2026)
+        self.assertEqual(b.metadata["bye_team"], "KC")
         self.assertIsNone(c.bye_week)
 
     def test_existing_byes_not_overwritten(self):
-        a = Player(id="a", name="A", position="WR", team="KC", bye_week=6)
-        b = Player(id="b", name="B", position="RB", team="KC", bye_week=7)
-        _fill_missing_byes([a, b])
+        a = Player(id="a", name="A", position="WR", team="KC", bye_week=6,
+                   metadata={"bye_season": 2026, "bye_team": "KC"})
+        b = Player(id="b", name="B", position="RB", team="KC", bye_week=7,
+                   metadata={"bye_season": 2026, "bye_team": "KC"})
+        _fill_missing_byes([a, b], 2026)
         self.assertEqual(b.bye_week, 7)
 
 
@@ -316,6 +321,7 @@ class TestSingleSourceWarning(unittest.TestCase):
              patch.object(fs, "_fetch_ffc_adp_players", side_effect=RuntimeError("offline")), \
              patch.object(fs, "_fetch_nflverse_players", side_effect=RuntimeError("offline")), \
              patch.object(fs, "_fetch_nflverse_stats_rows", side_effect=RuntimeError("offline")), \
+             patch.object(fs, "_fetch_nflverse_byes", return_value={"DET": 6}), \
              patch.object(fs, "fetch_all_fftoday", side_effect=fftoday):
             return fs.pull_free_data(config, season=2026, include_fftoday=include_fftoday)
 

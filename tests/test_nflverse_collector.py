@@ -1,5 +1,6 @@
 """Tests for the nflverse data collector."""
 import unittest
+from unittest import mock
 
 from draft_assistant.collectors.nflverse import (
     _extract_stats,
@@ -8,6 +9,7 @@ from draft_assistant.collectors.nflverse import (
     _safe_float,
     _compute_bye_weeks,
     _aggregate_injuries,
+    collect_players,
 )
 
 try:
@@ -82,16 +84,74 @@ class TestSafeConversions(unittest.TestCase):
 
 @unittest.skipUnless(HAS_PANDAS, "pandas not installed (optional collector dependency)")
 class TestByeWeeks(unittest.TestCase):
-    def test_computes_bye(self):
+    @staticmethod
+    def schedule(season, bye):
         import pandas as pd
-        # Simulate: team A plays weeks 1-13,15-18 → bye=14
-        rows = []
-        for week in list(range(1, 14)) + list(range(15, 19)):
-            rows.append({"recent_team": "TST", "week": week, "season_type": "REG",
-                         "player_id": "p1", "player_name": "Test"})
-        df = pd.DataFrame(rows)
-        byes = _compute_bye_weeks(df)
+        return pd.DataFrame([
+            {"season": season, "game_type": "REG", "week": week,
+             "home_team": "TST" if week % 2 else "OPP",
+             "away_team": "OPP" if week % 2 else "TST"}
+            for week in range(1, 19) if week != bye
+        ])
+
+    def test_computes_bye(self):
+        byes = _compute_bye_weeks(self.schedule(2026, 14), 2026)
         self.assertEqual(byes["TST"], 14)
+        self.assertEqual(byes["OPP"], 14)
+
+    def test_uses_requested_season_only(self):
+        import pandas as pd
+        schedules = pd.concat([self.schedule(2025, 6), self.schedule(2026, 14)])
+        self.assertEqual(_compute_bye_weeks(schedules, 2026)["TST"], 14)
+
+    def test_partial_wrong_season_or_missing_schedule_leaves_bye_unknown(self):
+        import pandas as pd
+        self.assertEqual(_compute_bye_weeks(self.schedule(2025, 6), 2026), {})
+        self.assertEqual(_compute_bye_weeks(self.schedule(2026, 14).iloc[:5], 2026), {})
+        self.assertEqual(_compute_bye_weeks(pd.DataFrame(), 2026), {})
+
+    def test_collector_requests_current_schedule_with_provenance(self):
+        import pandas as pd
+        nfl = mock.Mock()
+        nfl.import_seasonal_rosters.return_value = pd.DataFrame([{
+            "player_id": "p1", "position": "WR", "player_name": "Test", "team": "TST",
+        }])
+        nfl.import_seasonal_data.return_value = pd.DataFrame()
+        nfl.import_injuries.return_value = pd.DataFrame(columns=[
+            "report_primary_injury", "report_status",
+        ])
+        nfl.import_schedules.return_value = pd.concat([
+            self.schedule(2025, 6), self.schedule(2026, 14),
+        ])
+        with mock.patch.dict("sys.modules", {"nfl_data_py": nfl}):
+            players = collect_players(current_season=2026)
+        nfl.import_schedules.assert_called_once_with([2026])
+        nfl.import_weekly_data.assert_not_called()
+        self.assertEqual(players[0].bye_week, 14)
+        self.assertEqual(players[0].metadata["bye_season"], 2026)
+        self.assertEqual(players[0].metadata["bye_team"], "TST")
+
+    def test_unavailable_schedule_does_not_substitute_historical_bye(self):
+        import pandas as pd
+        nfl = mock.Mock()
+        nfl.import_seasonal_rosters.return_value = pd.DataFrame()
+        nfl.import_seasonal_data.return_value = pd.DataFrame([{
+            "player_id": "p1", "season": 2025, "receiving_yards": 100,
+        }])
+        nfl.import_injuries.return_value = pd.DataFrame(columns=[
+            "report_primary_injury", "report_status",
+        ])
+        nfl.import_schedules.side_effect = OSError("schedule unavailable")
+        nfl.import_weekly_data.return_value = pd.DataFrame([
+            {"recent_team": "TST", "week": week, "season_type": "REG",
+             "player_id": "p1", "player_name": "Test", "position": "WR"}
+            for week in range(1, 19) if week != 6
+        ])
+        with mock.patch.dict("sys.modules", {"nfl_data_py": nfl}):
+            players = collect_players(current_season=2026)
+        nfl.import_weekly_data.assert_called_once_with([2025])
+        self.assertIsNone(players[0].bye_week)
+        self.assertNotIn("bye_season", players[0].metadata)
 
 
 @unittest.skipUnless(HAS_PANDAS, "pandas not installed (optional collector dependency)")

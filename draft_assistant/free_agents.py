@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Sequence
 
 from .context import (
     actual_stats_for,
     confidence_for_player,
+    current_bye_week,
     is_candidate_eligible,
     primary_availability,
     signal_summary,
@@ -94,7 +95,9 @@ def free_agent_recommendations(
     if week is not None and not 1 <= int(week) <= 18:
         raise ValueError("week must be between 1 and 18")
     selected_week = int(week or (context.selected_week if context else 1))
-    remaining_games = max(1, 18 - selected_week + 1)
+    if context is not None and context.selected_week != selected_week:
+        context = replace(context, selected_week=selected_week)
+    remaining_weeks = 19 - selected_week
 
     roster_players = _flatten_roster(my_roster)
     eligible_available = [
@@ -107,12 +110,19 @@ def free_agent_recommendations(
     weekly_map: Dict[str, float] = {}
     weekly_origins: Dict[str, str] = {}
     for player in all_players:
+        bye_week = current_bye_week(player, context.season if context else None)
+        if bye_week is not None:
+            remaining_games = remaining_weeks - int(bye_week >= selected_week)
+        else:
+            # With no trustworthy schedule, distribute 17 games over 18 weeks
+            # instead of claiming a particular missing week is a bye.
+            remaining_games = 17 * remaining_weeks / 18.0
         season_points = float(season_map.get(player.key(), 0.0))
         actual_stats = actual_stats_for(context, player)
         if actual_stats is not None:
             ros_points = max(0.0, season_points - fantasy_points(actual_stats, config.scoring))
         elif selected_week > 1:
-            ros_points = max(0.0, season_points * remaining_games / 18.0)
+            ros_points = max(0.0, season_points * remaining_games / 17.0)
         else:
             ros_points = max(0.0, season_points)
         ros_map[player.key()] = round(ros_points, 2)
@@ -122,9 +132,11 @@ def free_agent_recommendations(
             weekly_points = fantasy_points(weekly_stats, config.scoring)
             weekly_origins[player.key()] = "Sleeper weekly projection"
         else:
-            weekly_points = ros_points / remaining_games
+            weekly_points = ros_points / remaining_games if remaining_games > 0 else 0.0
             weekly_origins[player.key()] = "ROS per-game fallback"
         weekly_points *= weekly_availability_factor(context, player)
+        if bye_week == selected_week:
+            weekly_points = 0.0
         weekly_map[player.key()] = round(max(0.0, weekly_points), 2)
 
     ros_repl = replacement_levels(
@@ -169,7 +181,8 @@ def free_agent_recommendations(
             weekly_drop_points=weekly.drop_points, ros_drop_points=ros.drop_points,
             weekly_reason=weekly.reason, ros_reason=ros.reason,
             urgency=urgency_for_player(context, player),
-            availability=primary_availability(context, player),
+            availability=("Bye" if current_bye_week(player, context.season if context else None) == selected_week
+                          else primary_availability(context, player)),
             confidence=confidence_for_player(context, player),
             signals=signal_summary(context, player),
             weekly_projection_origin=weekly_origins.get(player.key(), "ROS per-game fallback"),

@@ -200,9 +200,17 @@ class TestDraftPickSync(unittest.TestCase):
         # would think it was an earlier pick than it is.
         self.assertEqual(len(result["picks"]), 3)
         self.assertEqual(result["matched"], 2)
+        self.assertEqual(result["nextPickNum"], 4)
         placeholder = result["picks"][1]
         self.assertTrue(placeholder["unmatched"])
-        self.assertEqual(placeholder["playerId"], "Unknown Rookie|RB")
+        # Keep the provider identity while projections are unavailable, so a
+        # later board refresh can resolve this pick without losing ownership.
+        self.assertEqual(placeholder["playerId"], "sleeper:9999")
+        self.assertEqual(placeholder["providerPlayerId"], "sleeper:9999")
+        self.assertEqual(placeholder["sourceName"], "Unknown Rookie")
+        self.assertEqual(placeholder["sourcePosition"], "RB")
+        self.assertEqual(placeholder["sourceTeam"], "DAL")
+        self.assertEqual(placeholder["teamNum"], 2)
         self.assertEqual(result["unmatched"][0]["id"], "sleeper:9999")
 
     def test_out_of_order_rows_are_sorted_by_pick_number(self):

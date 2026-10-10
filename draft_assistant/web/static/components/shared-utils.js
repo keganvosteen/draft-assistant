@@ -131,11 +131,9 @@ function rosterTotal(rosterSlots) {
     .reduce((sum, [key, value]) => key === 'IR' ? sum : sum + (value || 0), 0);
 }
 
-// Slot a roster into its lineup: starters first (position slots, then the
-// tightest flex first so a WR/TE slot isn't consumed by a player only the
-// wide-open FLEX could have taken), then bench. Shared by the draft room's
-// team panel and the waiver wire's roster panel so both agree on what a
-// "starter" is.
+// Weighted player selection with augmenting paths across overlapping slots.
+// Each player has the same value in every eligible slot. Processing highest
+// value first and relocating earlier players preserves the best legal lineup.
 function buildLineup(players, rosterSlots) {
   const slots = rosterSlots || {};
   const defs = [];
@@ -150,19 +148,28 @@ function buildLineup(players, rosterSlots) {
     .forEach(fk => push(slots[fk], { label: FLEX_TYPES_JS[fk].label, pos: 'FLEX', elig: FLEX_TYPES_JS[fk].elig }));
   push(slots.K, { label: 'K', pos: 'K' });
   push(slots.DST, { label: 'DST', pos: 'DST' });
-  push(slots.BN, { label: 'BN', pos: null, bench: true });
-
-  const remaining = players.slice();
-  return defs.map(slot => {
-    if (!slot.pos) return { slot, player: remaining.shift() || null };
-    if (slot.pos === 'FLEX') {
-      const elig = new Set(slot.elig || ['RB', 'WR', 'TE']);
-      const idx = remaining.findIndex(p => elig.has(p.pos));
-      return { slot, player: idx >= 0 ? remaining.splice(idx, 1)[0] : null };
+  const points = p => Number(p.projPts || 0);
+  const ranked = players.slice().sort((a,b) => points(b)-points(a) || String(a.id || a.name).localeCompare(String(b.id || b.name)));
+  const assigned = new Array(defs.length).fill(null);
+  function place(player, seen) {
+    for (let i=0; i<defs.length; i++) {
+      const slot = defs[i];
+      if (seen.has(i) || !(slot.elig || [slot.pos]).includes(player.pos)) continue;
+      seen.add(i);
+      if (!assigned[i] || place(assigned[i], seen)) { assigned[i] = player; return true; }
     }
-    const idx = remaining.findIndex(p => p.pos === slot.pos);
-    return { slot, player: idx >= 0 ? remaining.splice(idx, 1)[0] : null };
-  });
+    return false;
+  }
+  ranked.forEach(player => place(player, new Set()));
+  const used = new Set(assigned.filter(Boolean));
+  const benchWeight = {QB:.08,RB:.18,WR:.18,TE:.12};
+  const remaining = ranked.filter(p => !used.has(p)).sort((a,b) =>
+    points(b)*(benchWeight[b.pos] || 0)-points(a)*(benchWeight[a.pos] || 0));
+  const lineup = defs.map((slot,i) => ({slot, player:assigned[i]}));
+  for (let i=0; i<(slots.BN ?? slots.BENCH ?? 0); i++) {
+    lineup.push({slot:{label:'BN',pos:null,bench:true},player:remaining[i] || null});
+  }
+  return lineup;
 }
 
 function getSnakeTeam(pickNum, numTeams) {
@@ -230,23 +237,8 @@ function getCurrentRoundPick(totalPicks, numTeams) {
 }
 
 function getRosterNeeds(myPlayers, rosterSlots) {
-  const counts = {};
-  myPlayers.forEach(p => { counts[p.pos] = (counts[p.pos] || 0) + 1; });
-  const fx = flexExpectation(rosterSlots);
-  const maxByPos = {
-    QB:  slotCount(rosterSlots,'QB',1) + Math.round(fx.QB),
-    RB:  slotCount(rosterSlots,'RB',2) + Math.ceil(fx.RB),
-    WR:  slotCount(rosterSlots,'WR',2) + Math.ceil(fx.WR),
-    TE:  slotCount(rosterSlots,'TE',1) + Math.floor(fx.TE),
-    K:   slotCount(rosterSlots,'K',1),
-    DST: slotCount(rosterSlots,'DST',1),
-  };
-  return Object.entries(maxByPos)
-    .filter(([pos, max]) => (counts[pos] || 0) < max)
-    .sort(([a], [b]) => {
-      const aOpen = (counts[a] || 0) < (rosterSlots[a] || 0) ? 0 : 1;
-      const bOpen = (counts[b] || 0) < (rosterSlots[b] || 0) ? 0 : 1;
-      return aOpen - bOpen;
-    })
-    .map(([pos]) => pos);
+  const filled = players => buildLineup(players, rosterSlots).filter(row => !row.slot.bench && row.player).length;
+  const current = filled(myPlayers);
+  return ['QB','RB','WR','TE','K','DST'].filter(pos =>
+    filled([...myPlayers,{id:`need-${pos}`,pos,projPts:0}]) > current);
 }

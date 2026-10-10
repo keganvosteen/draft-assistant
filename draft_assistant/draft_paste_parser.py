@@ -9,6 +9,38 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from .fuzzy import score_player_query, _normalize_str
+from .input_limits import validate_pasted_line, validate_pasted_text
+
+
+def _remove_parenthetical_annotations(text: str) -> str:
+    """Remove each opening parenthesis through its next closing one in one pass.
+
+    Unclosed annotations stay visible, matching the existing paste behavior.
+    Nested openings are part of the same annotation until the next closing
+    parenthesis; they never restart a search over the remaining text.
+    """
+    pieces = []
+    opening = None
+    kept_from = 0
+    for index, char in enumerate(text):
+        if char == "(" and opening is None:
+            opening = index
+        elif char == ")" and opening is not None:
+            pieces.append(text[kept_from:opening])
+            kept_from = index + 1
+            opening = None
+    pieces.append(text[kept_from:])
+    return "".join(pieces)
+
+
+def _trim_name_delimiters(text: str) -> str:
+    """Trim punctuation/Unicode whitespace from both ends in linear time."""
+    start, end = 0, len(text)
+    while start < end and (text[start].isspace() or text[start] in "-:."):
+        start += 1
+    while end > start and (text[end - 1].isspace() or text[end - 1] in "-:."):
+        end -= 1
+    return text[start:end]
 
 
 def get_snake_team(pick_num: int, num_teams: int) -> int:
@@ -32,6 +64,7 @@ def clean_line_text(line: str) -> Tuple[Optional[int], str]:
       - "Pick 5: CeeDee Lamb"
       - "Bijan Robinson"
     """
+    validate_pasted_line(line, "Draft text")
     raw = line.strip()
     if not raw:
         return None, ""
@@ -60,13 +93,13 @@ def clean_line_text(line: str) -> Tuple[Optional[int], str]:
     raw = re.sub(r"^(?:team\s*\d+|pick\s*\d+)\s*[\-\:]\s*", "", raw, flags=re.IGNORECASE).strip()
 
     # Strip parenthetical annotations e.g. (ATL - RB), (Round 1)
-    cleaned_name = re.sub(r"\([^\)]*\)", "", raw).strip()
+    cleaned_name = _remove_parenthetical_annotations(raw).strip()
 
     # Strip trailing position/team noise e.g. " RB ATL", " WR", " QB"
     cleaned_name = re.sub(r"\b(QB|RB|WR|TE|K|DST|DEF)\b.*$", "", cleaned_name, flags=re.IGNORECASE).strip()
 
     # Remove extra spaces/dashes
-    cleaned_name = re.sub(r"^[\-\:\.\s]+|[\-\:\.\s]+$", "", cleaned_name).strip()
+    cleaned_name = _trim_name_delimiters(cleaned_name)
 
     return explicit_pick, cleaned_name if cleaned_name else raw
 
@@ -118,7 +151,7 @@ def parse_draft_text(
 
     Returns a list of pick result dictionaries.
     """
-    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    lines = [line.strip() for line in validate_pasted_text(raw_text, "Draft text") if line.strip()]
     results = []
 
     current_pick_counter = start_pick

@@ -110,6 +110,7 @@ class TestFreeAgentRecommendations(unittest.TestCase):
         )
         context = PlayerContext(
             season=2026, selected_week=5,
+            weekly_projection_season=2026, weekly_projection_week=5,
             weekly_projections={"sleeper:1": {"rec_yd": 20}},
             actual_stats={"sleeper:1": {"rec_yd": 40}},
         )
@@ -127,6 +128,7 @@ class TestFreeAgentRecommendations(unittest.TestCase):
         )
         context = PlayerContext(
             season=2026, selected_week=1,
+            weekly_projection_season=2026, weekly_projection_week=1,
             weekly_projections={"sleeper:1": {"rec_yd": 20}},
             signals=[PlayerSignal(
                 player_id="sleeper:1", kind="injury", value="Out",
@@ -151,7 +153,7 @@ class TestFreeAgentRecommendations(unittest.TestCase):
         )
         context = PlayerContext(2026, 1, weekly_projections={
             "sleeper:1": {"rec_yd": 30}, "sleeper:2": {"rec_yd": 10},
-        })
+        }, weekly_projection_season=2026, weekly_projection_week=1)
         rows = free_agent_recommendations(
             _config({"WR": 2}), [now, later], {}, top_n=None, context=context,
         )
@@ -165,6 +167,7 @@ class TestFreeAgentRecommendations(unittest.TestCase):
         )
         context = PlayerContext(
             2026, 1, weekly_projections={"sleeper:1": {"rec_yd": 12}},
+            weekly_projection_season=2026, weekly_projection_week=1,
             signals=[
                 PlayerSignal("sleeper:1", "depth_chart", "WR1", "nflverse", "2098-01-01T00:00:00+00:00"),
                 PlayerSignal("sleeper:1", "trend_add", "50", "Sleeper", "2098-01-01T00:00:00+00:00"),
@@ -175,6 +178,74 @@ class TestFreeAgentRecommendations(unittest.TestCase):
         )[0]
         self.assertEqual(row.weekly_points, 12)
         self.assertEqual(row.urgency, 50)
+
+    def test_requested_week_uses_fallback_instead_of_other_weeks_projection(self):
+        add = _p("Free WR", "WR", 170)
+        context = PlayerContext(
+            2026, 5, weekly_projections={add.key(): {"rec_yd": 40}},
+            weekly_projection_season=2026, weekly_projection_week=5,
+        )
+        row = free_agent_recommendations(
+            _config({"WR": 1}), [add], {}, context=context, week=6,
+        )[0]
+        self.assertEqual(row.weekly_points, 10)
+        self.assertEqual(row.weekly_projection_origin, "ROS per-game fallback")
+        self.assertEqual(context.selected_week, 5)
+
+    def test_current_bye_zeros_candidate_but_preserves_ros(self):
+        add = _p("Free WR", "WR", 170)
+        add.bye_week = 6
+        add.team = "TEST"
+        add.metadata = {"bye_season": 2026, "bye_team": "TEST"}
+        context = PlayerContext(
+            2026, 6, weekly_projections={add.key(): {"rec_yd": 20}},
+            actual_stats={add.key(): {"rec_yd": 40}},
+            weekly_projection_season=2026, weekly_projection_week=6,
+        )
+        row = free_agent_recommendations(
+            _config({"WR": 1}), [add], {}, context=context,
+        )[0]
+        self.assertEqual(row.weekly_points, 0)
+        self.assertEqual(row.ros_points, 130)
+        self.assertEqual(row.availability, "Bye")
+
+    def test_bye_incumbent_makes_weekly_replacement_gain_visible(self):
+        incumbent = _p("Roster WR", "WR", 340)
+        incumbent.bye_week = 6
+        incumbent.metadata = {"bye_season": 2026}
+        add = _p("Free WR", "WR", 170)
+        row = free_agent_recommendations(
+            _config({"WR": 1, "BN": 1}), [add], {"WR": [incumbent]},
+            context=PlayerContext(2026, 6),
+        )[0]
+        self.assertEqual(row.weekly_points, 10)
+        self.assertEqual(row.weekly_starter_gain, 10)
+        self.assertEqual(row.ros_starter_gain, 0)
+
+    def test_fallback_uses_remaining_games_after_or_before_known_bye(self):
+        add = _p("Free WR", "WR", 170)
+        add.metadata = {"bye_season": 2026}
+        for bye, expected_ros in ((3, 130), (8, 120)):
+            with self.subTest(bye=bye):
+                add.bye_week = bye
+                row = free_agent_recommendations(
+                    _config({"WR": 1}), [add], {}, context=PlayerContext(2026, 6),
+                )[0]
+                self.assertEqual(row.weekly_points, 10)
+                self.assertEqual(row.ros_points, expected_ros)
+
+    def test_unknown_stale_or_other_team_bye_does_not_suppress_player(self):
+        add = _p("Free WR", "WR", 170)
+        add.bye_week = 6
+        add.team = "NEW"
+        for metadata in ({}, {"bye_season": 2025}, {"bye_season": 2026, "bye_team": "OLD"}):
+            with self.subTest(metadata=metadata):
+                add.metadata = metadata
+                row = free_agent_recommendations(
+                    _config({"WR": 1}), [add], {}, context=PlayerContext(2026, 6),
+                )[0]
+                self.assertEqual(row.weekly_points, 10)
+                self.assertNotEqual(row.availability, "Bye")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,9 @@
 from __future__ import annotations
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .models import FLEX_TYPES, Player
+from .models import Player
 from .scoring import fantasy_points
+from .slot_assignment import assign_flex_slots, flex_layout
 
 
 def compute_points(
@@ -79,39 +80,24 @@ def replacement_levels(
                 starters[pos] -= used
             occupied_excess[pos] = count - used
 
-    # Allocate typed flex slots league-wide, most restrictive first, each to the
-    # eligible position whose next-best available player is highest. A WR/TE slot
-    # only deepens WR/TE replacement; it never lifts RB.
-    flex_slots: List[tuple] = []
-    for fkey, elig in FLEX_TYPES.items():
-        flex_slots.extend([elig] * (teams * int(roster.get(fkey, 0))))
-    flex_slots.sort(key=len)
-
-    remaining_flex_slots: List[tuple] = []
-    for elig in flex_slots:
-        filled_pos = None
-        filled_count = 0
-        for pos in elig:
-            count = occupied_excess.get(pos, 0)
-            if count > filled_count:
-                filled_pos, filled_count = pos, count
-        if filled_pos is not None:
-            occupied_excess[filled_pos] -= 1
-        else:
-            remaining_flex_slots.append(elig)
-
-    for elig in remaining_flex_slots:
-        best_pos = None
-        best_pts = 0.0
-        for pos in elig:
-            lst = points_by_pos.get(pos, [])
-            i = starters.get(pos, 0)
-            if i < len(lst):
-                pv = lst[i][1]
-                if best_pos is None or pv > best_pts:
-                    best_pos, best_pts = pos, pv
-        if best_pos is not None:
-            starters[best_pos] += 1
+    # Already drafted overflow has priority over new demand, but can move to a
+    # different flex slot to leave the best legal assignment for the live pool.
+    flex_slots = flex_layout({key: teams * int(count) for key, count in roster.items()})
+    candidates: List[Tuple[str, float, bool]] = [
+        (pos, float("inf"), True)
+        for pos, count in occupied_excess.items()
+        for _ in range(min(count, len(flex_slots)))
+    ]
+    for pos, values in points_by_pos.items():
+        start = starters.get(pos, 0)
+        candidates.extend((pos, value, False) for _, value in values[start:start + len(flex_slots)])
+    assigned = assign_flex_slots(
+        flex_slots, [row[0] for row in candidates], [row[1] for row in candidates],
+    )
+    for index in assigned.values():
+        pos, _, occupied = candidates[index]
+        if not occupied:
+            starters[pos] = starters.get(pos, 0) + 1
 
     repl: Dict[str, float] = {}
     for pos, count in starters.items():
