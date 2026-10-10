@@ -38,9 +38,10 @@ player boards are not replaced during installation.
 - Packaged browser UI exercised opening a league, calculating recommendations,
   recording a pick, and scanning weekly waivers with a changed week.
 
-Native macOS Keychain behavior is covered by mocks, not a native credential
-smoke test. Authenticated provider connections have not been exercised against
-live accounts. Roster feasibility describes the current pool and remaining
+Native Windows DPAPI and macOS Keychain smoke checks use isolated synthetic
+credentials to verify profile isolation, deletion and legacy Keychain migration
+in the installer workflow. Authenticated provider connections have not been
+exercised against live accounts. Roster feasibility describes the current pool and remaining
 picks; opponents may still take needed players. CodeQL and cross-platform CI
 results are tracked on the pull request; no public release is published by this
 change. An initial CodeQL rescan found one additional numbered-team-prefix
