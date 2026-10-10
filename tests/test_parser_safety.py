@@ -14,7 +14,7 @@ from draft_assistant.draft_paste_parser import (
     parse_draft_text,
 )
 from draft_assistant.fuzzy import normalize_player_name
-from draft_assistant.importers.yahoo import parse_settings_text
+from draft_assistant.importers.yahoo import _numbered_team_name, parse_settings_text
 from draft_assistant.input_limits import (
     MAX_PASTED_LINE_CHARS,
     MAX_PASTED_LINES,
@@ -94,6 +94,13 @@ class TestParserCompatibility(unittest.TestCase):
         ]))
         self.assertEqual(info["teamNames"], ["Team Alpha", "O'Brien's Team", "Team Bravo"])
 
+    def test_team_index_requires_digits_punctuation_and_whitespace(self):
+        for line in ("1 Team", "1.Team", ". Team", "12345", "12345!", "1."):
+            with self.subTest(line=line):
+                self.assertIsNone(_numbered_team_name(line))
+        self.assertEqual(_numbered_team_name("12.\tTeam Alpha"), "Team Alpha")
+        self.assertEqual(_numbered_team_name("\u0661) Team Bravo"), "Team Bravo")
+
     def test_yahoo_roster_labels_reject_partial_labels_and_unclosed_annotations(self):
         info = parse_settings_text("\n".join([
             "League Name: Parser League", "Wide Receiver (WR): 3", "W/R/T\t1",
@@ -127,6 +134,7 @@ class TestMalformedInputScaling(unittest.TestCase):
                 'roster': (_roster_position_row, lambda n: 'WR' + ' ' * n + '!'),
                 'scoring': (parse_settings_text, lambda n: 'Passing Yards' + ' ' * n + '!'),
                 'team_name': (_numbered_team_name, lambda n: '1. Team' + ' ' * n + '!'),
+                'team_index': (_numbered_team_name, lambda n: '9' * n + '!'),
             }
             timings = {}
             with mock.patch('draft_assistant.importers.yahoo.validate_pasted_text'):
@@ -145,7 +153,7 @@ class TestMalformedInputScaling(unittest.TestCase):
             cwd=Path(__file__).resolve().parents[1], timeout=20, check=True,
         )
         timings = json.loads(result.stdout)
-        self.assertEqual(len(timings), 6)
+        self.assertEqual(len(timings), 7)
         for family, (small, large) in timings.items():
             with self.subTest(family=family):
                 # Four times the input may take a little more than four times

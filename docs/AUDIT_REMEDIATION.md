@@ -18,7 +18,7 @@ player boards are not replaced during installation.
 
 ## Validation
 
-- 574 Python tests passed on Windows/Python 3.14 with optional data dependencies.
+- 575 Python tests passed on Windows/Python 3.14 with optional data dependencies.
 - Python 3.12 core suite passed; optional tests also run in the 3.12 CI job.
 - Projection quality, vendor integrity, Python compilation, JS/JSX syntax,
   league identity/restore, workspace recovery and recommendation-refresh checks passed.
@@ -27,7 +27,9 @@ player boards are not replaced during installation.
   also covers 486 fixtures.
 - Actual 2,209-player board, 24 simulations: median rollout wall time increased
   from 1.367s to 1.419s, approximately 4%.
-- Windows installer built successfully and passed first-run package smoke tests.
+- Windows and universal macOS installers built successfully and passed first-run
+  package smoke tests in GitHub Actions. The macOS binary contains both Intel
+  and Apple Silicon architectures.
 - Copied-data upgrade from 0.7.3 to 0.7.4 preserved four leagues, picks,
   preferences, the 2,946-player board and readable Yahoo credentials. Six
   important data files stayed byte-identical across the version change. Moving
@@ -41,4 +43,5 @@ smoke test. Authenticated provider connections have not been exercised against
 live accounts. Roster feasibility describes the current pool and remaining
 picks; opponents may still take needed players. CodeQL and cross-platform CI
 results are tracked on the pull request; no public release is published by this
-change.
+change. An initial CodeQL rescan found one additional numbered-team-prefix
+pattern; it was replaced with a character scan and added to scaling coverage.

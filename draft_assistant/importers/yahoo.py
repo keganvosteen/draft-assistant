@@ -162,10 +162,15 @@ def _roster_position_row(line: str) -> Optional[tuple[str, int]]:
 
 def _numbered_team_name(line: str) -> Optional[str]:
     """Read an indexed team name and discard an optional trailing manager."""
-    match = re.match(r"\d+[.)]\s+", line)
-    if not match:
+    # Scan the numeric prefix once, including malformed all-digit lines. This
+    # keeps the work explicitly linear without depending on regex anchoring.
+    index = 0
+    while index < len(line) and line[index].isdecimal():
+        index += 1
+    if (index == 0 or index + 1 >= len(line) or line[index] not in ".)"
+            or not line[index + 1].isspace()):
         return None
-    candidate = line[match.end():].strip()
+    candidate = line[index + 1:].strip()
     opening = candidate.find("(")
     if opening >= 0:
         if (not candidate.endswith(")") or opening == 0
