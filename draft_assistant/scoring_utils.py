@@ -9,9 +9,7 @@ from __future__ import annotations
 from typing import Dict, List, Mapping
 
 from .models import FLEX_TYPES, LeagueConfig, Player
-
-STARTER_POSITIONS = ("QB", "RB", "WR", "TE", "K", "DST")
-ALL_FLEX_ELIGIBLE = set().union(*FLEX_TYPES.values())
+from .slot_assignment import STARTER_POSITIONS, filled_flex_counts
 
 
 def needs_by_position(
@@ -36,12 +34,9 @@ def needs_by_position(
 def roster_counts(my_roster: Mapping[str, List[Player]]) -> Dict[str, int]:
     """Count rostered players by actual NFL fantasy position."""
     counts: Dict[str, int] = {}
-    for key, players in my_roster.items():
-        if key in FLEX_TYPES:
-            for player in players:
-                counts[player.position] = counts.get(player.position, 0) + 1
-        else:
-            counts[key] = counts.get(key, 0) + len(players)
+    for players in my_roster.values():
+        for player in players:
+            counts[player.position] = counts.get(player.position, 0) + 1
     return counts
 
 
@@ -49,23 +44,8 @@ def flex_slots_filled(
     roster: Mapping[str, int],
     counts: Mapping[str, int],
 ) -> Dict[str, int]:
-    """Allocate overflow players into typed-flex slots, most restrictive first."""
-    overflow = {
-        pos: max(0, int(counts.get(pos, 0)) - int(roster.get(pos, 0)))
-        for pos in ALL_FLEX_ELIGIBLE
-    }
-    filled = {fkey: 0 for fkey in FLEX_TYPES}
-    slots: List[tuple[str, tuple]] = []
-    for fkey, elig in FLEX_TYPES.items():
-        slots.extend((fkey, elig) for _ in range(max(0, int(roster.get(fkey, 0)))))
-    slots.sort(key=lambda item: len(item[1]))
-
-    for fkey, elig in slots:
-        best_pos = max(elig, key=lambda pos: overflow.get(pos, 0))
-        if overflow.get(best_pos, 0) > 0:
-            overflow[best_pos] -= 1
-            filled[fkey] += 1
-    return filled
+    """Return an exact maximum-cardinality assignment of overflow to flex."""
+    return filled_flex_counts(roster, counts)
 
 
 def flex_need_for_position(position: str, needs: Mapping[str, int]) -> int:

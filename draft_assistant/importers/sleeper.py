@@ -328,9 +328,14 @@ def _parse_rosters(
             continue
         roster_id = _to_int(roster.get("roster_id"))
         owner_id = str(roster.get("owner_id") or "")
+        # Reserve and taxi players remain owned even when a provider response
+        # lists them separately from the main players collection.
+        player_ids = dict.fromkeys(str(pid)
+                                   for field in ("players", "reserve", "taxi")
+                                   for pid in roster.get(field) or [] if pid)
         players = [
             _roster_player(str(pid), (player_index or {}).get(str(pid)))
-            for pid in roster.get("players") or [] if pid
+            for pid in player_ids
         ]
         teams.append(SyncedRosterTeam(
             name=owner_names.get(owner_id) or f"Team {roster_id or len(teams) + 1}",

@@ -25,6 +25,9 @@ jobs:
           node-version: "22"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install --no-deps .
+      - name: Exercise optional collector and backtest tests
+        if: matrix.python-version == '3.12'
+        run: python -m pip install '.[backtest]'
       - run: python -m unittest discover -s tests -v
       - run: python scripts/check_projection_quality.py
       - run: python scripts/check_vendor_assets.py
@@ -32,6 +35,7 @@ jobs:
       - run: node scripts/check_web_syntax.js
       - run: node scripts/check_league_sync.js
       - run: node scripts/check_workspace_store.js
+      - run: node scripts/check_recommendation_refresh.js
       - name: Verify installed web assets
         run: python -I scripts/check_installed_assets.py
 
@@ -49,6 +53,7 @@ jobs:
       # needs to catch a bundle that is missing a data file or hidden import.
       - run: powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1 -SkipInstaller
         shell: pwsh
+      - run: python scripts/check_native_secret_store.py
       - run: if (!(Test-Path .\dist\pyinstaller\DraftAssistant\DraftAssistant.exe)) { throw "packaged exe missing" }
         shell: pwsh
       - uses: actions/upload-artifact@v4

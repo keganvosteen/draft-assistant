@@ -48,12 +48,37 @@ def synced_rosters_to_picks(
     picks: List[dict] = []
     unmatched: List[dict] = []
     seen_player_ids = set()
+    seen_sources = set()
 
     for fallback_idx, team in enumerate(synced_teams, 1):
         team_num = team_nums[fallback_idx - 1]
         for roster_player in team.players:
+            source_id = roster_player.provider_id or (
+                roster_player.name, _position(roster_player.position), roster_player.team)
+            if source_id in seen_sources:
+                continue
+            seen_sources.add(source_id)
             matched = matcher.match(roster_player)
-            if not matched:
+            player_id = matched.key() if matched else None
+            pick = {
+                "pickNum": len(picks) + 1,
+                "teamNum": team_num,
+                "synced": True,
+                "sourceName": roster_player.name,
+                "sourcePosition": roster_player.position,
+                "sourceTeam": roster_player.team,
+                "providerPlayerId": roster_player.provider_id,
+                "providerTeamId": team.provider_id,
+            }
+            if player_id is None or player_id in seen_player_ids:
+                # Ownership survives missing projections and ambiguous name
+                # matches. Keep provider identity so a later data refresh can
+                # resolve the player without treating them as a free agent.
+                player_id = roster_player.provider_id or (
+                    f"{roster_player.name or 'Unknown'}|{_position(roster_player.position)}")
+                if player_id in seen_player_ids:
+                    player_id = f"{player_id}|roster:{team_num}:{len(picks) + 1}"
+                pick["unmatched"] = True
                 unmatched.append({
                     "team": team.name,
                     "name": roster_player.name,
@@ -61,22 +86,13 @@ def synced_rosters_to_picks(
                     "nflTeam": roster_player.team,
                     "id": roster_player.provider_id,
                 })
-                continue
-            player_id = matched.key()
-            if player_id in seen_player_ids:
-                continue
             seen_player_ids.add(player_id)
-            picks.append({
-                "pickNum": len(picks) + 1,
-                "teamNum": team_num,
-                "playerId": player_id,
-                "synced": True,
-                "sourceName": roster_player.name,
-            })
+            pick["playerId"] = player_id
+            picks.append(pick)
 
     return {
         "picks": picks,
-        "matched": len(picks),
+        "matched": len(picks) - len(unmatched),
         "unmatched": unmatched,
         "teams": [
             {
@@ -87,6 +103,41 @@ def synced_rosters_to_picks(
             for i, team in enumerate(synced_teams)
         ],
     }
+
+
+def roster_player_keys(entries: Sequence[dict], players: Sequence[Player]) -> List[str]:
+    """Resolve saved ownership against the current projections, in row order.
+
+    Provider/source fields survive a projection refresh, including players who
+    had no projection when synced. Older snapshots can still use their saved
+    canonical or display-derived player key.
+    """
+    matcher = _PlayerMatcher(players)
+    keys = []
+    for entry in entries:
+        entry = entry if isinstance(entry, dict) else {"playerId": entry}
+        saved_id = str(entry.get("playerId") or "")
+        matched = matcher.match(SyncedRosterPlayer(
+            name=str(entry.get("sourceName") or ""),
+            position=str(entry.get("sourcePosition") or ""),
+            team=entry.get("sourceTeam"),
+            provider_id=entry.get("providerPlayerId") or saved_id,
+        ))
+        keys.append(matched.key() if matched else matcher.aliases.get(saved_id, saved_id))
+    return keys
+
+
+def resolve_roster_entries(entries: Sequence, players: Sequence[Player]) -> List[dict]:
+    """Return snapshot copies whose player IDs resolve to today's player pool."""
+    rows = [dict(entry) if isinstance(entry, dict) else {"playerId": entry}
+            for entry in entries]
+    keys = roster_player_keys(rows, players)
+    known = {player.key() for player in players}
+    for row, key in zip(rows, keys):
+        row["playerId"] = key
+        if key in known:
+            row.pop("unmatched", None)
+    return rows
 
 
 def synced_draft_to_picks(
@@ -128,6 +179,9 @@ def synced_draft_to_picks(
             "teamNum": team_num or 1,
             "synced": True,
             "sourceName": source.name,
+            "sourcePosition": source.position,
+            "sourceTeam": source.team,
+            "providerPlayerId": source.provider_id,
             "providerTeamId": draft_pick.provider_team_id,
         }
         player_id = matched.key() if matched else None
@@ -141,7 +195,7 @@ def synced_draft_to_picks(
             # keep their slot as a placeholder rather than being dropped — the
             # number of picks made is what tells the app whose turn it is, so
             # skipping one puts the whole draft on the wrong clock from there on.
-            pick["playerId"] = f"{source.name or source.provider_id or 'Unknown'}|{_position(source.position)}"
+            pick["playerId"] = source.provider_id or f"{source.name or 'Unknown'}|{_position(source.position)}"
             if pick["playerId"] in seen_player_ids:
                 pick["playerId"] = f"{source.name or 'Unknown'} (pick {draft_pick.pick_no})|{_position(source.position)}"
             pick["unmatched"] = True
@@ -193,43 +247,39 @@ def _team_number_map(league: dict, synced_teams: Sequence[SyncedRosterTeam]) -> 
 class _PlayerMatcher:
     def __init__(self, players: Sequence[Player]):
         self.players = list(players)
-        self.by_provider: Dict[tuple, Player] = {}
-        self.by_provider_id: Dict[tuple, Player] = {}
-        self.by_exact: Dict[tuple, Player] = {}
+        from .identity import player_aliases, player_indexes
+        self.canonical, self.aliases = player_indexes(self.players)
+        self.ambiguous_aliases = {
+            alias for player in self.players for alias in player_aliases(player)
+            if alias not in self.canonical and alias not in self.aliases
+        }
+        self.by_exact: Dict[tuple, Optional[Player]] = {}
         # Candidate names are stored already normalized: matching normalizes on
         # both sides, so re-deriving these per lookup was both wasted work and a
         # source of threshold/comparison mismatches.
         self.norm_names_by_pos: Dict[str, List[str]] = {}
-        self.by_norm_name_pos: Dict[tuple, Player] = {}
         for player in self.players:
             norm = _norm(player.name)
             pos = _position(player.position)
-            self.by_exact[(norm, pos)] = player
-            self.by_norm_name_pos[(norm, pos)] = player
-            self.norm_names_by_pos.setdefault(pos, []).append(norm)
-            stable_provider = _provider_prefix(player.id)
-            stable_value = _provider_value(player.id)
-            if stable_provider and stable_value:
-                self.by_provider[(stable_provider, stable_value, pos)] = player
-                self.by_provider_id.setdefault((stable_provider, stable_value), player)
-            for provider, key in (("espn", "espn_id"), ("sleeper", "sleeper_id")):
-                value = (player.metadata or {}).get(key)
-                if value is not None:
-                    self.by_provider[(provider, str(value), pos)] = player
-                    self.by_provider_id.setdefault((provider, str(value)), player)
+            key = (norm, pos)
+            if key not in self.by_exact:
+                self.by_exact[key] = player
+                self.norm_names_by_pos.setdefault(pos, []).append(norm)
+            elif self.by_exact[key] is not None and self.by_exact[key].key() != player.key():
+                self.by_exact[key] = None
 
     def match(self, synced: SyncedRosterPlayer) -> Optional[Player]:
         pos = _position(synced.position)
 
-        # Provider ids are exact, so they're tried first and are enough on
-        # their own — a Sleeper roster carries ids and nothing else.
-        provider = _provider_prefix(synced.provider_id)
-        provider_value = _provider_value(synced.provider_id)
-        if provider and provider_value:
-            direct = (self.by_provider.get((provider, provider_value, pos))
-                      or self.by_provider_id.get((provider, provider_value)))
-            if direct:
-                return direct
+        saved_id = str(synced.provider_id or "")
+        canonical_id = self.aliases.get(saved_id, saved_id)
+        direct = self.canonical.get(canonical_id)
+        if direct is not None:
+            return direct
+        if saved_id in self.ambiguous_aliases:
+            # Do not undo the shared identity index's ambiguity check through
+            # a provider- or name-based fallback that chooses an arbitrary row.
+            return None
 
         if not synced.name or not pos:
             return None
@@ -240,9 +290,8 @@ class _PlayerMatcher:
                 return dst
 
         norm = _norm(synced.name)
-        direct = self.by_exact.get((norm, pos))
-        if direct:
-            return direct
+        if (norm, pos) in self.by_exact:
+            return self.by_exact[(norm, pos)]
 
         names = self.norm_names_by_pos.get(pos, [])
 
@@ -254,14 +303,14 @@ class _PlayerMatcher:
         contained = [n for n in names if norm and (norm in n or n in norm)]
         if contained:
             best = min(contained, key=lambda n: (abs(len(n) - len(norm)), n))
-            return self.by_norm_name_pos.get((best, pos))
+            return self.by_exact.get((best, pos))
 
         # Both sides are compact-normalized here, so the edit budget is measured
         # against the same string shape it is applied to.
         max_distance = 2 if len(norm) <= 12 else 3
         fuzzy = best_match(norm, names, max_distance=max_distance)
         if fuzzy:
-            return self.by_norm_name_pos.get((fuzzy, pos))
+            return self.by_exact.get((fuzzy, pos))
         return None
 
     def _match_dst(self, synced: SyncedRosterPlayer) -> Optional[Player]:
@@ -283,18 +332,6 @@ def _position(value: object) -> str:
     if pos in {"DEF", "D/ST", "D"}:
         return "DST"
     return pos
-
-
-def _provider_prefix(provider_id: Optional[str]) -> Optional[str]:
-    if not provider_id or ":" not in provider_id:
-        return None
-    return provider_id.split(":", 1)[0]
-
-
-def _provider_value(provider_id: Optional[str]) -> Optional[str]:
-    if not provider_id or ":" not in provider_id:
-        return None
-    return provider_id.split(":", 1)[1]
 
 
 def _norm(value: str) -> str:

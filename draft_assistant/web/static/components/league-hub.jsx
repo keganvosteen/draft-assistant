@@ -54,24 +54,25 @@ function LeagueHub({ league, picks, playerCount, onBack, onOpenDraft, onOpenWaiv
   const linkedTo = league.sleeperLeagueId ? 'Sleeper'
     : league.espnLeagueId ? 'ESPN'
       : league.yahooLeagueKey ? 'Yahoo' : null;
+  const myRoster = (linkedTo ? ((league.rosterSnapshot || {}).picks || []) : picks)
+    .filter(p => p.teamNum === league.draftPosition);
   const isAuction = league.draftType === 'auction';
   const hasNames = (league.teamNames || []).some(Boolean);
 
   const runSync = () => {
     setSyncing(true);
     onSyncLeague(league)
-      .then(msg => toast(msg, 'ok'))
+      .then(result => toast(result.message, 'ok'))
       .catch(err => toast(String(err && err.message ? err.message : err), 'error', 6000))
       .finally(() => setSyncing(false));
   };
 
-  // Synced picks are attributed by seat, so without one marked as yours the
+  // Synced rosters are attributed by seat, so without one marked as yours the
   // rosters land on the board with none of them belonging to you — the league
   // looks synced but "my team" stays empty, which reads as the sync failing.
   const sync = () => {
     if (isAuction || league.draftPosition) { runSync(); return; }
-    // Confirm is the only branch that syncs: dismissing the dialog must not
-    // replace the recorded picks by accident.
+    // Confirm is the only branch that syncs when no team is selected.
     confirmDialog({
       title: 'No team is marked as yours',
       body: `Nothing in ${league.name} is set as your seat yet, and synced players are attributed by seat — `
@@ -145,10 +146,10 @@ function LeagueHub({ league, picks, playerCount, onBack, onOpenDraft, onOpenWaiv
           <HubTile
             title="Waiver wire"
             accent={T.green}
-            badge={myPicks.length === 0 ? <Badge label="Needs roster" color="amber" /> : null}
+            badge={myRoster.length === 0 ? <Badge label="Needs roster" color="amber" /> : null}
             description="In-season pickups ranked by what they add to your actual starting lineup, with the drop each add implies."
-            meta={myPicks.length > 0
-              ? `${myPicks.length} players on your roster`
+            meta={myRoster.length > 0
+              ? `${myRoster.length} players on your roster`
               : linkedTo ? `Sync from ${linkedTo} to load your roster` : 'Add your roster first'}
             cta="Open waiver wire"
             onClick={onOpenWaivers} />

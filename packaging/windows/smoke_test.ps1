@@ -33,7 +33,7 @@ $env:DRAFT_ASSISTANT_PORT = "$Port"
 $env:DRAFT_ASSISTANT_NO_OPEN = "1"
 
 try {
-    $proc = Start-Process -FilePath $Exe -ArgumentList "--browser" -PassThru
+    $proc = Start-Process -FilePath $Exe -ArgumentList "--browser" -WindowStyle Hidden -PassThru
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $ready = $false
@@ -76,7 +76,16 @@ finally {
     if ($proc -and -not $proc.HasExited) {
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     }
-    Remove-Item -LiteralPath $DataDir -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $DataDir) {
+        $ResolvedData = (Resolve-Path -LiteralPath $DataDir).Path
+        $TempRoot = (Resolve-Path -LiteralPath $env:TEMP).Path.TrimEnd('\') + '\'
+        if (-not $ResolvedData.StartsWith($TempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            (Split-Path -Leaf $ResolvedData) -notlike 'DraftAssistant-smoke-*' -or
+            (Get-Item -LiteralPath $DataDir).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw "Refusing to remove an unexpected smoke-test directory: $ResolvedData"
+        }
+        Remove-Item -LiteralPath $ResolvedData -Recurse -Force
+    }
     foreach ($name in $saved.Keys) {
         Set-Item -Path "Env:$name" -Value $saved[$name] -ErrorAction SilentlyContinue
     }

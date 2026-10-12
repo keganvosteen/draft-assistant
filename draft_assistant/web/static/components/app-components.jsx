@@ -49,22 +49,51 @@ function leagueFromBackendConfig(cfg) {
 // soon as the current player board arrives so renames and punctuation changes
 // no longer orphan picks.
 function migratePickIds(picksByLeague, players) {
-  const aliases = {};
+  const aliases = new Map();
+  const canonical = new Set((players || []).map(player => player.id));
   (players || []).forEach(player => {
-    aliases[player.id] = player.id;
-    if (player.legacyId) aliases[player.legacyId] = player.id;
+    [player.legacyId, ...(player.aliases || [])].filter(Boolean).forEach(alias => {
+      if (canonical.has(alias)) return;
+      aliases.set(alias, !aliases.has(alias) || aliases.get(alias) === player.id ? player.id : null);
+    });
   });
   let changed = false;
   const migrated = {};
   Object.entries(picksByLeague || {}).forEach(([leagueId, leaguePicks]) => {
     migrated[leagueId] = (Array.isArray(leaguePicks) ? leaguePicks : []).map(pick => {
-      const stableId = aliases[pick.playerId] || pick.playerId;
+      const stableId = aliases.get(pick.playerId) || pick.playerId;
       if (stableId === pick.playerId) return pick;
       changed = true;
       return { ...pick, playerId: stableId };
     });
   });
   return changed ? migrated : picksByLeague;
+}
+
+// Current ownership is independent of draft history. A provider/season/seat
+// mapping change makes an older ownership snapshot unsafe to reuse.
+function rosterSyncKey(league) {
+  return JSON.stringify([
+    league.id, league.platform, league.sleeperLeagueId, league.espnLeagueId,
+    league.yahooLeagueKey, league.season, league.numTeams,
+    league.teamIds || [], league.teamNames || [],
+  ]);
+}
+
+function preserveRosterSnapshot(previous, next) {
+  return rosterSyncKey(previous) === rosterSyncKey(next)
+    ? next : { ...next, rosterSnapshot: null };
+}
+
+function migrateRosterIds(leagues, players) {
+  return leagues.map(league => {
+    if (!league.rosterSnapshot) return league;
+    const before = { [league.id]: league.rosterSnapshot.picks || [] };
+    const after = migratePickIds(before, players);
+    return after === before ? league : {
+      ...league, rosterSnapshot: { ...league.rosterSnapshot, picks: after[league.id] },
+    };
+  });
 }
 
 // ─── DRAFT ORDER EDITOR ──────────────────────────────────────────────────────
@@ -347,13 +376,14 @@ function ImportPanel({ form, setForm }) {
     pasteText: '',
     clientId: '', clientSecret: '', redirectUri: 'https://localhost/',
     authUrl: '', code: '', leagues: null, leagueKey: '', busy: false, msg: null,
-    credsSaved: false, showCredForm: false, needsApproval: false, approvalUrl: '',
+    credsSaved: false, canSave: false, storage: '', showCredForm: false, needsApproval: false, approvalUrl: '',
   });
   const yhSet = patch => setYh(s => ({ ...s, ...patch }));
   // Pick up credentials already saved on this machine (so re-auth is one click).
   React.useEffect(() => {
     fetch('/api/yahoo/status').then(r => r.json()).then(d => {
       if (d && d.hasCredentials) yhSet({ credsSaved: true, hasToken: !!d.hasToken,
+                                         canSave: !!d.canSave, storage: d.storage || '',
                                          redirectUri: d.redirectUri || 'https://localhost/' });
     }).catch(() => {});
   }, []);
@@ -550,7 +580,8 @@ function ImportPanel({ form, setForm }) {
                 <>
                   {yh.credsSaved && !yh.showCredForm ? (
                     <div style={{fontSize:12.5, color:T.text, marginBottom:8}}>
-                      ✓ Yahoo credentials saved on this machine.{' '}
+                      ✓ {yh.canSave ? 'Yahoo credentials saved on this machine.' : 'Yahoo credentials available for this session.'}{' '}
+                      {yh.storage && <span title={yh.storage}>ⓘ </span>}
                       <button onClick={()=>yhSet({showCredForm:true})} style={{
                         background:'none', border:'none', padding:0, color:T.primary,
                         cursor:'pointer', textDecoration:'underline', fontSize:12.5,
@@ -1409,6 +1440,7 @@ function App() {
         if (!data.error) {
           setPlayers(data);
           setPicks(prev => migratePickIds(prev, data));
+          setLeagues(prev => migrateRosterIds(prev, data));
         }
       })
       .catch(() => {});
@@ -1428,7 +1460,7 @@ function App() {
         const seed = cfg && !cfg.error ? leagueFromBackendConfig(cfg) : null;
         if (seed) initialLeagues = [seed];
       }
-      setLeagues(initialLeagues);
+      setLeagues(migrateRosterIds(initialLeagues, data));
       setPicks(migratePickIds(saved.picks, data));
       setPreferences(saved.preferences);
       try { localStorage.setItem('fda_tweaks', JSON.stringify(saved.preferences.tweaks || {})); } catch {}
@@ -1535,8 +1567,8 @@ function App() {
       setRestoreBusy(true);
       workspaceGeneration.current++;
       const restored = await workspace.restore(candidate);
-      setLeagues(restored.leagues);
-      setPicks(restored.picks);
+      setLeagues(migrateRosterIds(restored.leagues, players));
+      setPicks(migratePickIds(restored.picks, players));
       setPreferences(restored.preferences);
       try { localStorage.setItem('fda_tweaks', JSON.stringify(restored.preferences.tweaks || {})); } catch {}
       setRoute({screen:'home', leagueId:null});
@@ -1553,6 +1585,7 @@ function App() {
         const remapped = remapLeaguePicks(picks[lg.id] || [], previous, lg);
         setPicks(prev => ({...prev, [lg.id]:remapped}));
       } catch (error) { toast(error.message, 'error', 7000); return; }
+      lg = preserveRosterSnapshot(previous, lg);
     }
     setLeagues(prev => {
       const idx = prev.findIndex(l => l.id === lg.id);
@@ -1570,7 +1603,7 @@ function App() {
   };
 
   const updateLeague = (id, patch) => {
-    setLeagues(prev => prev.map(l => l.id === id ? {...l, ...patch} : l));
+    setLeagues(prev => prev.map(l => l.id === id ? preserveRosterSnapshot(l, {...l, ...patch}) : l));
   };
 
   const addPick = (leagueId, pick) => {
@@ -1580,7 +1613,7 @@ function App() {
   const replacePicks = (leagueId, newPicks, leaguePatch) => {
     setPicks(prev => ({ ...prev, [leagueId]: newPicks }));
     setLeagues(prev => prev.map(l => l.id === leagueId
-      ? {...mergeLeagueSettings(l, leaguePatch || {}), pickSource:'draft'} : l));
+      ? preserveRosterSnapshot(l, {...mergeLeagueSettings(l, leaguePatch || {}), pickSource:'draft'}) : l));
   };
 
   const syncLeague = React.useCallback(lg => {
@@ -1594,46 +1627,32 @@ function App() {
       .then(d => {
         if (d.error) throw new Error(d.error);
         if (generation !== workspaceGeneration.current) throw new Error('Roster sync was superseded by restoring a backup.');
-        setPicks(prev => ({ ...prev, [lg.id]: d.picks || [] }));
-        setLeagues(prev => prev.map(l => l.id === lg.id ? {...l, pickSource:'rosters'} : l));
+        if (!Array.isArray(d.picks)) throw new Error('The provider did not return a complete roster snapshot. Try syncing again.');
+        const rosterSnapshot = {
+          picks: d.picks, syncedAt: d.syncedAt || new Date().toISOString(),
+          source: d.source || lg.platform, rostered: d.rostered,
+          matched: d.matched, unmatched: d.unmatched || [], leagueKey: rosterSyncKey(lg),
+        };
+        setLeagues(prev => prev.map(l => l.id === lg.id && rosterSyncKey(l) === rosterSnapshot.leagueKey
+          ? {...l, rosterSnapshot} : l));
         const source = d.source || lg.platform;
         // A sync that finds nothing is not a failure the server can report —
         // the provider answered, the rosters were simply empty. Say which of
         // the two causes it is instead of a bare "Synced 0 of 0".
         if (!d.rostered) {
-          return source === 'ESPN'
+          const message = source === 'ESPN'
             ? `${source} returned no rostered players. If this league has already drafted, re-enter your espn_s2 and SWID cookies (Edit league → Import) — they are held in memory only and clear whenever the app restarts. If it has not drafted yet, there is nothing to sync.`
             : `${source} returned no rostered players — nothing to sync until the league drafts.`;
+          return { message, rosterSnapshot };
         }
-        return `Synced ${d.matched || 0} of ${d.rostered} rostered players from ${source}.`;
+        const unmatchedCount = d.picks.filter(p => p.unmatched).length;
+        return {
+          message: `Synced all ${d.rostered} rostered players from ${source}.`
+            + (unmatchedCount ? ` ${unmatchedCount} have no player projection yet and remain marked as rostered.` : ''),
+          rosterSnapshot,
+        };
       });
   }, []);
-
-  // One "Sync" for the league hub. A completed draft is strictly better data
-  // than current ownership — it carries the pick order too — so try the draft
-  // history first and fall back to rosters when the provider has none. Users
-  // were picking between "Sync rosters" and "Sync completed ESPN draft"
-  // without a way to know which one their league needed.
-  const syncLeagueOrDraft = React.useCallback(lg => {
-    const generation = workspaceGeneration.current;
-    return fetch('/api/draft-sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ league: lg, ...getEspnAccess(lg.id) }),
-    })
-      .then(r => r.json())
-      .then(d => {
-        // No draft history is the normal pre-draft case, not a failure: fall
-        // through to rosters rather than surfacing the provider's complaint.
-        if (d.error || !Array.isArray(d.picks) || d.picks.length === 0) return null;
-        if (generation !== workspaceGeneration.current) throw new Error('Sync was superseded by restoring a backup.');
-        if (d.leagueId !== lg.id) throw new Error('The draft response did not match this league.');
-        replacePicks(lg.id, d.picks, d.leaguePatch || {});
-        return `Synced ${d.picks.length} draft picks from ${d.source || lg.platform}.`;
-      })
-      .catch(() => null)
-      .then(msg => msg || syncLeague(lg));
-  }, [syncLeague]);
 
   const undoPick = leagueId => {
     setPicks(prev => ({ ...prev, [leagueId]: (prev[leagueId] || []).slice(0, -1) }));
@@ -1703,7 +1722,7 @@ function App() {
     );
   } else if (screen === 'waivers') {
     body = (
-      <WaiverScreen
+      <WaiverScreen key={routeLeague.id}
         league={routeLeague}
         picks={picks[routeLeague.id] || []}
         allPlayers={players}
@@ -1723,7 +1742,7 @@ function App() {
         onOpenWaivers={() => setRoute({ screen: 'waivers', leagueId: routeLeague.id })}
         onEditLeague={openEditor}
         onDeleteLeague={deleteLeague}
-        onSyncLeague={syncLeagueOrDraft}
+        onSyncLeague={syncLeague}
         onPullData={() => setShowPull(true)}
       />
     );
@@ -1799,6 +1818,7 @@ Object.assign(window, {
   calcProjection, withProjections, withVORP,
   getSnakeTeam, getCurrentRoundPick, getRosterNeeds,
   makeLeague, leagueFromBackendConfig, SCORING_LABELS,
+  rosterSyncKey,
   useTask, PullDataModal, AuctionModal,
   DraftOrderEditor, LeagueSetupModal, HomeScreen, SetupGuide, App,
 });

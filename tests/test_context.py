@@ -7,6 +7,7 @@ from urllib.error import URLError
 
 from draft_assistant.context import (
     _refresh_sleeper_players,
+    _refresh_sleeper_weekly,
     actual_stats_for,
     confidence_for_player,
     context_from_dict,
@@ -48,12 +49,39 @@ class TestPlayerContext(unittest.TestCase):
     def test_provider_ids_and_stats_join_to_stable_player(self):
         context = PlayerContext(
             season=2026, selected_week=2,
+            weekly_projection_season=2026, weekly_projection_week=2,
             weekly_projections={"sleeper:1": {"rec_yd": 20}},
             actual_stats={"gsis:00-1": {"rec_yd": 40}},
         )
         self.assertIn("sleeper:1", player_context_ids(self.player))
         self.assertEqual(weekly_projection_for(context, self.player), {"rec_yd": 20.0})
         self.assertEqual(actual_stats_for(context, self.player), {"rec_yd": 40.0})
+
+    def test_provider_context_survives_when_identity_only_remains_as_alias(self):
+        player = Player(
+            "ffc:77", "Updated Name", "WR",
+            metadata={"identity_aliases": ["sleeper:1", "nflverse:00-1"]},
+        )
+        context = PlayerContext(
+            2026, 2, weekly_projection_season=2026, weekly_projection_week=2,
+            weekly_projections={"sleeper:1": {"rec_yd": 20}},
+            actual_stats={"gsis:00-1": {"rec_yd": 40}},
+            signals=[_signal("injury", "Out", week=2)],
+        )
+        self.assertEqual(weekly_projection_for(context, player), {"rec_yd": 20})
+        self.assertEqual(actual_stats_for(context, player), {"rec_yd": 40})
+        self.assertEqual(weekly_availability_factor(context, player), 0)
+        self.assertEqual(primary_availability(context, player), "Out")
+
+    def test_context_stat_lookup_prefers_canonical_over_secondary_aliases(self):
+        player = Player("sleeper:2", "Updated Name", "WR", metadata={
+            "identity_aliases": ["sleeper:1", "gsis:00-1"],
+        })
+        context = PlayerContext(
+            2026, 2, weekly_projection_season=2026, weekly_projection_week=2,
+            weekly_projections={"sleeper:1": {"rec_yd": 99}, "sleeper:2": {"rec_yd": 20}},
+        )
+        self.assertEqual(weekly_projection_for(context, player), {"rec_yd": 20})
 
     def test_conservative_availability_rules(self):
         for status in ("Out", "Inactive", "IR", "PUP", "Suspended"):
@@ -156,6 +184,7 @@ class TestPlayerContext(unittest.TestCase):
     def test_round_trip_persistence(self):
         context = PlayerContext(
             season=2026, selected_week=4, refreshed_at=NOW.isoformat(),
+            weekly_projection_season=2026, weekly_projection_week=4,
             signals=[_signal("injury", "Questionable", week=4)],
             weekly_projections={"sleeper:1": {"rec_yd": 12.5}},
             source_health={"test": {"ok": True, "records": 1}},
@@ -166,6 +195,67 @@ class TestPlayerContext(unittest.TestCase):
             save_context(context, path)
             loaded = load_context(path)
             self.assertEqual(context_to_dict(loaded), context_to_dict(context))
+
+    def test_week_selection_does_not_relabel_cached_projection(self):
+        context = PlayerContext(
+            2026, 5, weekly_projections={"sleeper:1": {"rec_yd": 40}},
+            weekly_projection_season=2026, weekly_projection_week=5,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "context.json")
+            save_context(context, path)
+            next_week = load_context(path, season=2026, week=6)
+            self.assertIsNone(weekly_projection_for(next_week, self.player))
+            self.assertEqual(next_week.weekly_projection_week, 5)
+            # Returning to the cached week can safely reuse that same bucket.
+            next_week.selected_week = 5
+            self.assertEqual(weekly_projection_for(next_week, self.player), {"rec_yd": 40})
+            next_season = load_context(path, season=2027, week=5)
+            self.assertIsNone(weekly_projection_for(next_season, self.player))
+
+    def test_legacy_bucket_without_provenance_is_not_claimed_as_current(self):
+        legacy = context_from_dict({
+            "schema_version": 1, "season": 2026, "selected_week": 6,
+            "weekly_projections": {"sleeper:1": {"rec_yd": 40}},
+            "source_health": {"sleeper_weekly": {"week": 6, "ok": True}},
+        })
+        self.assertIsNone(weekly_projection_for(legacy, self.player))
+
+    def test_failed_week_change_keeps_bucket_provenance_and_retries(self):
+        context = PlayerContext(
+            2026, 5, weekly_projections={"sleeper:1": {"rec_yd": 40}},
+            weekly_projection_season=2026, weekly_projection_week=5,
+            source_health={"sleeper_weekly": {
+                "week": 5, "ok": True, "records": 1, "refreshed_at": NOW.isoformat(),
+            }},
+        )
+        other_sources = {
+            name: mock.Mock(return_value=0) for name in (
+                "_refresh_sleeper_players", "_refresh_sleeper_trending",
+                "_refresh_sleeper_actuals", "_refresh_nflverse_injuries",
+                "_refresh_nflverse_depth", "_refresh_nflverse_stats", "_refresh_nflverse_snaps",
+            )
+        }
+        with mock.patch.multiple("draft_assistant.context", **other_sources), mock.patch(
+            "draft_assistant.context._fetch_json", side_effect=URLError("offline"),
+        ) as request:
+            refresh_context(context, week=6, now=NOW)
+            refresh_context(context, week=6, now=NOW)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(context.weekly_projection_week, 5)
+        self.assertEqual(context.weekly_projections["sleeper:1"], {"rec_yd": 40})
+        self.assertIsNone(weekly_projection_for(context, self.player))
+
+    def test_successful_fetch_replaces_projection_and_provenance(self):
+        context = PlayerContext(
+            2026, 6, weekly_projections={"sleeper:1": {"rec_yd": 40}},
+            weekly_projection_season=2025, weekly_projection_week=5,
+        )
+        with mock.patch("draft_assistant.context._fetch_json", return_value={"1": {"rec_yd": 25}}):
+            _refresh_sleeper_weekly(context)
+        self.assertEqual(context.weekly_projection_season, 2026)
+        self.assertEqual(context.weekly_projection_week, 6)
+        self.assertEqual(weekly_projection_for(context, self.player), {"rec_yd": 25})
 
     def test_failed_refresh_retains_last_known_good_signals(self):
         context = PlayerContext(

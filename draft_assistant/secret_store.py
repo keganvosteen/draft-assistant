@@ -12,9 +12,8 @@ rather than hand-rolling a cipher each platform's own keystore does the work:
 * **Windows** — DPAPI (``CryptProtectData``) via ctypes. Keyed to the logged-in
   Windows account, so the file is useless on another machine or to another user.
 * **macOS** — the login Keychain via the ``security`` tool.
-* **Anything else** — refuse to persist. Returning "unavailable" makes the
-  caller keep secrets in memory for the session rather than silently writing
-  them out in the clear.
+* **Anything else** — refuse to persist and keep profile-scoped secrets in
+  memory for the session rather than silently writing them out in the clear.
 
 ``backend()`` names which one is in play so the UI can say where a credential
 lives and how it is protected.
@@ -22,10 +21,13 @@ lives and how it is protected.
 from __future__ import annotations
 
 import base64
+import copy
+import hashlib
 import json
 import os
 import subprocess
 import sys
+import threading
 from typing import Optional
 
 KEYCHAIN_SERVICE = "DraftAssistant"
@@ -33,6 +35,25 @@ KEYCHAIN_SERVICE = "DraftAssistant"
 # Marks a file this module wrote, and records which backend sealed it, so a
 # file written under one backend is never mistaken for another's format.
 _MAGIC = "draft-assistant-secret-v1"
+_guard = threading.Lock()
+_locks = {}
+_session = {}
+
+
+def _identity(path: str, account: str) -> tuple:
+    return os.path.normcase(os.path.realpath(os.path.abspath(os.fspath(path)))), account
+
+
+def locked(path: str, account: str):
+    """Serialize a credential transaction across request-handler instances."""
+    identity = _identity(path, account)
+    with _guard:
+        return _locks.setdefault(identity, threading.RLock())
+
+
+def _keychain_account(path: str, account: str) -> str:
+    identity = json.dumps(_identity(path, account), ensure_ascii=True).encode("utf-8")
+    return f"{account}:{hashlib.sha256(identity).hexdigest()}"
 
 
 def backend() -> str:
@@ -85,11 +106,16 @@ def _dpapi(data: bytes, protect: bool) -> bytes:
 # ── macOS Keychain ───────────────────────────────────────────────────────────
 
 def _keychain_write(account: str, secret: str) -> None:
-    subprocess.run(
-        ["security", "add-generic-password", "-U",
-         "-s", KEYCHAIN_SERVICE, "-a", account, "-w", secret],
-        check=True, capture_output=True,
-    )
+    try:
+        subprocess.run(
+            ["security", "add-generic-password", "-U",
+             "-s", KEYCHAIN_SERVICE, "-a", account, "-w", secret],
+            check=True, capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        # CalledProcessError includes argv, which contains the secret. Never
+        # allow it to reach an HTTP error response or a diagnostic log.
+        raise OSError("Could not save credentials in the macOS Keychain") from None
 
 
 def _keychain_read(account: str) -> Optional[str]:
@@ -112,39 +138,56 @@ def _keychain_delete(account: str) -> None:
 # ── public API ───────────────────────────────────────────────────────────────
 
 def save(path: str, account: str, data: dict) -> bool:
-    """Persist *data* for *account*. False when no keystore is available.
+    """Store credentials; False means they are kept in memory for this run.
 
     The caller passes both a path and an account name because the two backends
     keep the payload in different places: DPAPI seals it into the file, while
     the Keychain holds it and the file is only a marker.
     """
-    if not data:
-        forget(path, account)
+    from .storage import atomic_write_json
+
+    with locked(path, account):
+        if not data:
+            forget(path, account)
+            return True
+        kind = backend()
+        if kind == "none":
+            _session[_identity(path, account)] = copy.deepcopy(data)
+            # Consume a legacy plaintext file only after preserving its data
+            # in this session. Do not remove an encrypted file from another OS.
+            if os.path.exists(path) and not is_sealed(path):
+                os.remove(path)
+            return False
+        payload = json.dumps(data).encode("utf-8")
+        if kind == "dpapi":
+            sealed = base64.b64encode(_dpapi(payload, protect=True)).decode("ascii")
+            body = {"magic": _MAGIC, "backend": kind, "account": account, "sealed": sealed}
+        else:
+            scoped_account = _keychain_account(path, account)
+            _keychain_write(scoped_account, payload.decode("utf-8"))
+            body = {"magic": _MAGIC, "backend": kind, "account": scoped_account}
+        atomic_write_json(path, body)
+        _session.pop(_identity(path, account), None)
+        try:  # The file is encrypted or contains only a Keychain marker.
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
         return True
-    kind = backend()
-    if kind == "none":
-        return False
-    payload = json.dumps(data).encode("utf-8")
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    if kind == "dpapi":
-        sealed = base64.b64encode(_dpapi(payload, protect=True)).decode("ascii")
-        body = {"magic": _MAGIC, "backend": kind, "account": account, "sealed": sealed}
-    else:
-        _keychain_write(account, payload.decode("utf-8"))
-        body = {"magic": _MAGIC, "backend": kind, "account": account}
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(body, handle, indent=2)
-    os.replace(tmp, path)
-    try:  # Owner-only, for the keystore-less case and defence in depth.
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
-    return True
 
 
 def load(path: str, account: str) -> dict:
-    """Read back what save() wrote. Empty dict when absent or unreadable."""
+    """Read credentials, migrating legacy plaintext/shared Keychain markers.
+
+    A legacy shared Keychain item is copied, never deleted: other profiles
+    may still refer to it. A failed migration leaves the original untouched.
+    """
+    with locked(path, account):
+        if backend() == "none" and _identity(path, account) in _session:
+            return copy.deepcopy(_session[_identity(path, account)])
+        return _load(path, account)
+
+
+def _load(path: str, account: str) -> dict:
     if not os.path.exists(path):
         return {}
     try:
@@ -154,24 +197,36 @@ def load(path: str, account: str) -> dict:
         return {}
     if not isinstance(body, dict):
         return {}
-    # A file written before this module existed is a bare plaintext dict; read
-    # it so an upgrade keeps working, and let the caller re-save it sealed.
+    # Migrate on read, including status-only requests, so an unused refresh
+    # token does not leave plaintext behind indefinitely after upgrading.
     if body.get("magic") != _MAGIC:
+        save(path, account, body)
         return body
     if body.get("backend") != backend():
         return {}
     try:
         if body["backend"] == "dpapi":
+            if body.get("account") != account:
+                return {}
             raw = _dpapi(base64.b64decode(body["sealed"]), protect=False)
-        else:
-            secret = _keychain_read(body.get("account") or account)
+        elif body["backend"] == "keychain":
+            stored_account = body.get("account") or account
+            if stored_account not in {account, _keychain_account(path, account)}:
+                return {}
+            secret = _keychain_read(stored_account)
             if not secret:
                 return {}
             raw = secret.encode("utf-8")
+        else:
+            return {}
         loaded = json.loads(raw)
-        return loaded if isinstance(loaded, dict) else {}
     except (OSError, KeyError, ValueError):
         return {}
+    if not isinstance(loaded, dict):
+        return {}
+    if body["backend"] == "keychain" and stored_account == account:
+        save(path, account, loaded)
+    return loaded
 
 
 def is_sealed(path: str) -> bool:
@@ -185,10 +240,12 @@ def is_sealed(path: str) -> bool:
 
 
 def forget(path: str, account: str) -> None:
-    """Remove a stored credential from both the file and the keystore."""
-    if backend() == "keychain":
-        _keychain_delete(account)
-    try:
-        os.remove(path)
-    except OSError:
-        pass
+    """Remove this profile's credentials without touching shared legacy items."""
+    with locked(path, account):
+        _session.pop(_identity(path, account), None)
+        if backend() == "keychain":
+            _keychain_delete(_keychain_account(path, account))
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass

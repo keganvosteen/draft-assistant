@@ -25,6 +25,7 @@ from .. import __version__
 from ..context import (
     confidence_for_player,
     context_payload,
+    current_bye_week,
     default_season,
     default_week,
     is_candidate_eligible,
@@ -37,10 +38,13 @@ from ..context import (
     signal_summary,
 )
 from ..models import DraftState, FLEX_TYPES, LeagueConfig, PlayerContext
+from ..identity import player_aliases, player_indexes
 from ..profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from ..providers.base import build_provider
 from ..free_agents import free_agent_recommendations, rank_recommendations
-from ..platform_sync import synced_draft_to_picks, synced_rosters_to_picks
+from ..platform_sync import (
+    resolve_roster_entries, synced_draft_to_picks, synced_rosters_to_picks,
+)
 from ..rollout import rollout_values
 from ..sample_data import sample_players
 from ..scoring import fantasy_points
@@ -194,40 +198,19 @@ def _bounded_float(value, label: str, minimum: float, maximum: float) -> float:
         raise ValueError(f"{label} must be between {minimum} and {maximum}")
     return result
 
-# Last-resort fallback only (a past season's byes — goes stale). Byes are
-# preferred from player data, then from per-team byes derived from that data.
-BYE_WEEKS = {
-    "ARI": 13, "ATL": 12, "BAL": 8, "BUF": 6, "CAR": 6, "CHI": 14,
-    "CIN": 8, "CLE": 14, "DAL": 10, "DEN": 11, "DET": 5, "GB": 13,
-    "HOU": 11, "IND": 11, "JAX": 11, "KC": 6, "LAC": 10, "LAR": 5,
-    "LV": 12, "MIA": 9, "MIN": 13, "NE": 14, "NO": 12, "NYG": 11,
-    "NYJ": 7, "PHI": 7, "PIT": 14, "SEA": 14, "SF": 10, "TB": 9,
-    "TEN": 9, "WAS": 14,
-}
-
-
-def _team_byes_from_players(players) -> dict:
-    """Derive each team's bye week from whichever players carry one.
-
-    This self-heals every season from pulled data instead of relying on the
-    hardcoded table above.
-    """
+def _team_byes_from_players(players, season: Optional[int] = None) -> dict:
+    """Share only byes verified for the requested season and current team."""
+    season = season or default_season()
     byes: dict = {}
     for player in players:
-        if player.team and player.bye_week and player.team not in byes:
-            byes[player.team] = player.bye_week
+        bye = current_bye_week(player, season)
+        if player.team and bye and player.team not in byes:
+            byes[player.team] = bye
     return byes
 
 
 def _player_indexes(players) -> tuple[dict, dict]:
-    """Return canonical players and aliases for pre-stable-id saved drafts."""
-    canonical = {player.key(): player for player in players}
-    aliases = {
-        player.legacy_key(): player.key()
-        for player in players
-        if player.legacy_key() != player.key()
-    }
-    return canonical, aliases
+    return player_indexes(players)
 
 
 def _canonicalize_player_keys(keys, aliases: dict) -> list[str]:
@@ -265,9 +248,8 @@ def _player_to_js(player, config: LeagueConfig, team_byes: Optional[dict] = None
     adp = player.adp if player.adp else 999
     team = player.team or ""
     bye = (
-        player.bye_week
+        current_bye_week(player, context.season if context else default_season())
         or (team_byes or {}).get(team)
-        or BYE_WEEKS.get(team)
     )
 
     tier = 5
@@ -291,6 +273,7 @@ def _player_to_js(player, config: LeagueConfig, team_byes: Optional[dict] = None
     return {
         "id": player.key(),
         "legacyId": player.legacy_key(),
+        "aliases": sorted(player_aliases(player)),
         "name": player.name,
         "pos": player.position,
         "nflTeam": player.team or "FA",
@@ -417,7 +400,7 @@ def _drop_row(drop, points) -> Optional[dict]:
     }
 
 
-def _free_agent_row(rec, horizon: str = "ros") -> dict:
+def _free_agent_row(rec, horizon: str = "ros", season: Optional[int] = None) -> dict:
     weekly = horizon == "weekly"
     drop = rec.weekly_drop_player if weekly else rec.ros_drop_player
     drop_points = rec.weekly_drop_points if weekly else rec.ros_drop_points
@@ -427,7 +410,7 @@ def _free_agent_row(rec, horizon: str = "ros") -> dict:
         "pos": rec.player.position,
         "nflTeam": rec.player.team or "FA",
         "adp": round(rec.player.adp, 1) if rec.player.adp else None,
-        "byeWeek": rec.player.bye_week,
+        "byeWeek": current_bye_week(rec.player, season or default_season()),
         "points": rec.weekly_points if weekly else rec.ros_points,
         "vor": rec.weekly_vor if weekly else rec.ros_vor,
         "score": rec.weekly_score if weekly else rec.ros_score,
@@ -758,7 +741,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             players, config = _load_players(self.profile)
             context = load_context()
             players = season_adjusted_players(players, context)
-            team_byes = _team_byes_from_players(players)
+            team_byes = _team_byes_from_players(players, context.season)
             js_players = [_player_to_js(p, config, team_byes, context) for p in players]
             self._send_json(js_players)
         except Exception as exc:
@@ -883,6 +866,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 state,
                 top_n=top_n,
                 drafted_players=drafted_players,
+                season=context.season,
             )
             rows = [{
                 "id": r.player.key(),
@@ -890,7 +874,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 "pos": r.player.position,
                 "nflTeam": r.player.team or "FA",
                 "adp": round(r.player.adp, 1) if r.player.adp else None,
-                "byeWeek": r.player.bye_week,
+                "byeWeek": current_bye_week(r.player, context.season),
                 "points": r.points,
                 "vor": r.vor,
                 "immediateGain": r.immediate_gain,
@@ -903,6 +887,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 "goneRisk": r.gone_risk,
                 "byePenalty": r.bye_penalty,
                 "simulated": r.simulated,
+                "rosterFeasible": r.roster_feasible,
                 "availability": primary_availability(context, r.player),
                 "confidence": confidence_for_player(context, r.player),
                 "signals": signal_summary(context, r.player),
@@ -922,6 +907,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 "contextAsOf": context.refreshed_at,
                 "contextStale": is_stale(context) or bool(failed_sources),
                 "contextFailedSources": failed_sources,
+                "rosterFeasible": all(r.roster_feasible for r in results) if results else None,
             })
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
@@ -931,7 +917,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     def _handle_free_agents(self):
         """Scan all configured leagues and rank available waiver/free-agent adds.
 
-        Body: {leagues: [{...}], picks: {leagueId: [{playerId, teamNum}...]}, top: int}.
+        Body: {leagues: [{...}], rosters: {leagueId: [{playerId, teamNum}...]}, top: int}.
+        Linked leagues require current roster entries, never draft history.
+        Manual leagues may still supply picks as their ownership records.
         The browser owns the saved league list, while Python owns player data,
         scoring, and roster optimization.
         """
@@ -944,6 +932,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             picks_by_league = body.get("picks") or {}
             if not isinstance(picks_by_league, dict):
                 picks_by_league = {}
+            rosters_by_league = body.get("rosters", {})
+            if not isinstance(rosters_by_league, dict):
+                raise ValueError("rosters must be an object keyed by league id")
             top_n = _bounded_int(body.get("top", 8), "top", 1, 30)
             week = _bounded_int(body.get("week", default_week()), "week", 1, 18)
 
@@ -956,12 +947,26 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 if not isinstance(league, dict):
                     continue
                 league_id = str(league.get("id") or f"league-{index + 1}")
-                league_picks = picks_by_league.get(league_id, [])
+                snapshot = league.get("rosterSnapshot")
+                if league_id in rosters_by_league:
+                    league_roster = rosters_by_league[league_id]
+                elif isinstance(snapshot, dict) and "picks" in snapshot:
+                    league_roster = snapshot["picks"]
+                elif any(league.get(key) for key in (
+                        "espnLeagueId", "yahooLeagueKey", "sleeperLeagueId")):
+                    raise ValueError(
+                        f"Sync current rosters for {league.get('name') or league_id} "
+                        "before scanning the waiver wire.")
+                else:
+                    league_roster = picks_by_league.get(league_id, [])
+                if not isinstance(league_roster, list) or len(league_roster) > 2048:
+                    raise ValueError("Each league roster must be a list of at most 2048 entries")
+                league_roster = resolve_roster_entries(league_roster, players)
                 draft_position = int(league.get("draftPosition") or 1)
                 picked_keys = set(_canonicalize_player_keys(
-                    _pick_player_ids(league_picks), aliases))
-                my_keys = _canonicalize_player_keys(
-                    _my_pick_ids(league_picks, draft_position), aliases)
+                    _pick_player_ids(league_roster), aliases))
+                my_keys = list(dict.fromkeys(_canonicalize_player_keys(
+                    _my_pick_ids(league_roster, draft_position), aliases)))
 
                 eff = self._suggest_config({"league": league}, config)
                 available = [p for key, p in by_key.items() if key not in picked_keys]
@@ -982,14 +987,16 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     "name": league.get("name") or f"League {index + 1}",
                     "platform": league.get("platform") or "",
                     "rostered": len(my_keys),
+                    "leagueRostered": len(picked_keys),
+                    "rosterEntries": league_roster,
                     "available": len(available),
                     # recommendations remains the ROS list for old clients.
-                    "recommendations": [_free_agent_row(rec, "ros") for rec in ros_recs],
+                    "recommendations": [_free_agent_row(rec, "ros", context.season) for rec in ros_recs],
                     "weeklyRecommendations": [
-                        _free_agent_row(rec, "weekly") for rec in weekly_recs
+                        _free_agent_row(rec, "weekly", context.season) for rec in weekly_recs
                     ],
                     "rosRecommendations": [
-                        _free_agent_row(rec, "ros") for rec in ros_recs
+                        _free_agent_row(rec, "ros", context.season) for rec in ros_recs
                     ],
                 })
 
@@ -1024,21 +1031,6 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     return
                 from ..importers import yahoo
                 access_token = self._yahoo_access_token()
-                try:
-                    draft_picks = yahoo.fetch_draft_picks(access_token, league_key)
-                except Exception:
-                    draft_picks = []
-                if draft_picks:
-                    result = synced_draft_to_picks(draft_picks, players, league)
-                    result.update({
-                        "ok": True,
-                        "source": "Yahoo",
-                        "leagueId": league.get("id"),
-                        "leagueName": league.get("name"),
-                        "rostered": len(draft_picks),
-                    })
-                    self._send_json(result)
-                    return
                 rosters = yahoo.fetch_league_rosters(access_token, league_key)
                 source = "Yahoo"
             elif platform == "espn":
@@ -1308,7 +1300,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._send_platform_error(exc, platform)
 
     # ── Yahoo OAuth import ────────────────────────────────────────────────
-    # Credentials + tokens are stored in the profile dir (local machine only).
+    # Credentials use the OS keystore, or profile-scoped memory for this run.
 
     def _secret_dir(self) -> str:
         paths = ensure_profile(self.profile)
@@ -1323,13 +1315,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
 
     def _yahoo_save(self, data: dict) -> None:
         from .. import secret_store
-        from ..storage import atomic_write_json
-        path = self._yahoo_store_path()
-        # These are OAuth tokens for the user's Yahoo account; seal them when
-        # the platform has a keystore rather than leaving them beside the
-        # draft state in the clear. Without one, behave as before.
-        if not secret_store.save(path, "yahoo", data):
-            atomic_write_json(path, data)
+        secret_store.save(self._yahoo_store_path(), "yahoo", data)
 
     # ── ESPN cookies, remembered between runs ─────────────────────────────
 
@@ -1343,16 +1329,15 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         return entry if isinstance(entry, dict) else {}
 
     def _espn_remember(self, league_id: str, espn_s2: str, swid: str) -> None:
-        """Keep this league's cookies for next launch, if the OS allows it."""
+        """Keep cookies for this run, and for next launch if the OS allows it."""
         from .. import secret_store
-        if not (league_id and espn_s2 and swid and secret_store.available()):
+        if not (league_id and espn_s2 and swid):
             return
         path = self._espn_store_path()
-        store = secret_store.load(path, "espn")
-        if not isinstance(store, dict):
-            store = {}
-        store[str(league_id)] = {"espnS2": espn_s2, "swid": swid}
-        secret_store.save(path, "espn", store)
+        with secret_store.locked(path, "espn"):
+            store = secret_store.load(path, "espn")
+            store[str(league_id)] = {"espnS2": espn_s2, "swid": swid}
+            secret_store.save(path, "espn", store)
 
     def _espn_access(self, body: dict, league: dict) -> tuple:
         """Cookies for an ESPN call: whatever the page sent, else what we saved.
@@ -1382,9 +1367,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             league_id = str(body.get("leagueId") or "").strip()
             if body.get("forget"):
                 path = self._espn_store_path()
-                store = secret_store.load(path, "espn")
-                if isinstance(store, dict) and store.pop(league_id, None) is not None:
-                    secret_store.save(path, "espn", store)
+                with secret_store.locked(path, "espn"):
+                    store = secret_store.load(path, "espn")
+                    if store.pop(league_id, None) is not None:
+                        secret_store.save(path, "espn", store)
                 self._send_json({"ok": True, "saved": False})
                 return
             self._send_json({
@@ -1397,30 +1383,37 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": str(exc)}, 500)
 
     def _yahoo_access_token(self) -> str:
+        from .. import secret_store
         from ..importers import yahoo
-        data = self._yahoo_load()
-        token = data.get("token") or {}
-        if not token.get("access_token"):
-            raise RuntimeError("Authorize with Yahoo first")
-        if yahoo.token_is_expired(token):
-            token = yahoo.refresh_access_token(
-                data["client_id"],
-                data["client_secret"],
-                token["refresh_token"],
-                data.get("redirect_uri", yahoo.DEFAULT_REDIRECT),
-            )
-            data["token"] = token
-            self._yahoo_save(data)
-        return token["access_token"]
+        # Refresh tokens can rotate. Serialize refresh and disconnect so a
+        # concurrent request cannot restore an authorization just forgotten.
+        with secret_store.locked(self._yahoo_store_path(), "yahoo"):
+            data = self._yahoo_load()
+            token = data.get("token") or {}
+            if not token.get("access_token"):
+                raise RuntimeError("Authorize with Yahoo first")
+            if yahoo.token_is_expired(token):
+                token = yahoo.refresh_access_token(
+                    data["client_id"],
+                    data["client_secret"],
+                    token["refresh_token"],
+                    data.get("redirect_uri", yahoo.DEFAULT_REDIRECT),
+                )
+                data["token"] = token
+                self._yahoo_save(data)
+            return token["access_token"]
 
     def _handle_yahoo_status(self):
         """Report whether Yahoo credentials/token are already saved locally."""
+        from .. import secret_store
         try:
             data = self._yahoo_load()
             self._send_json({
                 "hasCredentials": bool(data.get("client_id") and data.get("client_secret")),
                 "hasToken": bool((data.get("token") or {}).get("access_token")),
                 "redirectUri": data.get("redirect_uri") or "https://localhost/",
+                "canSave": secret_store.available(),
+                "storage": secret_store.describe(),
             })
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
@@ -1432,18 +1425,24 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         re-authorize doesn't require re-typing the Client ID/Secret.
         """
         try:
+            from .. import secret_store
             from ..importers import yahoo
             body = self._read_body()
-            data = self._yahoo_load()
-            client_id = str(body.get("clientId") or data.get("client_id") or "").strip()
-            client_secret = str(body.get("clientSecret") or data.get("client_secret") or "").strip()
-            redirect = str(body.get("redirectUri") or data.get("redirect_uri") or yahoo.DEFAULT_REDIRECT).strip()
-            if not client_id or not client_secret:
-                self._send_json({"error": "clientId and clientSecret are required"}, 400)
-                return
-            data.update({"client_id": client_id, "client_secret": client_secret,
-                         "redirect_uri": redirect})
-            self._yahoo_save(data)
+            with secret_store.locked(self._yahoo_store_path(), "yahoo"):
+                data = self._yahoo_load()
+                client_id = str(body.get("clientId") or data.get("client_id") or "").strip()
+                client_secret = str(body.get("clientSecret") or data.get("client_secret") or "").strip()
+                redirect = str(body.get("redirectUri") or data.get("redirect_uri") or yahoo.DEFAULT_REDIRECT).strip()
+                if not client_id or not client_secret:
+                    self._send_json({"error": "clientId and clientSecret are required"}, 400)
+                    return
+                if any(data.get(key) != value for key, value in (
+                        ("client_id", client_id), ("client_secret", client_secret),
+                        ("redirect_uri", redirect))):
+                    data.pop("token", None)
+                data.update({"client_id": client_id, "client_secret": client_secret,
+                             "redirect_uri": redirect})
+                self._yahoo_save(data)
             self._send_json({"authUrl": yahoo.auth_url(client_id, redirect)})
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
@@ -1451,20 +1450,22 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
     def _handle_yahoo_exchange(self):
         """Exchange the pasted authorization code for tokens; list NFL leagues."""
         try:
+            from .. import secret_store
             from ..importers import yahoo
             body = self._read_body()
             code = yahoo.extract_code(str(body.get("code") or ""))
-            data = self._yahoo_load()
-            if not data.get("client_id"):
-                self._send_json({"error": "Enter your Yahoo credentials first"}, 400)
-                return
-            if not code:
-                self._send_json({"error": "Paste the authorization code"}, 400)
-                return
-            token = yahoo.exchange_code(data["client_id"], data["client_secret"], code,
-                                        data.get("redirect_uri", yahoo.DEFAULT_REDIRECT))
-            data["token"] = token
-            self._yahoo_save(data)
+            with secret_store.locked(self._yahoo_store_path(), "yahoo"):
+                data = self._yahoo_load()
+                if not data.get("client_id"):
+                    self._send_json({"error": "Enter your Yahoo credentials first"}, 400)
+                    return
+                if not code:
+                    self._send_json({"error": "Paste the authorization code"}, 400)
+                    return
+                token = yahoo.exchange_code(data["client_id"], data["client_secret"], code,
+                                            data.get("redirect_uri", yahoo.DEFAULT_REDIRECT))
+                data["token"] = token
+                self._yahoo_save(data)
             try:
                 leagues = yahoo.list_leagues(token["access_token"])
             except Exception as exc:
@@ -1544,15 +1545,16 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         re-typing the Client ID and Secret is not what this fixes.
         """
         try:
+            from .. import secret_store
             body = self._read_body()
-            data = self._yahoo_load()
-            if body.get("forgetCredentials"):
-                from .. import secret_store
-                secret_store.forget(self._yahoo_store_path(), "yahoo")
-                self._send_json({"ok": True, "hasCredentials": False, "hasToken": False})
-                return
-            data.pop("token", None)
-            self._yahoo_save(data)
+            with secret_store.locked(self._yahoo_store_path(), "yahoo"):
+                if body.get("forgetCredentials"):
+                    secret_store.forget(self._yahoo_store_path(), "yahoo")
+                    self._send_json({"ok": True, "hasCredentials": False, "hasToken": False})
+                    return
+                data = self._yahoo_load()
+                data.pop("token", None)
+                self._yahoo_save(data)
             self._send_json({
                 "ok": True,
                 "hasCredentials": bool(data.get("client_id") and data.get("client_secret")),
@@ -1598,12 +1600,21 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         """Parse copied/pasted text from a Yahoo Fantasy league settings page."""
         try:
             from ..importers import yahoo
+            from ..input_limits import validate_pasted_text
             body = self._read_body()
-            text = str(body.get("text") or "").strip()
-            if not text:
+            text = body.get("text", "")
+            validate_pasted_text(text, "Yahoo settings text")
+            if not text.strip():
                 self._send_json({"error": "Paste your Yahoo league settings text first"}, 400)
                 return
             parsed = yahoo.parse_settings_text(text)
+            _bounded_int(parsed["numTeams"], "numTeams", 2, MAX_TEAMS)
+            for key, count in parsed["rosterSlots"].items():
+                _bounded_int(count, f"rosterSlots.{key}", 0, 30)
+            if sum(parsed["rosterSlots"].values()) > MAX_ROSTER_SLOTS:
+                raise ValueError(f"roster may contain at most {MAX_ROSTER_SLOTS} total slots")
+            for key, points in parsed["scoring"].items():
+                _bounded_float(points, f"scoring.{key}", -1000.0, 1000.0)
             self._send_json(_import_scoring_type(parsed))
         except ValueError as exc:
             self._send_json({"error": str(exc)}, 400)
@@ -1861,13 +1872,40 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
 
     def _handle_parse_draft_text(self):
         try:
+            from ..draft_paste_parser import clean_line_text, parse_draft_text
+            from ..input_limits import (
+                MAX_DRAFT_CANDIDATES, MAX_DRAFT_PLAYER_ID_CHARS,
+                MAX_DRAFT_PLAYER_NAME_CHARS, validate_pasted_text,
+            )
             body = self._read_body()
-            raw_text = str(body.get("text") or "").strip()
-            num_teams = int(body.get("numTeams") or 12)
-            start_pick = int(body.get("startPick") or 1)
+            raw_text = body.get("text", "")
+            lines = validate_pasted_text(raw_text, "Draft text")
+            if not raw_text.strip():
+                raise ValueError("Paste your draft room text first")
+            for field, default in (("numTeams", 12), ("startPick", 1)):
+                if not isinstance(body.get(field, default), (int, str)):
+                    raise ValueError(f"{field} must be an integer")
+            num_teams = _bounded_int(body.get("numTeams", 12), "numTeams", 2, MAX_TEAMS)
+            start_pick = _bounded_int(body.get("startPick", 1), "startPick", 1, MAX_PICKS)
+
+            # Bound explicit pick numbers as well as the sequential range before
+            # spending work matching any of the candidate names.
+            next_pick = start_pick
+            for line in lines:
+                if not line.strip():
+                    continue
+                explicit_pick, _ = clean_line_text(line)
+                if explicit_pick is not None and explicit_pick < 1:
+                    raise ValueError("Draft pick numbers must be positive")
+                pick = max(next_pick, explicit_pick or next_pick)
+                if pick > MAX_PICKS:
+                    raise ValueError(f"Draft text may contain picks only through {MAX_PICKS}")
+                next_pick = pick + 1
 
             players_in_body = body.get("players")
-            if isinstance(players_in_body, list) and len(players_in_body) > 0:
+            if "players" in body:
+                if not isinstance(players_in_body, list) or len(players_in_body) > MAX_DRAFT_CANDIDATES:
+                    raise ValueError(f"players must be a list of at most {MAX_DRAFT_CANDIDATES:,} candidates")
                 available_players = players_in_body
             else:
                 loaded, _ = _load_players(self.profile)
@@ -1878,7 +1916,22 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                     "team": p.team or "",
                 } for p in loaded]
 
-            from ..draft_paste_parser import parse_draft_text
+            if len(available_players) > MAX_DRAFT_CANDIDATES:
+                raise ValueError(f"players must contain at most {MAX_DRAFT_CANDIDATES:,} candidates")
+            for player in available_players:
+                if not isinstance(player, dict):
+                    raise ValueError("Each player candidate must be an object")
+                for field, limit in (("id", MAX_DRAFT_PLAYER_ID_CHARS),
+                                     ("name", MAX_DRAFT_PLAYER_NAME_CHARS)):
+                    value = player.get(field)
+                    if not isinstance(value, str) or not value.strip() or len(value) > limit:
+                        raise ValueError(f"Player {field} must be a nonempty string of at most {limit} characters")
+                for field, limit in (("pos", 16), ("position", 16), ("team", 32)):
+                    value = player.get(field, "")
+                    if not isinstance(value, str) or len(value) > limit:
+                        raise ValueError(f"Player {field} must be a string of at most {limit} characters")
+                if not (player.get("pos") or player.get("position")):
+                    raise ValueError("Each player candidate must have a position")
             parsed_items = parse_draft_text(
                 raw_text=raw_text,
                 all_players=available_players,
@@ -1886,6 +1939,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 start_pick=start_pick,
             )
             self._send_json({"items": parsed_items, "totalParsed": len(parsed_items)})
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 
