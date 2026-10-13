@@ -131,6 +131,16 @@ function rosterTotal(rosterSlots) {
     .reduce((sum, [key, value]) => key === 'IR' ? sum : sum + (value || 0), 0);
 }
 
+// A board saved before pulls stamped bye provenance reports no bye for anyone:
+// the server only returns a bye it can verify, so every byeWeek comes back
+// null and the bye penalty and bye flags switch off without a word. "Has
+// players, none with a bye" is that state. An empty board is not it, and
+// neither is one still loading (null) — there is nothing to repair yet.
+function boardLacksByes(players) {
+  return Array.isArray(players) && players.length > 0
+    && !players.some(player => player && player.byeWeek);
+}
+
 // Weighted player selection with augmenting paths across overlapping slots.
 // Each player has the same value in every eligible slot. Processing highest
 // value first and relocating earlier players preserves the best legal lineup.

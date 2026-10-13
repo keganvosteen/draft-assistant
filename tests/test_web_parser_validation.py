@@ -58,11 +58,35 @@ class TestParserAPIValidation(_ServerFixture):
         self.assertEqual(status, 400, body)
         parse.assert_not_called()
 
-    def test_empty_explicit_candidates_do_not_load_unrequested_players(self):
-        with patch("draft_assistant.web.server._load_players") as load:
+    def test_empty_candidates_fall_back_to_the_server_board(self):
+        # The browser sends `players` on every request, and it is [] until its
+        # own board has loaded. Reading that as "match against nobody" returned
+        # every pasted line unmatched.
+        with patch("draft_assistant.web.server._load_players", return_value=(
+            [Player("sleeper:9", "Bijan Robinson", "RB", team="ATL")], None,
+        )) as load:
             status, body = self.draft_request(players=[])
         self.assertEqual(status, 200, body)
-        self.assertIsNone(body["items"][0]["matchedPlayerId"])
+        self.assertEqual(body["items"][0]["matchedPlayerId"], "sleeper:9")
+        load.assert_called_once()
+
+    def test_supplied_candidates_are_used_instead_of_the_server_board(self):
+        with patch("draft_assistant.web.server._load_players") as load:
+            status, body = self.draft_request()
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["items"][0]["matchedPlayerId"], "sleeper:1")
+        load.assert_not_called()
+
+    def test_only_an_empty_list_falls_back_to_the_server_board(self):
+        # The fallback is for [], not for anything falsy: a non-list is still
+        # a malformed request, and neither it nor an oversized list may reach
+        # the board.
+        with patch("draft_assistant.web.server._load_players") as load:
+            for players in (None, {}, "", 0, False, [self.candidate] * (MAX_DRAFT_CANDIDATES + 1)):
+                with self.subTest(type=type(players)):
+                    status, body = self.draft_request(players=players)
+                    self.assertEqual(status, 400, body)
+                    self.assertIn("players must be a list", body["error"])
         load.assert_not_called()
 
     def test_omitted_candidates_load_board(self):
@@ -96,6 +120,33 @@ class TestParserAPIValidation(_ServerFixture):
                     "text": "League Name: Test League\n" + extra,
                 })
                 self.assertEqual(status, 400, raw)
+
+    def test_unrecognizable_yahoo_text_is_a_400_that_says_what_to_paste(self):
+        # Every setting has a default, so text with no settings in it used to
+        # come back 200 as a 10-team league named after its own first line.
+        for text in ("lorem ipsum dolor sit amet", "!!! ... ---",
+                     "All teams must set their lineups before Sunday"):
+            with self.subTest(text=text):
+                status, raw = self.request("POST", "/api/yahoo/parse-settings", {"text": text})
+                self.assertEqual(status, 400, raw)
+                error = json.loads(raw)["error"]
+                self.assertIn("does not look like a Yahoo league settings page", error)
+                self.assertIn("League > Settings", error)
+
+    def test_partial_yahoo_pastes_remain_200(self):
+        roster_table = ("Quarterback 1\nRunning Back 2\nWide Receiver 2\nTight End 1\n"
+                        "W/R/T 1\nKicker 1\nDefense/Special Teams 1\nBench 6")
+        for part, text in (("scoring", "Passing Touchdowns: 6\nReceptions: 1"),
+                           ("roster", roster_table), ("teams", "Max Teams: 14")):
+            with self.subTest(part=part):
+                status, raw = self.request("POST", "/api/yahoo/parse-settings", {"text": text})
+                self.assertEqual(status, 200, raw)
+                parsed = json.loads(raw)
+                # The roster table's "Defense/Special Teams 1" row is not a
+                # team count: read as one, it fails the numTeams bound.
+                self.assertEqual(parsed["numTeams"], 14 if part == "teams" else 10)
+                self.assertEqual(parsed["rosterSlots"]["DST"], 1)
+                self.assertEqual(parsed["scoring"]["pass_td"], 6.0 if part == "scoring" else 4.0)
 
     def test_valid_yahoo_settings_remain_200(self):
         status, raw = self.request("POST", "/api/yahoo/parse-settings", {"text": (

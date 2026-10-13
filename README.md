@@ -163,6 +163,7 @@ All commands accept `--profile <name>` to target a specific league:
 | `collect-all` | The free pull plus `nfl_data_py` and Sleeper's stats archive (superset of `pull-free-data`) |
 | `collect` | Sleeper-only historical stats collector |
 | `pull-free-data` | No-dep collector (direct GitHub release CSVs + ESPN optional) |
+| `refresh-byes [--season N]` | Re-stamp bye weeks on the saved board from the NFL schedule (projections, ADP and history untouched) |
 | `pull-fftoday` | FFToday HTML scraper |
 | `import-fpros` | Import FantasyPros CSVs |
 | `consensus --sources a.json b.json` | Merge multiple projection files |

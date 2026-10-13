@@ -9,8 +9,9 @@ used by packaging and CI for the repository's bundled board.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional
 
+from .context import current_bye_week
 from .models import Player
 
 
@@ -33,6 +34,14 @@ MIN_POSITION_COUNTS = {
 #: 200 picks, so 300 is a generous cut that stays honest about what matters.
 DRAFT_RELEVANT_BY_ADP = 300
 
+#: Share of the byes held by players on an NFL team that the engine may be
+#: ignoring. A healthy pull leaves a handful -- someone who changed teams since
+#: the stamp, a team code the schedule does not list -- and those must not
+#: block a release. A board saved before bye provenance existed has *every* bye
+#: in that state, and that is the failure this exists to catch: 1,325 stored
+#: byes, none of them used.
+MAX_STALE_BYE_SHARE = 0.02
+
 
 @dataclass(frozen=True)
 class ProjectionQualityReport:
@@ -41,6 +50,12 @@ class ProjectionQualityReport:
     projected: int
     with_adp: int
     with_bye: int
+    #: Byes ``current_bye_week`` will actually return, judged for ``bye_season``.
+    with_verified_bye: int
+    #: Players on an NFL team whose stored bye week the engine would ignore.
+    stale_byes: int
+    #: The season the board's own bye stamps name; None when nothing is stamped.
+    bye_season: Optional[int]
     with_history: int
     with_metadata: int
     consensus: int
@@ -59,6 +74,25 @@ class ProjectionQualityReport:
         return data
 
 
+def board_bye_season(players: Iterable[Player]) -> Optional[int]:
+    """The season a board's byes are stamped for: the newest its stamps name.
+
+    Provenance is judged against this, deliberately not the calendar. The gate
+    runs offline on every pull request and release build against a tracked
+    board that only changes when someone regenerates it; measured against
+    ``date.today()`` that same board would turn red on New Year's Day and stay
+    red until the next schedule is published in May. The newest stamp wins, so
+    a board that mixes seasons still has its older stamps counted as stale.
+    """
+    seasons: List[int] = []
+    for player in players:
+        try:
+            seasons.append(int((player.metadata or {}).get("bye_season")))
+        except (TypeError, ValueError):
+            continue
+    return max(seasons) if seasons else None
+
+
 def evaluate_projection_quality(players: Iterable[Player]) -> ProjectionQualityReport:
     """Return a strict release-quality report for a bundled player board."""
     board = list(players)
@@ -70,6 +104,19 @@ def evaluate_projection_quality(players: Iterable[Player]) -> ProjectionQualityR
     projected = sum(bool(player.projections) for player in board)
     with_adp = sum(player.adp is not None for player in board)
     with_bye = sum(player.bye_week is not None for player in board)
+    bye_season = board_bye_season(board)
+
+    def verified_bye(player: Player) -> bool:
+        # Ask the same question the engine asks. Counting a non-null bye_week
+        # is how a board with 1,325 stored byes and none in use passed here.
+        return bool(player.metadata) and current_bye_week(player, bye_season) is not None
+
+    with_verified_bye = sum(verified_bye(player) for player in board)
+    # Board-wide, not just the draftable head: the waiver wire reads byes for
+    # the deep pool too. Players with no NFL team are left out -- they have no
+    # bye to verify, and refresh-byes could not stamp one if they did.
+    on_team_with_bye = [p for p in board if p.team and p.bye_week is not None]
+    stale_byes = sum(not verified_bye(player) for player in on_team_with_bye)
     with_history = sum(bool(player.historical_stats) for player in board)
     with_metadata = sum(bool(player.metadata) for player in board)
     consensus = sum(
@@ -115,13 +162,24 @@ def evaluate_projection_quality(players: Iterable[Player]) -> ProjectionQualityR
     )[:DRAFT_RELEVANT_BY_ADP]
     n_relevant = len(relevant)
     relevant_projected = sum(bool(p.projections) for p in relevant)
-    relevant_bye = sum(p.bye_week is not None for p in relevant)
+    relevant_bye = sum(verified_bye(p) for p in relevant)
     relevant_history = sum(bool(p.historical_stats) for p in relevant)
     relevant_kickers = [p for p in relevant if p.position == "K"]
     relevant_projected_kickers = sum(bool(p.projections) for p in relevant_kickers)
 
     require_ratio("projection", relevant_projected, n_relevant, 0.58)
-    require_ratio("bye-week", relevant_bye, n_relevant, 0.50)
+    require_ratio("verified bye-week", relevant_bye, n_relevant, 0.50)
+    # A board with no byes at all fails the coverage line above and stops
+    # there. This one is for byes that are present and unusable, which coverage
+    # of the head alone would report as a board that simply never had any.
+    if stale_byes > len(on_team_with_bye) * MAX_STALE_BYE_SHARE:
+        why = (f"bye_season/bye_team do not match the board's {bye_season} stamps"
+               if bye_season is not None else "no bye_season stamp anywhere on the board")
+        issues.append(
+            f"{stale_byes} of {len(on_team_with_bye)} players on an NFL team carry a "
+            f"bye week the engine ignores ({why}); expected at most "
+            f"{MAX_STALE_BYE_SHARE:.0%} -- run refresh-byes"
+        )
     require_ratio("historical-stat", relevant_history, n_relevant, 0.50)
     # These two describe the whole board, not just its draftable head: a pull
     # that lost ADP or provenance wholesale is broken however deep you look.
@@ -141,6 +199,9 @@ def evaluate_projection_quality(players: Iterable[Player]) -> ProjectionQualityR
         projected=projected,
         with_adp=with_adp,
         with_bye=with_bye,
+        with_verified_bye=with_verified_bye,
+        stale_byes=stale_byes,
+        bye_season=bye_season,
         with_history=with_history,
         with_metadata=with_metadata,
         consensus=consensus,

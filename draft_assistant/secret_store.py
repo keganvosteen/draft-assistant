@@ -11,7 +11,8 @@ rather than hand-rolling a cipher each platform's own keystore does the work:
 
 * **Windows** — DPAPI (``CryptProtectData``) via ctypes. Keyed to the logged-in
   Windows account, so the file is useless on another machine or to another user.
-* **macOS** — the login Keychain via the ``security`` tool.
+* **macOS** — the login Keychain via the ``security`` tool. The file beside the
+  draft state is then only a marker naming the Keychain item that holds it.
 * **Anything else** — refuse to persist and keep profile-scoped secrets in
   memory for the session rather than silently writing them out in the clear.
 
@@ -25,9 +26,11 @@ import copy
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
+import uuid
 from typing import Optional
 
 KEYCHAIN_SERVICE = "DraftAssistant"
@@ -38,6 +41,9 @@ _MAGIC = "draft-assistant-secret-v1"
 _guard = threading.Lock()
 _locks = {}
 _session = {}
+# Stores whose plaintext file this run removed for want of a keystore to move
+# it into. See plaintext_removed().
+_plaintext_removed = set()
 
 
 def _identity(path: str, account: str) -> tuple:
@@ -52,6 +58,13 @@ def locked(path: str, account: str):
 
 
 def _keychain_account(path: str, account: str) -> str:
+    """The Keychain item name 0.7.4 derived from where the store file sat.
+
+    Nothing is created under this name any more: tying the item to the path
+    meant that moving the data directory lost the credential and orphaned the
+    item. It survives only so forget() can still clear a 0.7.4 item out from
+    under the path it was written for.
+    """
     identity = json.dumps(_identity(path, account), ensure_ascii=True).encode("utf-8")
     return f"{account}:{hashlib.sha256(identity).hexdigest()}"
 
@@ -74,8 +87,34 @@ def describe() -> str:
     return {
         "dpapi": "Encrypted with Windows DPAPI — readable only by your Windows account on this PC.",
         "keychain": "Stored in your macOS login Keychain.",
-        "none": "This platform has no supported keystore, so credentials are kept in memory only.",
+        # Has to spell out the restart and the deleted file: this line is all
+        # the UI shows, and "memory only" alone said neither.
+        "none": ("This platform has no supported keystore, so credentials are kept in "
+                 "memory only and must be re-entered after the app restarts; any "
+                 "unencrypted copy an earlier version left on disk is deleted."),
     }[backend()]
+
+
+def plaintext_removed(path: str, account: str) -> bool:
+    """True when this run deleted *path*'s plaintext file and holds it in memory.
+
+    Lets a caller tell the user once, in the UI, what the stderr notice told
+    whoever started the process: these credentials will not survive a restart.
+    """
+    return _identity(path, account) in _plaintext_removed
+
+
+def _report_plaintext_removed(path: str, account: str) -> None:
+    # Without a keystore the first read of a legacy file — a status poll is
+    # enough — moves it into memory and deletes it. Doing that quietly meant
+    # saved credentials simply vanished at the next restart.
+    _plaintext_removed.add(_identity(path, account))
+    print(
+        f"WARNING: removed the unencrypted credential file {os.path.abspath(path)}. "
+        "This platform has no supported keystore, so those credentials are now held "
+        "only in memory and must be re-entered after the app restarts.",
+        file=sys.stderr,
+    )
 
 
 # ── Windows DPAPI ────────────────────────────────────────────────────────────
@@ -105,17 +144,108 @@ def _dpapi(data: bytes, protect: bool) -> bytes:
 
 # ── macOS Keychain ───────────────────────────────────────────────────────────
 
-def _keychain_write(account: str, secret: str) -> None:
+# ``security -i`` reads its commands from stdin, one line at a time, into a
+# 4096-byte buffer. It does not reject a longer line: it runs the first 4095
+# bytes as the command — storing a truncated secret — and then reads the rest
+# as the *next* command. Stay well short of that so a line is never split.
+_KEYCHAIN_LINE_LIMIT = 4000
+# Bounds the stdin attempt only, so a hang nobody foresaw there degrades to
+# the argv write instead of freezing every credential save.
+_KEYCHAIN_STDIN_TIMEOUT = 30
+# The account sits on that line unquoted. Anything the tool's tokenizer could
+# take for whitespace, a quote or an escape sends the write to argv instead.
+_KEYCHAIN_PLAIN_ACCOUNT = re.compile(r"[A-Za-z0-9._:-]+")
+# A per-store item id: the uuid4 hex minted by save(), or the SHA-256 hex
+# that 0.7.4 derived from the store's path.
+_KEYCHAIN_ITEM_ID = re.compile(r"[0-9a-f]{32}(?:[0-9a-f]{32})?")
+# How the last Keychain write reached ``security``: "stdin-hex", "stdin-quoted"
+# or "argv". Never holds secret material; the native smoke check asserts on it.
+_keychain_transport: Optional[str] = None
+
+
+def _keychain_stdin_command(account: str, secret: str) -> Optional[tuple]:
+    """One ``security -i`` line that stores *secret*, as ``(transport, line)``.
+
+    None means no line is safe to send and the write has to use argv.
+    """
+    if not secret or not _KEYCHAIN_PLAIN_ACCOUNT.fullmatch(account):
+        return None
     try:
-        subprocess.run(
-            ["security", "add-generic-password", "-U",
-             "-s", KEYCHAIN_SERVICE, "-a", account, "-w", secret],
-            check=True, capture_output=True,
-        )
-    except subprocess.CalledProcessError:
-        # CalledProcessError includes argv, which contains the secret. Never
-        # allow it to reach an HTTP error response or a diagnostic log.
-        raise OSError("Could not save credentials in the macOS Keychain") from None
+        # -X takes the password as hex, which the tokenizer cannot misread.
+        forms = [("stdin-hex", "-X " + secret.encode("utf-8").hex())]
+    except UnicodeError:
+        return None
+    # Hex doubles the length, so a secret too long for it is single-quoted
+    # instead: inside quotes the tokenizer lets a backslash escape the next
+    # character and ends the argument only at the opening quote character.
+    # Printable ASCII only — all json.dumps emits — so no byte can end the
+    # line early.
+    if secret.isascii() and secret.isprintable():
+        escaped = secret.replace("\\", "\\\\").replace("'", "\\'")
+        forms.append(("stdin-quoted", f"-w '{escaped}'"))
+    for transport, password in forms:
+        # -U goes last on purpose. Should some build's buffer be shorter than
+        # the limit assumes, the half that runs has no -U and fails as a
+        # duplicate instead of overwriting a good item with a truncated one,
+        # and the leftover arrives with an option attached rather than as a
+        # bare word (commands match by prefix: a stray "c" is create-keychain).
+        line = f"add-generic-password -s {KEYCHAIN_SERVICE} -a {account} {password} -U\n"
+        if len(line) <= _KEYCHAIN_LINE_LIMIT:
+            return transport, line.encode("ascii")
+    return None
+
+
+def _keychain_run(command: list, stdin: Optional[bytes] = None,
+                  timeout: Optional[float] = None) -> bool:
+    """Run ``security`` and report only whether it exited cleanly.
+
+    Everything subprocess can raise here carries the secret: CalledProcessError
+    and TimeoutExpired keep argv (which holds it on the fallback write) and
+    their tracebacks hold the stdin payload. ``raise ... from None`` would not
+    be enough — the original still hangs off ``__context__`` — so the outcome
+    is collapsed to a bool and the caller raises outside any handler.
+    """
+    try:
+        result = subprocess.run(command, input=stdin, capture_output=True, timeout=timeout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def _keychain_holds(account: str, secret: str) -> bool:
+    # ``find-generic-password -w`` prints hex for anything that is not
+    # printable ASCII, so such a secret never matches and takes the fallback.
+    try:
+        return _keychain_read(account) == secret
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def _keychain_write(account: str, secret: str) -> None:
+    """Store *secret*, keeping it off the command line whenever it fits a line.
+
+    argv is readable by every local process for as long as the call runs, and
+    an hourly token refresh repeats the call. Feeding ``security -i`` through
+    stdin leaves nothing in argv but ``-i``.
+    """
+    global _keychain_transport
+    _keychain_transport = None
+    command = _keychain_stdin_command(account, secret)
+    if command is not None:
+        transport, line = command
+        # The exit status is only that of the last command the tool happened
+        # to read, so the write counts only once the item reads back intact.
+        if (_keychain_run(["security", "-i"], line, _KEYCHAIN_STDIN_TIMEOUT)
+                and _keychain_holds(account, secret)):
+            _keychain_transport = transport
+            return
+    # What every write did before the stdin path existed, which is what makes
+    # that path never worse than this one. -U overwrites whatever a failed
+    # attempt above left behind.
+    if not _keychain_run(["security", "add-generic-password", "-U",
+                          "-s", KEYCHAIN_SERVICE, "-a", account, "-w", secret]):
+        raise OSError("Could not save credentials in the macOS Keychain")
+    _keychain_transport = "argv"
 
 
 def _keychain_read(account: str) -> Optional[str]:
@@ -133,6 +263,58 @@ def _keychain_delete(account: str) -> None:
         ["security", "delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account],
         capture_output=True,
     )
+
+
+def _read_body(path: str) -> Optional[dict]:
+    """The store file's JSON object, or None if it is missing or not one."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            body = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _keychain_item(body: Optional[dict], account: str) -> Optional[str]:
+    """The per-store Keychain item a marker assigns to *account*, if any.
+
+    The marker is the only record of which item is a store's, so it is also
+    the only thing trusted to say so: a marker sealed by another backend, one
+    naming another provider's item, or the bare provider name (the item 0.7.3
+    and earlier shared between every profile) all answer None.
+    """
+    if not body or body.get("magic") != _MAGIC or body.get("backend") != "keychain":
+        return None
+    stored = body.get("account")
+    prefix = account + ":"
+    if (isinstance(stored, str) and stored.startswith(prefix)
+            and _KEYCHAIN_ITEM_ID.fullmatch(stored[len(prefix):])):
+        return stored
+    return None
+
+
+def _keychain_save(path: str, account: str, secret: str) -> None:
+    from .storage import atomic_write_json
+
+    # Reuse the id the marker already holds. A random id that lives in the
+    # marker travels with the directory, where 0.7.4's path-derived name lost
+    # the credential — and orphaned the item — as soon as the directory moved.
+    item = _keychain_item(_read_body(path), account)
+    minted = item is None
+    if minted:
+        item = f"{account}:{uuid.uuid4().hex}"
+    try:
+        _keychain_write(item, secret)
+        atomic_write_json(path, {"magic": _MAGIC, "backend": "keychain", "account": item})
+    except BaseException:
+        # Nothing else records a freshly minted id, so without its marker the
+        # item could never be found again — not by load, not by forget.
+        if minted:
+            try:
+                _keychain_delete(item)
+            except OSError:
+                pass
+        raise
 
 
 # ── public API ───────────────────────────────────────────────────────────────
@@ -157,16 +339,15 @@ def save(path: str, account: str, data: dict) -> bool:
             # in this session. Do not remove an encrypted file from another OS.
             if os.path.exists(path) and not is_sealed(path):
                 os.remove(path)
+                _report_plaintext_removed(path, account)
             return False
         payload = json.dumps(data).encode("utf-8")
         if kind == "dpapi":
             sealed = base64.b64encode(_dpapi(payload, protect=True)).decode("ascii")
-            body = {"magic": _MAGIC, "backend": kind, "account": account, "sealed": sealed}
+            atomic_write_json(path, {"magic": _MAGIC, "backend": kind,
+                                     "account": account, "sealed": sealed})
         else:
-            scoped_account = _keychain_account(path, account)
-            _keychain_write(scoped_account, payload.decode("utf-8"))
-            body = {"magic": _MAGIC, "backend": kind, "account": scoped_account}
-        atomic_write_json(path, body)
+            _keychain_save(path, account, payload.decode("utf-8"))
         _session.pop(_identity(path, account), None)
         try:  # The file is encrypted or contains only a Keychain marker.
             os.chmod(path, 0o600)
@@ -188,14 +369,8 @@ def load(path: str, account: str) -> dict:
 
 
 def _load(path: str, account: str) -> dict:
-    if not os.path.exists(path):
-        return {}
-    try:
-        with open(path, encoding="utf-8") as handle:
-            body = json.load(handle)
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(body, dict):
+    body = _read_body(path)
+    if body is None:
         return {}
     # Migrate on read, including status-only requests, so an unused refresh
     # token does not leave plaintext behind indefinitely after upgrading.
@@ -211,7 +386,10 @@ def _load(path: str, account: str) -> dict:
             raw = _dpapi(base64.b64decode(body["sealed"]), protect=False)
         elif body["backend"] == "keychain":
             stored_account = body.get("account") or account
-            if stored_account not in {account, _keychain_account(path, account)}:
+            # Either the legacy shared item, or whichever per-store item the
+            # marker names — wherever the file sits now. Comparing against a
+            # name recomputed from the path is what rejected a moved store.
+            if stored_account != account and stored_account != _keychain_item(body, account):
                 return {}
             secret = _keychain_read(stored_account)
             if not secret:
@@ -243,8 +421,27 @@ def forget(path: str, account: str) -> None:
     """Remove this profile's credentials without touching shared legacy items."""
     with locked(path, account):
         _session.pop(_identity(path, account), None)
+        _plaintext_removed.discard(_identity(path, account))
         if backend() == "keychain":
-            _keychain_delete(_keychain_account(path, account))
+            # The marker says which item is this store's, so a moved or
+            # restored directory still forgets the right one. A *copied*
+            # directory cannot be told from a moved one — both markers name
+            # the same item — so forgetting through either copy removes the
+            # credential for both, and the other reads as empty until it is
+            # authorized again. Forgetting must never leave the secret behind.
+            #
+            # For the same reason the name 0.7.4 derived from this path goes
+            # too: an item left under it by a store whose marker has since
+            # been lost could be found no other way. The price mirrors the
+            # copy: a 0.7.4 store that was *moved away* still reads that item
+            # through its own marker, so forgetting whatever now lives at its
+            # old path sends it back to authorize again as well.
+            item = _keychain_item(_read_body(path), account)
+            legacy = _keychain_account(path, account)
+            if item:
+                _keychain_delete(item)
+            if legacy != item:
+                _keychain_delete(legacy)
         try:
             os.remove(path)
         except FileNotFoundError:

@@ -7,7 +7,7 @@
 // The roster the recommendations are measured against, laid out in lineup
 // order so an "add" that only improves the bench reads differently from one
 // that changes a starter.
-function WaiverRosterPanel({ league, myPlayers, fullWidth = false }) {
+function WaiverRosterPanel({ league, myPlayers, fullWidth = false, asOf = null }) {
   const lineup = buildLineup(myPlayers, league.rosterSlots);
   const needs = getRosterNeeds(myPlayers, league.rosterSlots);
   const starters = lineup.filter(r => !r.slot.bench);
@@ -57,6 +57,12 @@ function WaiverRosterPanel({ league, myPlayers, fullWidth = false }) {
         <div style={{ fontSize: 12, color: T.muted, marginTop: fullWidth ? 0 : 3 }}>
           {myPlayers.length} players rostered · {lineup.length} lineup and bench slots
         </div>
+        {/* On a phone this panel is a drawer that covers the screen's own warning. */}
+        {asOf && (
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: T.amber, marginTop: 3 }}>
+            As of {asOf} — the live sync failed
+          </div>
+        )}
       </div>
       <div style={{ padding: '4px 12px 10px', flex: 1 }}>
         <SectionLabel style={{ margin: '10px 0 2px' }}>Starters</SectionLabel>
@@ -83,7 +89,7 @@ function signed(n, digits = 1) {
   return `${v > 0 ? '+' : ''}${v.toFixed(digits)}`;
 }
 
-function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditLeague }) {
+function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditLeague, onRefreshPlayers }) {
   const [topN, setTopN]           = React.useState(15);
   const [posFilter, setPosFilter] = React.useState('ALL');
   // "This week" answers the start/sit question; "Rest of season" answers the
@@ -96,6 +102,9 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
   const [error, setError]         = React.useState(null);
   const [syncing, setSyncing]     = React.useState(false);
   const [rosterSnapshot, setRosterSnapshot] = React.useState(null);
+  // Why the live sync failed — set only while `rosterSnapshot` is the league's
+  // saved snapshot standing in for it. Null whenever the rosters are live.
+  const [syncFailure, setSyncFailure] = React.useState(null);
   const [updating, setUpdating]   = React.useState(false);
   const [showRoster, setShowRoster] = React.useState(false);
   const { isMobile, isDesktop }   = useLayout();
@@ -104,12 +113,16 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
     : league.espnLeagueId ? 'ESPN'
       : league.yahooLeagueKey ? 'Yahoo' : null;
   const rosterKey = rosterSyncKey(league);
-  // Every visit verifies live ownership before ranking; a saved draft or an
-  // older roster snapshot must never decide who is available in a linked league.
+  // Every visit verifies live ownership before ranking; a saved draft must
+  // never decide who is available in a linked league, and an older roster
+  // snapshot only may when that sync fails — and then never unlabelled.
   const rosterReady = !linkedTo || Boolean(rosterSnapshot && rosterSnapshot.leagueKey === rosterKey);
   const rosterPicks = React.useMemo(() => linkedTo
     ? (rosterReady ? rosterSnapshot.picks : []) : picks,
   [linkedTo, rosterReady, rosterSnapshot, picks]);
+  // The label every stale ranking carries: when the rosters on screen were true.
+  const rostersAsOf = linkedTo && rosterReady && syncFailure
+    ? new Date(rosterSnapshot.syncedAt).toLocaleString() : null;
 
   const playersWithProj = React.useMemo(
     () => withProjections(allPlayers, league), [allPlayers, league]);
@@ -164,10 +177,16 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
   }, [scan, rosterReady]);
 
   const syncSeq = React.useRef(0);
+  // The league as of the latest render. A sync can fail long after it started,
+  // and the snapshot worth falling back to is the one saved by then — the hub's
+  // own sync may have landed while this one was still in flight.
+  const latestLeague = React.useRef(league);
+  latestLeague.current = league;
   const runSync = (announce = true) => {
     const seq = ++syncSeq.current;
     scanSeq.current++;
     setRosterSnapshot(null);
+    setSyncFailure(null);
     setData(null);
     setError(null);
     setLoading(false);
@@ -175,13 +194,28 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
     return onSyncLeague(league)
       .then(result => {
         if (seq !== syncSeq.current) return;
+        // Whatever a sync that succeeded returns is the ownership record, zero
+        // players included. Only a failure may reach for the saved snapshot.
         setRosterSnapshot(result.rosterSnapshot);
         if (announce) toast(result.message, 'ok');
       })
       .catch(err => {
+        // A superseded sync failing late must not flip the newer result into
+        // the fallback, and one that outlives the screen must not set state.
         if (seq !== syncSeq.current) return;
+        const reason = String(err && err.message ? err.message : err);
+        const saved = fallbackRosterSnapshot(latestLeague.current);
+        if (saved) {
+          // A provider outage used to leave nothing to rank. Rank against the
+          // rosters last saved for this league instead — the render below
+          // labels every part of the screen with how old they are.
+          setRosterSnapshot(saved);
+          setSyncFailure(reason);
+          if (announce) toast(`Could not sync current rosters from ${linkedTo}. ${reason}`, 'error', 6000);
+          return;
+        }
         const message = `Could not sync current rosters from ${linkedTo}. `
-          + `${String(err && err.message ? err.message : err)} `
+          + `${reason} `
           + 'Check the league connection in League settings, then retry Sync.';
         setData(null);
         setError(message);
@@ -261,16 +295,21 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
   const rows = (posFilter === 'ALL' ? allRows : allRows.filter(r => r.pos === posFilter)).slice(0, topN);
   const counts = allRows.reduce((acc, r) => { acc[r.pos] = (acc[r.pos] || 0) + 1; return acc; }, {});
 
-  const rosterPanel = <WaiverRosterPanel league={league} myPlayers={myPlayers} fullWidth={isMobile} />;
+  const rosterPanel = <WaiverRosterPanel league={league} myPlayers={myPlayers} fullWidth={isMobile} asOf={rostersAsOf} />;
+
+  const status = data
+    ? `${horizon === 'weekly' ? `Week ${data.week || week || '—'}` : 'Rest of season'} · ${data.available} available · ${myPlayers.length} on your roster`
+    : syncing ? 'Syncing current league rosters…' : error ? 'Roster scan needs attention' : 'Scanning the pool…';
+  // The age of the rosters leads, because the subtitle truncates from the end
+  // and this is the part a scrolled list still has to say.
+  const subtitle = rostersAsOf ? `Rosters as of ${rostersAsOf} · ${status}` : status;
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: T.bg, overflow: 'hidden' }}>
       <AppBar
         onBack={onBack} backLabel={league.name}
         title="Waiver wire"
-        subtitle={data
-          ? `${horizon === 'weekly' ? `Week ${data.week || week || '—'}` : 'Rest of season'} · ${data.available} available · ${myPlayers.length} on your roster`
-          : syncing ? 'Syncing current league rosters…' : error ? 'Roster scan needs attention' : 'Scanning the pool…'}
+        subtitle={subtitle}
         compact>
         {isMobile && (
           <Btn variant="secondary" size="sm" onClick={() => setShowRoster(true)}>
@@ -286,6 +325,21 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
           {loading ? 'Scanning…' : 'Refresh'}
         </Btn>
       </AppBar>
+
+      {/* Outside the scrolling list on purpose: it has to stay on screen for as
+          long as anything below is ranked against rosters that may have moved. */}
+      {rostersAsOf && (
+        <Note tone="warn" style={{
+          flexShrink: 0, borderRadius: 0, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+        }}>
+          <span style={{ flex: '1 1 260px' }}>
+            <b>Could not sync current rosters from {linkedTo}.</b> Showing rosters as
+            of <b>{rostersAsOf}</b> — adds, drops and trades since then are not reflected, so a
+            player listed here may already be on a roster. Sync error: {syncFailure}
+          </span>
+          <Btn variant="secondary" size="sm" onClick={sync}>Retry sync</Btn>
+        </Note>
+      )}
 
       <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
         {!isMobile && rosterPanel}
@@ -359,6 +413,10 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? 12 : 18 }}>
+            {/* Re-rank once the board is back: a player's week off changes what
+                he is worth this week, and the list on screen predates it. */}
+            <ByeWeeksNotice players={allPlayers} style={{ marginBottom: 14 }}
+              onLoaded={() => Promise.resolve(onRefreshPlayers && onRefreshPlayers()).then(scan)} />
             {error && <Note tone="error" style={{ marginBottom: 14 }}>{error}</Note>}
 
             {(loading || syncing) && !data && (

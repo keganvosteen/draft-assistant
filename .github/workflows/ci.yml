@@ -34,6 +34,7 @@ jobs:
       - run: python -m compileall -q draft_assistant tests scripts
       - run: node scripts/check_web_syntax.js
       - run: node scripts/check_league_sync.js
+      - run: node scripts/check_lineup_parity.js
       - run: node scripts/check_workspace_store.js
       - run: node scripts/check_recommendation_refresh.js
       - name: Verify installed web assets
@@ -61,3 +62,18 @@ jobs:
           name: DraftAssistant-windows
           path: dist/pyinstaller/DraftAssistant
           if-no-files-found: error
+
+  macos-keychain:
+    # The Keychain backend drives /usr/bin/security, which only a macOS runner
+    # has; everywhere else it is tested against a stand-in. release.yml runs
+    # the same native check, but only once a tag is cut — too late to stop a
+    # pull request that breaks what the real tool is sent on stdin.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest tests.test_secret_store tests.test_credential_sessions -v
+      - name: Verify native Keychain profile isolation and migration
+        run: python scripts/check_native_secret_store.py

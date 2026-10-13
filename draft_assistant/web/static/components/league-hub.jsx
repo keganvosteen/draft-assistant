@@ -186,8 +186,8 @@ function LeagueHub({ league, picks, playerCount, onBack, onOpenDraft, onOpenWaiv
           </div>
           {linkedTo && <Note style={{marginTop:14}}>
             Refresh league settings and the published draft order in <b>League settings → Draft order</b>.
-            {' '}<b>Sync from {linkedTo}</b> pulls the completed draft when {linkedTo} has published one — picks, order and all —
-            and otherwise falls back to current roster ownership for the waiver wire.
+            {' '}<b>Sync from {linkedTo}</b> loads every team’s current roster for the waiver wire. It does not change the
+            draft board — picks are recorded or synced in the draft room.
             {linkedTo === 'ESPN' && ' During a live ESPN draft, use Paste draft history or record picks as they happen.'}
             {linkedTo === 'Sleeper' && ' To follow a draft as it happens, open the draft room and choose Go live.'}
           </Note>}
