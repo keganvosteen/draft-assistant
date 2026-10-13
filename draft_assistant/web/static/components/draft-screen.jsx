@@ -1659,6 +1659,8 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
           : 'Draft recommendations support standard snake drafts. This league uses a different format.'}
       </Note>}
       {provider === 'ESPN' && !draftComplete && <Note>ESPN publishes draft results after completion. More → Sync completed ESPN draft imports the final results. {!trackingBlocked && 'During the draft, use More → Paste draft history or record picks.'}</Note>}
+      {/* The reloaded board is a new allPlayers, which is what re-runs the rollout. */}
+      <ByeWeeksNotice players={allPlayers} onLoaded={onRefreshPlayers} />
       {!isMobile && !trackingBlocked && <PickTicker league={league} picks={picks} playersById={playersById} />}
 
       <div style={{flex:1, display:'flex', minHeight:0}}>

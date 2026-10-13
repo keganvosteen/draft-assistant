@@ -499,6 +499,8 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._handle_pull_free_data()
         elif self.path == "/api/collect-all":
             self._handle_collect_all()
+        elif self.path == "/api/refresh-byes":
+            self._handle_refresh_byes()
         elif self.path == "/api/fetch":
             self._handle_fetch()
         elif self.path == "/api/auction":
@@ -1804,6 +1806,59 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 self._send_json({"error": "Two data jobs are already running"}, 429)
                 return
             self._send_json({"taskId": task_id})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, 500)
+
+    # ── refresh-byes (sync, one fetch) ────────────────────────────────────
+
+    def _handle_refresh_byes(self):
+        """Re-stamp the saved board's bye weeks from the NFL schedule.
+
+        An install keeps the board it already has, so one saved before pulls
+        stamped bye provenance reports no bye for anyone until it is re-pulled
+        -- and in-season a pull also swaps the preseason projections and ADP.
+        This touches the bye fields only. Body: {season?}; the default is the
+        season /api/players judges byes against, or the stamp would not show.
+
+        Inline, not a ``_run_task`` job. It is one schedule fetch and one board
+        rewrite (~1.5s) on a threaded server, and the caller needs the outcome
+        as *this* response: an unpublished schedule has to arrive as an error
+        status the UI can show, where a task can only answer 200 with an id.
+        The two-job cap is there to stop minutes-long pulls piling up, not to
+        protect the board -- ``update_players`` holds the per-path lock across
+        its read-modify-write, and the fetch is done before the board is
+        opened. Racing a pull is safe in either order: the stamp is
+        idempotent, and a pull that saves afterwards writes its own.
+        """
+        try:
+            from ..importers.free_sources import (
+                ByeScheduleError, EmptyBoardError, refresh_board_byes,
+            )
+            body = self._read_body()
+            season = _bounded_int(
+                body["season"] if "season" in body else load_context().season,
+                "season", 2000, 2100)
+            paths = ensure_profile(self.profile)
+            try:
+                result = refresh_board_byes(paths.projections_path, season)
+            except ByeScheduleError as exc:
+                # The upstream schedule is the thing that failed, as with an
+                # unreachable league provider.
+                self._send_json({"error": str(exc), "code": "schedule_unavailable"}, 502)
+                return
+            except EmptyBoardError as exc:
+                self._send_json({"error": str(exc), "code": "board_empty"}, 409)
+                return
+            self._send_json({
+                "ok": True,
+                "season": result.season,
+                "players": result.players,
+                "verified": result.verified,
+                "changed": result.changed,
+                "unlistedTeams": result.unlisted_teams,
+            })
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self._send_json({"error": str(exc)}, 500)
 

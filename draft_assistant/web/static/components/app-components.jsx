@@ -85,6 +85,26 @@ function preserveRosterSnapshot(previous, next) {
     ? next : { ...next, rosterSnapshot: null };
 }
 
+// The one case a saved snapshot may stand in for a live sync: the sync FAILED
+// (provider down, Yahoo token lapsed, ESPN cookies cleared), and the snapshot
+// was taken under the same provider/season/seat mapping. A provider outage used
+// to leave the waiver wire with an error and nothing to rank, an hour-old
+// snapshot sitting unused beside it. The caller must label everything it ranks
+// from this with syncedAt — silently ranking against stale ownership is still
+// the bug — so a snapshot with no usable date is refused: it could not be
+// labelled. So is one with no players. A live "nobody is rostered" is
+// authoritative for right now; a saved one would put every rostered player on
+// the wire as of some earlier moment, and holds no roster of yours to rank a
+// pickup against anyway — the sync error says more. A sync that SUCCEEDED never
+// comes through here, however empty its answer.
+function fallbackRosterSnapshot(league) {
+  const snapshot = league && league.rosterSnapshot;
+  if (!snapshot || !Array.isArray(snapshot.picks) || snapshot.picks.length === 0) return null;
+  if (snapshot.leagueKey !== rosterSyncKey(league)) return null;
+  if (Number.isNaN(Date.parse(snapshot.syncedAt))) return null;
+  return snapshot;
+}
+
 function migrateRosterIds(leagues, players) {
   return leagues.map(league => {
     if (!league.rosterSnapshot) return league;
@@ -1094,6 +1114,54 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
   );
 }
 
+// ─── BYE WEEKS NOTICE ────────────────────────────────────────────────────────
+// An install keeps the board it already has, so one saved before 0.7.4 carries
+// bye weeks the engine cannot verify and the server reports none: no bye
+// penalty in the draft room, no bye flags, no week-off handling on the waiver
+// wire — and nothing said so. The repair is one click here because the
+// packaged app has no terminal to run `refresh-byes` from, and a full Pull
+// Data would also swap a preseason board's projections and ADP mid-season.
+// `onLoaded` is the same refreshPlayers a finished Pull Data calls. This is a
+// Note in the body on purpose: the draft room's phone header fits four
+// controls and has none to spare.
+function ByeWeeksNotice({ players, onLoaded, style = {} }) {
+  const [busy, setBusy] = React.useState(false);
+  if (!boardLacksByes(players)) return null;
+
+  const load = () => {
+    setBusy(true);
+    fetch('/api/refresh-byes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    })
+      .then(r => r.json())
+      .then(d => {
+        // Failure leaves the notice where it is: the board still has no byes.
+        if (d.error) throw new Error(d.error);
+        if (d.verified) {
+          toast(`Loaded ${d.season} bye weeks for ${Number(d.verified).toLocaleString()} players.`, 'ok');
+        } else {
+          toast(`No player on this board is on a team in the ${d.season} NFL schedule, so there were no bye weeks to load.`, 'info', 7000);
+        }
+        // Stay busy until the board is back, so the button cannot be pressed
+        // again in the moment before this notice goes away.
+        return onLoaded && onLoaded();
+      })
+      .catch(err => toast(String(err.message || err), 'error', 7000))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Note style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', ...style }}>
+      <span style={{ flex: '1 1 220px' }}>
+        Bye weeks are not loaded for this board, so bye penalties and bye flags are off.
+      </span>
+      <Btn variant="secondary" size="sm" onClick={load} disabled={busy}>
+        {busy ? 'Loading bye weeks…' : 'Load bye weeks'}
+      </Btn>
+    </Note>
+  );
+}
+
 // ─── AUCTION MODAL ───────────────────────────────────────────────────────────
 function AuctionModal({ league, onClose }) {
   const [budget, setBudget]   = React.useState((league && league.auctionBudget) || 200);
@@ -1729,6 +1797,7 @@ function App() {
         onBack={() => setRoute({ screen: 'league', leagueId: routeLeague.id })}
         onSyncLeague={syncLeague}
         onEditLeague={openEditor}
+        onRefreshPlayers={refreshPlayers}
       />
     );
   } else if (screen === 'league') {
@@ -1818,7 +1887,7 @@ Object.assign(window, {
   calcProjection, withProjections, withVORP,
   getSnakeTeam, getCurrentRoundPick, getRosterNeeds,
   makeLeague, leagueFromBackendConfig, SCORING_LABELS,
-  rosterSyncKey,
-  useTask, PullDataModal, AuctionModal,
+  rosterSyncKey, fallbackRosterSnapshot,
+  useTask, PullDataModal, ByeWeeksNotice, AuctionModal,
   DraftOrderEditor, LeagueSetupModal, HomeScreen, SetupGuide, App,
 });

@@ -16,6 +16,7 @@ from ..models import LeagueConfig, Player
 from ..platform_sync import SyncedDraftPick, SyncedRosterPlayer, SyncedRosterTeam
 from ..projection_archive import record_snapshot
 from ..scoring import fantasy_points
+from ..storage import update_players
 from .cbs import fetch_all_cbs
 from .fftoday import fetch_all_fftoday
 
@@ -405,6 +406,117 @@ def _fill_missing_byes(players: Iterable[Player], season: Optional[int] = None) 
             if len(byes) == 1:
                 player.bye_week = next(iter(byes))
                 player.metadata.update({"bye_season": season, "bye_team": player.team})
+
+
+@dataclass
+class ByeRefreshResult:
+    season: int
+    players: int
+    #: Players ``current_bye_week`` now returns a bye for.
+    verified: int
+    #: Stored bye weeks that were replaced by a different week.
+    changed: int
+    #: Team codes on the board the schedule (and the teammate gap-fill) had no
+    #: bye for -- named so a bye-less player is never a silent one.
+    unlisted_teams: List[str]
+
+
+class ByeScheduleError(Exception):
+    """No complete schedule for the season, so nobody was stamped.
+
+    Raised before the board is opened: the saved file is byte-for-byte what it
+    was. ``cause`` is set when the fetch itself failed; otherwise ``missing``
+    names the teams without a bye and ``listed`` is how many teams the schedule
+    did list (0 before it is published). The message is written for the web UI
+    to show as it stands; the CLI words its own from the fields.
+    """
+
+    def __init__(self, season: int, missing: Iterable[str] = (), listed: int = 0,
+                 cause: Optional[BaseException] = None):
+        self.season = season
+        self.missing = sorted(missing)
+        self.listed = listed
+        self.cause = cause
+        if cause is not None:
+            message = (f"Could not load the {season} NFL schedule, so bye weeks were not "
+                       "changed. Check your connection and try again.")
+        elif not listed:
+            message = (f"The {season} NFL schedule is not published yet, so bye weeks "
+                       "cannot be loaded.")
+        else:
+            # A toast, not a report: name a few teams, count the rest.
+            more = len(self.missing) - 5
+            which = ", ".join(self.missing[:5]) + (f" and {more} more" if more > 0 else "")
+            message = (f"The {season} NFL schedule does not list a bye week for every team "
+                       f"yet (missing {which}), so bye weeks cannot be loaded.")
+        super().__init__(message)
+
+
+class EmptyBoardError(Exception):
+    """The board has no players to stamp; it was not rewritten."""
+
+    def __init__(self, board_path: str):
+        self.board_path = board_path
+        super().__init__("There is no player data to load bye weeks for yet. "
+                         "Pull player data first.")
+
+
+def refresh_board_byes(board_path: str, season: int) -> ByeRefreshResult:
+    """Repair bye provenance on a saved board without re-pulling it.
+
+    ``current_bye_week`` only trusts a bye stamped with its season and team, so
+    a board saved before that stamp existed has every bye ignored. Re-pulling
+    would fix it, but in-season a pull also replaces the preseason projections
+    and ADP the draft board is built on. Only the stamp is missing, so only
+    ``bye_week``/``bye_season``/``bye_team`` change here. Shared by the
+    ``refresh-byes`` command and ``POST /api/refresh-byes`` -- an installed
+    build has no terminal to run the command from.
+    """
+    from ..context import current_bye_week
+
+    # Everything that can fail happens before the board is opened, so a bad
+    # schedule leaves the file exactly as it was. All 32 teams or nothing: a
+    # half-published schedule would verify some teams and leave the rest
+    # looking like players who simply have no bye.
+    try:
+        team_byes = _fetch_nflverse_byes(season)
+    except Exception as exc:
+        raise ByeScheduleError(season, cause=exc) from exc
+    missing = set(NFL_TEAM_NAMES) - set(team_byes)
+    if missing:
+        raise ByeScheduleError(season, missing=missing, listed=len(team_byes))
+
+    changed = 0
+
+    def stamp(current: List[Player]) -> List[Player]:
+        # Mutate the loaded board in place and hand the same list back.
+        # Unlike a pull there is no fresh pool to reconcile, so
+        # merge_historical_into has no place here -- it drops whoever is
+        # missing from its "new" side. Stamping in place is what keeps
+        # every player, history season and metadata key.
+        nonlocal changed
+        if not current:
+            # Raising inside the updater is what keeps update_players from
+            # saving: an empty board is reported, not rewritten.
+            raise EmptyBoardError(board_path)
+        before = [p.bye_week for p in current]
+        apply_schedule_byes(current, team_byes, season)
+        _fill_missing_byes(current, season)
+        changed = sum(
+            old is not None and old != p.bye_week
+            for p, old in zip(current, before)
+        )
+        return current
+
+    players = update_players(board_path, stamp)
+    return ByeRefreshResult(
+        season=season,
+        players=len(players),
+        verified=sum(current_bye_week(p, season) is not None for p in players),
+        changed=changed,
+        unlisted_teams=sorted({str(p.team) for p in players
+                               if p.team and current_bye_week(p, season) is None}),
+    )
 
 
 def _fetch_json(url: str, timeout: int = 30, extra_headers: Optional[dict] = None) -> object:

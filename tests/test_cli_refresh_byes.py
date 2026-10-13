@@ -90,7 +90,7 @@ class TestRefreshByes(unittest.TestCase):
         from draft_assistant import cli
 
         out = io.StringIO()
-        with patch.object(cli, "_fetch_nflverse_byes", return_value=dict(byes),
+        with patch.object(fs, "_fetch_nflverse_byes", return_value=dict(byes),
                           side_effect=error) as fetch, \
              patch.object(fs, "urlopen", side_effect=AssertionError("unexpected network")), \
              patch.object(sys, "argv", ["draft-assistant", "refresh-byes", *argv]), \

@@ -3,19 +3,17 @@ from __future__ import annotations
 import argparse
 import os
 
-from .context import current_bye_week
 from .draft import DraftTracker
 from .export import export_players_csv
 from .importers.fantasypros import load_dst_csv, load_k_csv, load_offense_csv, merge_players
 from .importers.fftoday import fetch_all_fftoday
 from .importers.free_sources import (
-    NFL_TEAM_NAMES,
-    _fetch_nflverse_byes,
-    _fill_missing_byes,
-    apply_schedule_byes,
+    ByeScheduleError,
+    EmptyBoardError,
     default_projection_season,
     merge_historical_into,
     pull_free_data,
+    refresh_board_byes,
 )
 from .models import FLEX_TYPES
 from .profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
@@ -352,62 +350,31 @@ def main() -> None:
     def cmd_refresh_byes(args: argparse.Namespace) -> None:
         """Repair bye provenance on the saved board without re-pulling it.
 
-        ``current_bye_week`` only trusts a bye stamped with its season and
-        team, so a board saved before that stamp existed has every bye ignored.
-        Re-pulling would fix it, but in-season a pull also replaces the
-        preseason projections and ADP the draft board is built on. Only the
-        stamp is missing, so only ``bye_week``/``bye_season``/``bye_team``
-        change here.
+        The work is ``refresh_board_byes``, shared with the web UI's
+        ``/api/refresh-byes``; this only picks the board and season and words
+        the outcome for a terminal.
         """
         paths = ensure_profile(args.profile)
         season = args.season or default_projection_season()
         board_path = paths.projections_path
         print(f"Refreshing {season} bye weeks from the nflverse schedule...")
-        # Everything that can fail happens before the board is opened, so a bad
-        # schedule leaves the file exactly as it was. All 32 teams or nothing: a
-        # half-published schedule would verify some teams and leave the rest
-        # looking like players who simply have no bye.
         try:
-            team_byes = _fetch_nflverse_byes(season)
-        except Exception as exc:
-            print(f"Could not load the {season} schedule ({exc}); the board was not changed.")
+            result = refresh_board_byes(board_path, season)
+        except ByeScheduleError as exc:
+            if exc.cause is not None:
+                print(f"Could not load the {season} schedule ({exc.cause}); the board was not changed.")
+            else:
+                which = ", ".join(exc.missing) if exc.listed else "any team"
+                print(f"The {season} schedule has no bye week yet for {which}; "
+                      "the board was not changed.")
             raise SystemExit(1)
-        missing = sorted(set(NFL_TEAM_NAMES) - set(team_byes))
-        if missing:
-            which = ", ".join(missing) if team_byes else "any team"
-            print(f"The {season} schedule has no bye week yet for {which}; "
-                  "the board was not changed.")
-            raise SystemExit(1)
-
-        corrected = 0
-
-        def stamp(current):
-            # Mutate the loaded board in place and hand the same list back.
-            # Unlike a pull there is no fresh pool to reconcile, so
-            # merge_historical_into has no place here -- it drops whoever is
-            # missing from its "new" side. Stamping in place is what keeps
-            # every player, history season and metadata key.
-            nonlocal corrected
-            before = [p.bye_week for p in current]
-            apply_schedule_byes(current, team_byes, season)
-            _fill_missing_byes(current, season)
-            corrected = sum(
-                old is not None and old != p.bye_week
-                for p, old in zip(current, before)
-            )
-            return current
-
-        players = update_players(board_path, stamp)
-        if not players:
+        except EmptyBoardError:
             print(f"No players on the board at {board_path}; run pull-free-data first.")
             raise SystemExit(1)
-        verified = sum(current_bye_week(p, season) is not None for p in players)
-        print(f"{verified} of {len(players)} players now carry a verified {season} bye; "
-              f"{corrected} stored bye week(s) changed.")
-        unverified = sorted({str(p.team) for p in players
-                             if p.team and current_bye_week(p, season) is None})
-        if unverified:
-            print(f"No {season} schedule entry for team code(s): {', '.join(unverified)}")
+        print(f"{result.verified} of {result.players} players now carry a verified {season} bye; "
+              f"{result.changed} stored bye week(s) changed.")
+        if result.unlisted_teams:
+            print(f"No {season} schedule entry for team code(s): {', '.join(result.unlisted_teams)}")
         print(f"Saved to {board_path}")
 
     p_byes = sub.add_parser(
