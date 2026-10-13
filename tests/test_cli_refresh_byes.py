@@ -138,6 +138,27 @@ class TestRefreshByes(unittest.TestCase):
         self.assertEqual(star.projections, {"rush_yd": 1000.0})
         self.assertEqual(star.adp, 5.0)
 
+    def test_a_team_code_the_schedule_does_not_list_is_gap_filled_or_named(self):
+        # The schedule only knows its own 32 codes, so a team the board spells
+        # another way gets nothing from the stamp. The teammate gap-fill a pull
+        # runs afterwards has to run here too, and a code with no verified
+        # teammate to copy from is named rather than left silently bye-less.
+        save_players(_board() + [
+            Player(id="x:1", name="Verified Packer", position="WR", team="GNB", bye_week=9,
+                   metadata={"bye_season": 2026, "bye_team": "GNB"}),
+            Player(id="x:2", name="Unstamped Packer", position="TE", team="GNB"),
+            Player(id="x:3", name="Spring Leaguer", position="QB", team="XFL", bye_week=4),
+        ], BOARD)
+        code, out, _fetch = self._run()
+        self.assertEqual(code, 0, out)
+        saved = {p.name: p for p in load_players(BOARD)}
+        self.assertEqual(current_bye_week(saved["Unstamped Packer"], 2026), 9)
+        self.assertEqual(saved["Unstamped Packer"].metadata,
+                         {"bye_season": 2026, "bye_team": "GNB"})
+        spring = saved["Spring Leaguer"]
+        self.assertEqual((spring.bye_week, spring.metadata), (4, {}))
+        self.assertIn("No 2026 schedule entry for team code(s): XFL\n", out)
+
     def test_a_second_refresh_rewrites_the_same_file(self):
         save_players(_board(), BOARD)
         self._run()

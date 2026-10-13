@@ -185,6 +185,34 @@ class TestGateSeesVerifiedByes(unittest.TestCase):
         self.assertEqual(report.stale_byes, 0)
         self.assertEqual(report.with_bye - report.with_verified_bye, 100)
 
+    def test_head_coverage_counts_byes_the_engine_uses_not_stored_ones(self):
+        # A released player keeps his bye_week but has no team to verify it
+        # against. That is not a stale bye -- refresh-byes has nothing to stamp
+        # -- but it is not coverage either: counted raw, a draftable head with
+        # no usable bye in it reads as 100% covered.
+        board = _healthy_board()
+        for player in sorted(board, key=lambda p: p.adp)[:300]:
+            player.team = None
+        report = evaluate_projection_quality(board)
+        self.assertEqual(report.with_bye, len(board))
+        self.assertEqual(report.stale_byes, 0)
+        self.assertFalse(any(STALE_BYE in issue for issue in report.issues), report.issues)
+        self.assertTrue(
+            any("verified bye-week coverage is 0.0% (0/300)" in issue for issue in report.issues),
+            report.issues)
+
+    def test_a_player_saved_with_null_metadata_is_unverified_not_a_crash(self):
+        # A hand-edited board can carry "metadata": null. current_bye_week reads
+        # metadata unguarded, and the gate must report on such a board rather
+        # than die on it.
+        board = _healthy_board()
+        for player in board[-5:]:
+            player.metadata = None
+        report = evaluate_projection_quality(board)
+        self.assertTrue(report.ok, report.issues)
+        self.assertEqual(report.stale_byes, 5)
+        self.assertEqual(report.with_verified_bye, len(board) - 5)
+
 
 class TestQualityScriptPrintsVerifiedByes(unittest.TestCase):
     """`scripts/check_projection_quality.py` is what CI and both builds run."""
