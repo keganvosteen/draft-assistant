@@ -14,6 +14,7 @@ import json
 import math
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
+from operator import itemgetter
 from typing import Dict, Iterable, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -586,15 +587,88 @@ def player_context_ids(player: Player) -> List[str]:
     return list(dict.fromkeys(item for item in ids if item))
 
 
+#: Where signals_for_player parks its index on a context. A plain instance
+#: attribute on purpose, not a PlayerContext field: fields are serialized,
+#: compared, and carried across by dataclasses.replace(), and a derived cache
+#: must be none of those.
+_SIGNAL_INDEX_ATTR = "_signal_index"
+_position = itemgetter(0)
+
+
+class _SignalIndex:
+    """``context.signals`` grouped by ``player_id``, each group in list order.
+
+    Every per-player helper below used to walk the whole signal list. Against
+    a real news cache (~6,000 signals) and the ~2,200-player board that is half
+    a second or more per pass, and one request makes several: two in
+    /api/suggest, five in /api/players.
+
+    The context is a plain mutable dataclass whose list anyone may touch --
+    ``_replace_signals`` rebinds it, tests append to it -- so the index has to
+    prove it is current rather than assume nobody did. Identity plus length is
+    not proof: a same-length in-place replacement (``signals[i] = other``, a
+    sort) passes both. So the index keeps a copy of the list it was built from
+    and is valid only while the context still holds that list and the list
+    still equals the copy. Identical objects short-circuit, which makes that
+    one C-level pass over pointers: about 5 microseconds at 6,000 signals,
+    against about 200 for the Python scan it replaces. Not free, but it cannot
+    go stale.
+    """
+
+    __slots__ = ("_source", "_snapshot", "by_id")
+
+    def __init__(self, signals: List[PlayerSignal]) -> None:
+        self._source = signals
+        # Index the copy, never the live list: if another thread mutates the
+        # list mid-build, the index still describes exactly this snapshot, and
+        # the next lookup sees the mismatch and rebuilds.
+        self._snapshot = list(signals)
+        by_id: Dict[str, List[Tuple[int, PlayerSignal]]] = {}
+        for position, signal in enumerate(self._snapshot):
+            by_id.setdefault(signal.player_id, []).append((position, signal))
+        self.by_id = by_id
+
+    def is_current(self, signals: List[PlayerSignal]) -> bool:
+        # ``is`` first. A rebound list of equal-but-distinct signals would pass
+        # the comparison alone, but only by falling off the identity fast path
+        # into a field-by-field dataclass __eq__ per element, on every lookup.
+        # (Equal is enough for the comparison itself: PlayerSignal is a frozen
+        # value type, so an equal signal in the same slot is not a change.)
+        return self._source is signals and self._snapshot == signals
+
+
+def _signal_index(context: PlayerContext) -> Dict[str, List[Tuple[int, PlayerSignal]]]:
+    signals = context.signals
+    index = getattr(context, _SIGNAL_INDEX_ATTR, None)
+    if index is None or not index.is_current(signals):
+        # Built completely before it is published and never mutated afterwards,
+        # so threads sharing a context see the old index or the new one, never
+        # a half-built one. Two racing here just build it twice.
+        index = _SignalIndex(signals)
+        setattr(context, _SIGNAL_INDEX_ATTR, index)
+    return index.by_id
+
+
 def signals_for_player(context: Optional[PlayerContext], player: Player, *, now: Optional[datetime] = None) -> List[PlayerSignal]:
     if context is None:
         return []
-    aliases = set(player_context_ids(player))
+    by_id = _signal_index(context)
     now = now or utc_now()
+    found: List[Tuple[int, PlayerSignal]] = []
+    groups = 0
+    for identity in player_context_ids(player):
+        group = by_id.get(identity)
+        if group:
+            found.extend(group)
+            groups += 1
+    if groups > 1:
+        # A player is usually known under several ids (sleeper:, gsis:, name:),
+        # each with its own group. Callers depend on the order of
+        # context.signals -- primary_availability returns the *first* injury it
+        # meets -- so merge back into list order, not the order of the ids.
+        found.sort(key=_position)
     signals = []
-    for signal in context.signals:
-        if signal.player_id not in aliases:
-            continue
+    for _, signal in found:
         expires = _parse_time(signal.expires_at)
         if expires is not None and expires < now:
             continue
