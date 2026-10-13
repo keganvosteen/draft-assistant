@@ -819,6 +819,13 @@ def parse_settings_text(text: str) -> Dict[str, object]:
     # league with the stock roster and scoring, named after its own first
     # line. Each section records what it found here instead.
     recognized = set()
+    # The row-start checks ask whether a label opens a line, and a line is
+    # whatever str.splitlines() cuts: that is how the size guard, the roster
+    # rows and the scoring rows all read this text. "^" only breaks on "\n",
+    # so a paste whose rows are separated by a bare "\r", a soft return
+    # ("\x0b") or U+2028 had its team count read and was then refused as
+    # holding no settings at all.
+    row_text = "\n".join(raw.splitlines())
 
     # 1. League name. Try candidates in priority order and keep the first
     # plausible one — a single regex stopped at the page heading "League
@@ -843,7 +850,7 @@ def parse_settings_text(text: str) -> Dict[str, object]:
     # Only a labelled row counts as having read a name. The first-line
     # fallback will name a league after anything at all, which is the bug.
     if any(_plausible_name(value) for value in (
-            *re.findall(_ROW_START + name_row, raw, re.I | re.M), *league_values)):
+            *re.findall(_ROW_START + name_row, row_text, re.I | re.M), *league_values)):
         recognized.add("league name")
 
     # 2. Number of teams. A bare "Teams" is a label of its own ("Teams: 10"),
@@ -854,7 +861,7 @@ def parse_settings_text(text: str) -> Dict[str, object]:
     teams_row = r"(?:Max Teams|(?<!Special\s)Teams|Number of Teams)[\s:]*(\d+)"
     teams_m = re.search(teams_row, raw, re.I)
     num_teams = int(teams_m.group(1)) if teams_m else 10
-    if re.search(_ROW_START + teams_row, raw, re.I | re.M):
+    if re.search(_ROW_START + teams_row, row_text, re.I | re.M):
         recognized.add("team count")
 
     # 3. Draft type
@@ -864,7 +871,7 @@ def parse_settings_text(text: str) -> Dict[str, object]:
     if dt_m and any(k in dt_m.group(1).lower() for k in ("auction", "salary cap")):
         draft_type = "auction"
     if any(word in value.lower()
-           for value in re.findall(_ROW_START + draft_row, raw, re.I | re.M)
+           for value in re.findall(_ROW_START + draft_row, row_text, re.I | re.M)
            for word in _DRAFT_TYPE_WORDS):
         recognized.add("draft type")
 

@@ -130,6 +130,23 @@ class TestStrayKeywordIsNotAField(unittest.TestCase):
         info = parse_settings_text("All teams must set their lineups before Sunday\nMax Teams: 12")
         self.assertEqual(info["numTeams"], 12)
 
+    def test_a_row_starts_after_any_line_break_the_parser_splits_on(self):
+        # The roster and scoring sections read str.splitlines() lines, which
+        # also end at a bare "\r", a soft return or U+2028. A settings row
+        # after one of those was read and then refused as unrecognized,
+        # because "^" only knows "\n".
+        for name, line_break in (("CR", "\r"), ("CRLF", "\r\n"), ("soft return", "\x0b"),
+                                 ("form feed", "\x0c"), ("NEL", "\x85"), ("U+2028", " ")):
+            with self.subTest(line_break=name):
+                def paste(row):
+                    return parse_settings_text("Lega di Paca" + line_break + row)
+                self.assertEqual(paste("Max Teams: 12")["numTeams"], 12)
+                self.assertEqual(paste("Draft Type: Live Salary Cap Draft")["draftType"], "auction")
+                self.assertEqual(paste("League Name: Sunday Football")["name"], "Sunday Football")
+                # ...and a sentence on that line is still only a sentence.
+                with self.assertRaisesRegex(ValueError, "does not look like"):
+                    paste("I think teams 3 and 4 are stacked this year")
+
 
 class TestPartialPastesStillImport(unittest.TestCase):
     """Whatever the text does not say keeps its default. Only text that says
