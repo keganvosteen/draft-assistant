@@ -119,6 +119,24 @@ YAHOO_POS = {
 # Page headings and field labels that are never a league's actual name.
 _NAME_NON_VALUES = ("settings", "name", "http", "draft", "scoring", "roster", "league")
 
+# The draft formats Yahoo's settings page names. "snake" is also what an
+# unreadable value falls back to, so only one of these proves the row was read.
+_DRAFT_TYPE_WORDS = ("auction", "salary cap", "standard", "snake", "autopick", "offline")
+
+_UNRECOGNIZED_SETTINGS = (
+    "That text does not look like a Yahoo league settings page: no team count, "
+    "roster position or scoring row could be read from it. On Yahoo, open "
+    "League > Settings, select the whole page (Ctrl+A), copy it, and paste it here."
+)
+
+
+# A settings row opens with its label; a sentence only mentions it. "League
+# Name: Sunday Football" is a field and "what should my league name be" is
+# not, and position is all that separates the two. Put in front of a label
+# pattern (with re.M) this allows indentation and bullets ahead of the label,
+# but not an earlier word.
+_ROW_START = r"^[^\w\r\n]*"
+
 # Roster labels for the line-per-position settings layout, most specific first:
 # parse_settings_text takes the first label that matches a line, so "W/R/T" must
 # be offered as FLEX before "W/R" can claim it as RBWR.
@@ -784,11 +802,23 @@ def _row_value(rows: Dict[str, List[str]], label: str) -> Optional[float]:
 
 
 def parse_settings_text(text: str) -> Dict[str, object]:
-    """Parse copied/pasted text from a Yahoo Fantasy league settings page."""
+    """Parse copied/pasted text from a Yahoo Fantasy league settings page.
+
+    A partial paste is fine — the roster table alone, or the scoring table
+    alone, imports with defaults for the rest. Text in which nothing at all
+    can be read is a ``ValueError``.
+    """
     validate_pasted_text(text, "Yahoo settings text")
     raw = text.strip()
     if not raw:
         raise ValueError("Please paste your Yahoo league settings text")
+
+    # Which parts of the league the text itself supplied. Every value below
+    # has a default behind it, so the finished result cannot say whether
+    # anything was read: "lorem ipsum dolor sit amet" imported as a 10-team
+    # league with the stock roster and scoring, named after its own first
+    # line. Each section records what it found here instead.
+    recognized = set()
 
     # 1. League name. Try candidates in priority order and keep the first
     # plausible one — a single regex stopped at the page heading "League
@@ -802,30 +832,41 @@ def parse_settings_text(text: str) -> Dict[str, object]:
             return None
         return candidate
 
+    name_row = r"League\s+Name[\s:]*([^\n\r]+)"
+    league_values = re.findall(r"^[^\S\r\n]*League[^\S\r\n]*[:\t]\s*([^\n\r]+)", raw, re.I | re.M)
     name = "Yahoo League"
-    for value in (
-        *re.findall(r"League\s+Name[\s:]*([^\n\r]+)", raw, re.I),
-        *re.findall(r"^[^\S\r\n]*League[^\S\r\n]*[:\t]\s*([^\n\r]+)", raw, re.I | re.M),
-        raw.splitlines()[0],
-    ):
+    for value in (*re.findall(name_row, raw, re.I), *league_values, raw.splitlines()[0]):
         plausible = _plausible_name(value)
         if plausible:
             name = plausible
             break
+    # Only a labelled row counts as having read a name. The first-line
+    # fallback will name a league after anything at all, which is the bug.
+    if any(_plausible_name(value) for value in (
+            *re.findall(_ROW_START + name_row, raw, re.I | re.M), *league_values)):
+        recognized.add("league name")
 
     # 2. Number of teams. A bare "Teams" is a label of its own ("Teams: 10"),
     # but it is also the tail of the "Defense/Special Teams" roster row, and a
     # paste holding only the roster table has no real team count ahead of that
     # row to win the search — so the league came back with as many teams as it
     # had defense slots, which the web layer then refuses as out of range.
-    teams_m = re.search(r"(?:Max Teams|(?<!Special\s)Teams|Number of Teams)[\s:]*(\d+)", raw, re.I)
+    teams_row = r"(?:Max Teams|(?<!Special\s)Teams|Number of Teams)[\s:]*(\d+)"
+    teams_m = re.search(teams_row, raw, re.I)
     num_teams = int(teams_m.group(1)) if teams_m else 10
+    if re.search(_ROW_START + teams_row, raw, re.I | re.M):
+        recognized.add("team count")
 
     # 3. Draft type
+    draft_row = r"Draft Type[\s:]*([^\n\r]+)"
     draft_type = "snake"
-    dt_m = re.search(r"Draft Type[\s:]*([^\n\r]+)", raw, re.I)
+    dt_m = re.search(draft_row, raw, re.I)
     if dt_m and any(k in dt_m.group(1).lower() for k in ("auction", "salary cap")):
         draft_type = "auction"
+    if any(word in value.lower()
+           for value in re.findall(_ROW_START + draft_row, raw, re.I | re.M)
+           for word in _DRAFT_TYPE_WORDS):
+        recognized.add("draft type")
 
     # 4. Roster positions
     roster = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "FLEX": 0, "K": 0, "DST": 0, "BN": 0}
@@ -836,6 +877,7 @@ def parse_settings_text(text: str) -> Dict[str, object]:
             key = YAHOO_POS.get(tok)
             if key:
                 roster[key] = roster.get(key, 0) + 1
+                recognized.add("roster")
     else:
         # Line-per-position layout. The label must start the line and the count
         # must end it: searching the whole blob let any word ending in the
@@ -849,6 +891,7 @@ def parse_settings_text(text: str) -> Dict[str, object]:
             if position_row is not None:
                 key, count = position_row
                 roster[key] = roster.get(key, 0) + count
+                recognized.add("roster")
 
     if not any(roster.values()):
         roster = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DST": 1, "BN": 6}
@@ -862,9 +905,11 @@ def parse_settings_text(text: str) -> Dict[str, object]:
         if not m:
             return default
         try:
-            return float(m.group(1))
+            value = float(m.group(1))
         except (ValueError, TypeError):
             return default
+        recognized.add("scoring")
+        return value
 
     def _stat(labels, pat, default=None):
         """The league's value for a stat, falling back to a loose search.
@@ -877,6 +922,7 @@ def parse_settings_text(text: str) -> Dict[str, object]:
         for label in labels:
             value = _row_value(rows, label)
             if value is not None:
+                recognized.add("scoring")
                 return value
         return _parse_num(pat, default)
 
@@ -893,6 +939,7 @@ def parse_settings_text(text: str) -> Dict[str, object]:
     sack_taken = _row_value(rows, "Sacks")
     if sack_taken is not None:
         scoring["sack_taken"] = sack_taken
+        recognized.add("scoring")
 
     # Rushing
     rush_yd_raw = _stat(["Rushing Yards"], r"Rushing Yards?[\s:]*(\d+(?:\.\d+)?)")
@@ -951,6 +998,13 @@ def parse_settings_text(text: str) -> Dict[str, object]:
     fg_miss = _parse_num(r"Field Goals? Missed[\s:]*([+-]?\d+(?:\.\d+)?)")
     if fg_miss is not None:
         scoring["fg_miss"] = fg_miss
+
+    # Nothing read anywhere means this was not a settings page. Say so rather
+    # than hand back a league built entirely from the defaults above — the form
+    # fills in, the import reports success, and the user drafts against rules
+    # that are not their league's.
+    if not recognized:
+        raise ValueError(_UNRECOGNIZED_SETTINGS)
 
     # A reception value that is not one of the three named formats has to be
     # carried as custom scoring: the UI rewrites rec from the scoring type

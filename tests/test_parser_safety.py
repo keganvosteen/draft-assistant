@@ -127,14 +127,28 @@ class TestMalformedInputScaling(unittest.TestCase):
             from draft_assistant.importers.yahoo import (
                 _roster_position_row, _numbered_team_name, parse_settings_text,
             )
+            def rejected(text):
+                # Deciding that a paste holds no settings at all means every
+                # label search has run over the whole of it and missed.
+                try:
+                    parse_settings_text(text)
+                except ValueError:
+                    return
+                raise AssertionError('unrecognizable settings text was accepted')
+
             cases = {
                 'suffix': (normalize_player_name, lambda n: 'Player' + ' ' * n + '!'),
                 'parentheses': (_remove_parenthetical_annotations, lambda n: '(' * n + '!'),
                 'delimiters': (_trim_name_delimiters, lambda n: 'Player' + '-' * n + '!'),
                 'roster': (_roster_position_row, lambda n: 'WR' + ' ' * n + '!'),
-                'scoring': (parse_settings_text, lambda n: 'Passing Yards' + ' ' * n + '!'),
+                # The team count keeps this a recognizable paste, so the scoring
+                # scan is timed through to a result rather than to a rejection.
+                'scoring': (parse_settings_text,
+                            lambda n: 'Max Teams: 12\\nPassing Yards' + ' ' * n + '!'),
                 'team_name': (_numbered_team_name, lambda n: '1. Team' + ' ' * n + '!'),
                 'team_index': (_numbered_team_name, lambda n: '9' * n + '!'),
+                'stray_label': (rejected, lambda n: 'Teams' + ' ' * n + '!'),
+                'row_start': (rejected, lambda n: '-' * n + 'Teams!'),
             }
             timings = {}
             with mock.patch('draft_assistant.importers.yahoo.validate_pasted_text'):
@@ -153,7 +167,7 @@ class TestMalformedInputScaling(unittest.TestCase):
             cwd=Path(__file__).resolve().parents[1], timeout=20, check=True,
         )
         timings = json.loads(result.stdout)
-        self.assertEqual(len(timings), 7)
+        self.assertEqual(len(timings), 9)
         for family, (small, large) in timings.items():
             with self.subTest(family=family):
                 # Four times the input may take a little more than four times
