@@ -813,8 +813,12 @@ def parse_settings_text(text: str) -> Dict[str, object]:
             name = plausible
             break
 
-    # 2. Number of teams
-    teams_m = re.search(r"(?:Max Teams|Teams|Number of Teams)[\s:]*(\d+)", raw, re.I)
+    # 2. Number of teams. A bare "Teams" is a label of its own ("Teams: 10"),
+    # but it is also the tail of the "Defense/Special Teams" roster row, and a
+    # paste holding only the roster table has no real team count ahead of that
+    # row to win the search — so the league came back with as many teams as it
+    # had defense slots, which the web layer then refuses as out of range.
+    teams_m = re.search(r"(?:Max Teams|(?<!Special\s)Teams|Number of Teams)[\s:]*(\d+)", raw, re.I)
     num_teams = int(teams_m.group(1)) if teams_m else 10
 
     # 3. Draft type
