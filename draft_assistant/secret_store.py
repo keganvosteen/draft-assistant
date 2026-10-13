@@ -259,10 +259,26 @@ def _keychain_read(account: str) -> Optional[str]:
 
 
 def _keychain_delete(account: str) -> None:
-    subprocess.run(
+    result = subprocess.run(
         ["security", "delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account],
         capture_output=True,
     )
+    # A delete that failed used to pass for one that worked, and forget() went
+    # on to remove the marker. That was survivable while the item's name could
+    # be recomputed from the path; a random id lives nowhere but that marker.
+    # "No such item" exits non-zero as well, so the status cannot tell the two
+    # apart — ask whether the item is still there.
+    if result.returncode != 0 and _keychain_has(account):
+        raise OSError("Could not remove credentials from the macOS Keychain")
+
+
+def _keychain_has(account: str) -> bool:
+    # Without -w this prints the item's attributes and never its password.
+    result = subprocess.run(
+        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account],
+        capture_output=True,
+    )
+    return result.returncode == 0
 
 
 def _read_body(path: str, strict: bool = False) -> Optional[dict]:
@@ -478,6 +494,9 @@ def forget(path: str, account: str) -> None:
                 _keychain_delete(item)
             if legacy != item:
                 _keychain_delete(legacy)
+        # Last, and only once the items are gone: a delete that fails raises,
+        # and until it succeeds the marker is all that says which item to
+        # come back for.
         try:
             os.remove(path)
         except FileNotFoundError:

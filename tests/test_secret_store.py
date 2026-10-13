@@ -619,6 +619,7 @@ class FakeSecurity:
         self.stdin_exit = None
         self.mangle_stdin = None
         self.fail_argv_writes = False
+        self.refuse_delete = False
 
     def run(self, argv, input=None, capture_output=False, text=False, timeout=None, **_):
         argv = list(argv)
@@ -748,13 +749,23 @@ class FakeSecurity:
         secret = self.items.get(options[b"-a"].decode("utf-8"))
         if secret is None:
             return 44  # errSecItemNotFound
+        if b"-w" not in options:
+            # Attributes only: all this says is that the item exists.
+            out.append(b'keychain: "login.keychain-db"\n')
+            return 0
         # -w prints anything that is not printable ASCII as hex.
         printable = all(0x20 <= byte < 0x7F for byte in secret)
         out.append((secret if printable else secret.hex().encode("ascii")) + b"\n")
         return 0
 
     def _delete(self, options, out, mangle):
-        return 0 if self.items.pop(options[b"-a"].decode("utf-8"), None) is not None else 44
+        account = options[b"-a"].decode("utf-8")
+        if account not in self.items:
+            return 44
+        if self.refuse_delete:
+            return 36  # errSecInteractionNotAllowed: found, and still there
+        del self.items[account]
+        return 0
 
 
 class TestKeychainTransport(unittest.TestCase):
@@ -1034,6 +1045,65 @@ class TestKeychainTransport(unittest.TestCase):
                     self.assertRegex(json.load(handle)["account"], r"\Aespn:[0-9a-f]{32}\Z")
             secret_store.forget(path, "espn")
         self.assertEqual(self.fake.items, {})
+        self.assertFalse(os.path.exists(path))
+
+    def _store(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return os.path.join(directory.name, "profile", "yahoo.json")
+
+    def test_forget_keeps_the_marker_when_the_item_could_not_be_deleted(self):
+        # The tool exits non-zero and the item is still there — a locked
+        # keychain whose unlock prompt was dismissed, say. forget() used to
+        # remove the marker regardless and report success, and with the id
+        # recorded nowhere else the secret stayed in the Keychain for good.
+        path = self._store()
+        with patch.object(secret_store, "backend", return_value="keychain"):
+            secret_store.save(path, "yahoo", {"token": "sensitive-token"})
+            with open(path, encoding="utf-8") as handle:
+                item = json.load(handle)["account"]
+            self.fake.refuse_delete = True
+            for forget in (lambda: secret_store.forget(path, "yahoo"),
+                           lambda: secret_store.save(path, "yahoo", {})):
+                with self.assertRaises(OSError) as raised:
+                    forget()
+                self.assertEqual(str(raised.exception), "Could not remove credentials from the macOS Keychain")
+                self.assertIsNone(raised.exception.__context__)
+                self.assertIn(item, self.fake.items)
+                self.assertEqual(secret_store.load(path, "yahoo"), {"token": "sensitive-token"})
+            # Nothing was lost: once the tool will delete, the marker that was
+            # kept finishes the job.
+            self.fake.refuse_delete = False
+            secret_store.forget(path, "yahoo")
+        self.assertEqual(self.fake.items, {})
+        self.assertFalse(os.path.exists(path))
+
+    def test_deleting_what_is_not_there_is_not_a_failure(self):
+        # "No such item" exits non-zero too, and forget() asks for the 0.7.4
+        # path-derived name every time although it almost never exists.
+        path = self._store()
+        with patch.object(secret_store, "backend", return_value="keychain"):
+            secret_store.forget(path, "yahoo")
+            secret_store.save(path, "yahoo", {"token": "one"})
+            secret_store.forget(path, "yahoo")
+        self.assertEqual(self.fake.items, {})
+        self.assertFalse(os.path.exists(path))
+        secret_store._keychain_delete("yahoo:" + "b" * 32)
+        # Telling the two apart asks whether the item exists, never for its password.
+        probes = [argv for argv, _, _ in self.fake.calls
+                  if argv[1] == "find-generic-password" and "-w" not in argv]
+        self.assertTrue(probes)
+        for argv in probes:
+            self.assertEqual(argv, ["security", "find-generic-password", "-s", "DraftAssistant", "-a", argv[5]])
+
+    def test_a_refused_cleanup_does_not_hide_why_the_first_save_failed(self):
+        path = self._store()
+        self.fake.refuse_delete = True
+        with patch.object(secret_store, "backend", return_value="keychain"), \
+             patch("draft_assistant.storage.atomic_write_json", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError) as raised:
+                secret_store.save(path, "yahoo", {"token": "one"})
+        self.assertEqual(str(raised.exception), "disk full")
         self.assertFalse(os.path.exists(path))
 
 
