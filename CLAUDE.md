@@ -19,7 +19,7 @@
 ## Key Details
 
 - Python 3.10+, no external dependencies for core app
-- 581 tests in `tests/`
+- 686 tests in `tests/`
 - Web UI uses hashed, license-inventoried vendored React + in-browser Babel (no build step), with no runtime CDN dependency.
 - Player data lives in `data/projections.json` (tracked)
 - League config in `league.config.json`
@@ -67,6 +67,7 @@
 - **Ownership must survive a player the board has never heard of.** `synced_rosters_to_picks` keeps an unmatched or duplicate-resolving roster entry as a placeholder carrying `providerPlayerId`/`sourceName`/`sourcePosition`/`sourceTeam` and `unmatched: true` — never `continue`, or a rostered player with no projection reads as a free agent. `resolve_roster_entries` re-resolves those placeholders against today's board on every scan (without mutating the stored snapshot), so a later data pull quietly upgrades them. For the same reason the provider parsers keep id-only rows: a missing name or position is not evidence the player is unowned.
 - **Bench, IR, reserve and taxi are roster spots.** Sleeper's `reserve` and `taxi` lists sit beside `players`, and ESPN/Yahoo mark reserve slots rather than omitting them — every one of those players is unavailable on waivers, so all of them must reach the snapshot.
 - **Sleeper live draft sync** (`POST /api/sleeper/draft`) is the only real-draft feed: Sleeper publishes actual pick numbers and seats, so `synced_draft_to_picks` returns true picks and `draft-screen.jsx` polls it every 5s behind the "Go Live" button. **Every pick must survive to the output list.** The UI reads the next pick as `picks.length + 1`, so dropping one shifts the clock for the rest of the draft. Both an unmatched player *and* a second pick that resolves to an already-taken board player become placeholders — never `continue`.
+- **A pasted Yahoo settings page has to prove it was one.** Every value `yahoo.parse_settings_text` returns has a default behind it, so the finished result cannot say whether anything was read: `lorem ipsum` used to import as a 10-team league named after its own first line. Each section now adds to `recognized` (a labelled league-name row, team count, draft type, a roster position, a scoring row) and an empty set is a `ValueError`, which the handler returns as a 400 telling the user what to paste. A partial paste still imports — the scoring table alone, or the roster alone, with defaults for the rest — so a new section must add to `recognized` or pastes holding only that section start being refused. The row-start checks run over `row_text` (the `splitlines()` view), because `^` only breaks on `\n` while the rest of the parser splits on every line break.
 
 ## Data pulls
 
