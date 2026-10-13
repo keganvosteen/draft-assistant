@@ -1903,9 +1903,15 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
                 next_pick = pick + 1
 
             players_in_body = body.get("players")
-            if "players" in body:
-                if not isinstance(players_in_body, list) or len(players_in_body) > MAX_DRAFT_CANDIDATES:
-                    raise ValueError(f"players must be a list of at most {MAX_DRAFT_CANDIDATES:,} candidates")
+            if "players" in body and (
+                    not isinstance(players_in_body, list)
+                    or len(players_in_body) > MAX_DRAFT_CANDIDATES):
+                raise ValueError(f"players must be a list of at most {MAX_DRAFT_CANDIDATES:,} candidates")
+            # An empty list is not a candidate set. The browser sends the key
+            # on every request, so a paste made before its board has loaded
+            # arrives as [] — and taking that literally matched every pasted
+            # line against nothing. Only a non-empty list replaces the board.
+            if players_in_body:
                 available_players = players_in_body
             else:
                 loaded, _ = _load_players(self.profile)
