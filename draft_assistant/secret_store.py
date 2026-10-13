@@ -109,12 +109,19 @@ def _report_plaintext_removed(path: str, account: str) -> None:
     # enough — moves it into memory and deletes it. Doing that quietly meant
     # saved credentials simply vanished at the next restart.
     _plaintext_removed.add(_identity(path, account))
-    print(
-        f"WARNING: removed the unencrypted credential file {os.path.abspath(path)}. "
-        "This platform has no supported keystore, so those credentials are now held "
-        "only in memory and must be re-entered after the app restarts.",
-        file=sys.stderr,
-    )
+    try:
+        print(
+            f"WARNING: removed the unencrypted credential file {os.path.abspath(path)}. "
+            "This platform has no supported keystore, so those credentials are now held "
+            "only in memory and must be re-entered after the app restarts.",
+            file=sys.stderr,
+        )
+    except (OSError, ValueError):
+        # A closed or broken stderr must not fail the read that got here. By
+        # now the file is gone and its credentials are in memory, so raising
+        # only turned the first status poll into an error; describe() still
+        # tells the UI what this line could not.
+        pass
 
 
 # ── Windows DPAPI ────────────────────────────────────────────────────────────

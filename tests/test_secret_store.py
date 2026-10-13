@@ -202,6 +202,27 @@ class TestSecretStore(unittest.TestCase):
                 self.assertTrue(secret_store.is_sealed(self.path))
         self.assertEqual(stderr.getvalue(), "")
 
+    def test_a_notice_that_cannot_be_written_does_not_fail_the_read(self):
+        # The file is deleted and its credentials are in memory by the time
+        # the notice is printed. A closed or broken stderr raised out of
+        # load() right there, where 0.7.4 simply returned the credentials.
+        class BrokenPipe(io.StringIO):
+            def write(self, text):
+                raise BrokenPipeError(32, "Broken pipe")
+
+        closed = io.StringIO()
+        closed.close()
+        for label, stream in (("broken pipe", BrokenPipe()), ("closed", closed)):
+            with self.subTest(stderr=label):
+                self._plaintext()
+                with patch.object(secret_store, "backend", return_value="none"), \
+                     contextlib.redirect_stderr(stream):
+                    self.assertEqual(secret_store.load(self.path, "espn"), self.data)
+                    self.assertFalse(os.path.exists(self.path))
+                    # What the UI is told does not depend on stderr.
+                    self.assertTrue(secret_store.plaintext_removed(self.path, "espn"))
+                    secret_store.forget(self.path, "espn")
+
     def test_forgetting_ends_the_removed_plaintext_report(self):
         self._plaintext()
         with patch.object(secret_store, "backend", return_value="none"), \
