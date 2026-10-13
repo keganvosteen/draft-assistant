@@ -180,6 +180,17 @@ console.log('Waiver roster fallback decision: PASS');
     assert.equal(state.error, 'Could not sync current rosters from Yahoo. Yahoo authorization expired. '
       + 'Check the league connection in League settings, then retry Sync.');
   }
+
+  // A superseded sync that SUCCEEDS late is no better than one that fails
+  // late: its rosters would sit under the newer failure's "as of" label.
+  screen.latestLeague.current = {...linked, rosterSnapshot:savedRosters};
+  screen.runSync(false);
+  screen.runSync(false);
+  const [superseded, latest] = pending.slice(-2);
+  latest.reject(outage); await settle();
+  superseded.resolve(fresh); await settle();
+  assert.equal(state.rosterSnapshot, savedRosters, 'a superseded sync succeeding late must not replace the newer outcome');
+  assert.equal(state.syncFailure, 'Yahoo authorization expired.');
   console.log('Waiver sync failure fallback and sequencing: PASS');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 

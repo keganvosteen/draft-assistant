@@ -152,6 +152,12 @@ class TestRefreshByesEndpoint(_ServerFixture):
                 self.assertEqual(status, 403, body)
         self.fetch.assert_not_called()
         self.assertEqual(_bytes(self.board), before)
+        # Those refusals are the guard's doing, not a route that was never
+        # there: the 403 comes before dispatch, so on its own it would pass
+        # with the endpoint deleted. The app's own page gets through.
+        status, body = self.refresh(headers={"Sec-Fetch-Site": "same-origin"})
+        self.assertEqual(status, 200, body)
+        self.fetch.assert_called_once_with(SEASON)
 
 
 if __name__ == "__main__":
