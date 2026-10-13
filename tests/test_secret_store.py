@@ -348,6 +348,21 @@ class TestKeychainProfiles(unittest.TestCase):
         with open(path, "wb") as handle:
             handle.write(content)
 
+    def test_a_marker_nested_too_deep_to_parse_can_still_be_replaced_and_forgotten(self):
+        # json reports that with RecursionError, not ValueError. 0.7.4 never
+        # parsed the file in save() or forget(), so it could stop neither;
+        # here it left a store nothing in the app could clear.
+        nested = b"[" * 100000
+        name = self._store_from_0_7_4(self.first, {"token": "old"})
+        self._write(self.first, nested)
+        self.assertEqual(secret_store.load(self.first, "yahoo"), {})
+        secret_store.save(self.first, "yahoo", {"token": "new"})
+        self.assertEqual(secret_store.load(self.first, "yahoo"), {"token": "new"})
+        self._write(self.first, nested)
+        secret_store.forget(self.first, "yahoo")
+        self.assertNotIn(name, self.entries)
+        self.assertFalse(os.path.exists(self.first))
+
     def test_forget_removes_both_the_marker_item_and_the_0_7_4_path_item(self):
         # 0.7.4 wrote an item here and its marker was lost (the directory was
         # deleted and recreated, say). The next save mints a fresh id, so

@@ -270,7 +270,10 @@ def _read_body(path: str) -> Optional[dict]:
     try:
         with open(path, encoding="utf-8") as handle:
             body = json.load(handle)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
+        # RecursionError is how json gives up on a deeply nested file. 0.7.4's
+        # save() and forget() never parsed the file at all, so letting it
+        # through left a store that could be neither replaced nor forgotten.
         return None
     return body if isinstance(body, dict) else None
 
