@@ -40,6 +40,7 @@ What a case pins, and why only that:
 import itertools
 import json
 import sys
+import tempfile
 import unittest
 import zlib
 from functools import lru_cache
@@ -297,6 +298,20 @@ def render(document):
     )
 
 
+def write_fixture(document, path=FIXTURE_PATH):
+    """Regenerate the file with the line endings this checkout already gave it.
+
+    It is LF in the repository, but git hands it out with CRLF wherever
+    core.autocrlf is on. Rewriting that copy with LF changes its size, and git
+    calls a changed size a modification without reading the file: a regenerate
+    that altered nothing left ``git status`` listing the file beside an empty
+    ``git diff``.
+    """
+    newline = "\r\n" if path.is_file() and b"\r\n" in path.read_bytes() else "\n"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(render(document), encoding="utf-8", newline=newline)
+
+
 # ── The independent reference ────────────────────────────────────────────────
 # No matching and no greedy order, so it shares no logic with either
 # implementation. tests/test_slot_assignment.py's reference tries every player
@@ -394,6 +409,21 @@ class TestLineupParityFixtures(unittest.TestCase):
             f"If the engine change is intended, regenerate with `{REGENERATE}` and commit the file - then run "
             "`node scripts/check_lineup_parity.js`, because the browser must reproduce the new file too."
         )
+
+    def test_regenerating_keeps_the_line_endings_of_the_checkout(self):
+        rendered = render(self.document)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "lineup_parity.json"
+            write_fixture(self.document, path)
+            self.assertEqual(path.read_bytes(), rendered.encode("utf-8"), "a new file is written with LF")
+            for newline in ("\r\n", "\n"):
+                with self.subTest(newline=newline):
+                    checked_out = rendered.replace("\n", newline).encode("utf-8")
+                    path.write_bytes(checked_out)
+                    write_fixture(self.document, path)
+                    # Byte for byte: a different size is all git needs to
+                    # report the file as modified.
+                    self.assertEqual(path.read_bytes(), checked_out)
 
     def test_every_case_matches_an_exhaustive_search(self):
         for label, slots, case in _cases(self.document):
@@ -521,8 +551,7 @@ class TestLineupParityFixtures(unittest.TestCase):
 if __name__ == "__main__":
     if "--write" in sys.argv[1:]:
         document = build_document()
-        FIXTURE_PATH.parent.mkdir(exist_ok=True)
-        FIXTURE_PATH.write_text(render(document), encoding="utf-8", newline="\n")
+        write_fixture(document)
         print(f"Wrote {sum(1 for _ in _cases(document))} cases to {FIXTURE_PATH}")
         print("Now run: node scripts/check_lineup_parity.js")
     else:
