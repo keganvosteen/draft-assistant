@@ -151,6 +151,13 @@ EDGE_ROSTERS = [
       ["WR0", "WR", 281], ["WR1", "WR", 261], ["WR2", "WR", 241], ["WR3", "WR", 181], ["WR4", "WR", 161],
       ["TE0", "TE", 221], ["TE1", "TE", 201], ["TE2", "TE", 151],
       ["K0", "K", 141], ["K1", "K", 131], ["DST0", "DST", 121], ["DST1", "DST", 111]]),
+    # The browser's search walks dedicated slots as well as flex ones. The
+    # third TE starts only if the TE in each TE slot moves along and the WR
+    # leaves W/T for R/W: three starters relocating for one. No case above
+    # needs more than two, so a search that gave up after two passed them all
+    # while random rosters showed it leaving a starter on the bench.
+    ("three-starters-move", {"TE": 2, "WRTE": 1, "RBWR": 1},
+     [["TE0", "TE", 131], ["TE1", "TE", 121], ["WR0", "WR", 111], ["TE2", "TE", 101]]),
 ]
 
 
@@ -479,6 +486,14 @@ class TestLineupParityFixtures(unittest.TestCase):
             whole = {pid: int(value) for pid, _, value in case["players"]}
             return sorted(player.id for player in roster_value(board, whole, slots).starters) != case["starters"]
 
+        def three_starters_move(slots, case):
+            # The browser seats the lowest projection last. A TE arriving to
+            # find both TE slots and W/T taken starts only if all three move.
+            if not (slots.get("TE", 0) >= 2 and slots.get("WRTE") and slots.get("RBWR")) or case["open"]:
+                return False
+            last = min(case["players"], key=lambda player: player[2])
+            return last[1] == "TE" and started(case, "TE") > slots["TE"] and started(case, "WR") > 0
+
         situations = {
             "W/T and R/W both filled": lambda slots, case: (
                 slots.get("WRTE") and slots.get("RBWR") and not case["open"]),
@@ -496,6 +511,7 @@ class TestLineupParityFixtures(unittest.TestCase):
             "a second QB, a third WR and a third FLEX all starting": lambda slots, case: (
                 slots.get("QB", 0) >= 2 and slots.get("WR", 0) >= 3 and slots.get("FLEX", 0) >= 3
                 and not case["open"]),
+            "three starters moving to seat one more": three_starters_move,
         }
         for situation, applies in situations.items():
             with self.subTest(situation=situation):
