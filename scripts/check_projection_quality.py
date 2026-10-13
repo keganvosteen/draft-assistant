@@ -32,11 +32,15 @@ def main() -> int:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
     else:
         status = "PASS" if report.ok else "FAIL"
+        # "with byes" alone read as healthy on a board whose every bye was
+        # being ignored; the verified count is the one the engine uses.
+        verified = (f"{report.with_verified_bye} verified for {report.bye_season}"
+                    if report.bye_season is not None else "0 verified, none stamped")
         print(
             f"Projection quality: {status} — {report.total} players, "
             f"{report.projected} projected, {report.with_adp} with ADP, "
-            f"{report.with_bye} with byes, {report.with_history} with history, "
-            f"{report.consensus} consensus"
+            f"{report.with_bye} with byes ({verified}), "
+            f"{report.with_history} with history, {report.consensus} consensus"
         )
         for issue in report.issues:
             print(f"- {issue}")

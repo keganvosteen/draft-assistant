@@ -49,6 +49,61 @@ class TestScheduleByes(unittest.TestCase):
             self.assertEqual(fs._fetch_nflverse_byes(2026), {"LAR": 6, "JAX": 6})
 
 
+class TestApplyScheduleByes(unittest.TestCase):
+    """One stamping rule, shared by the full pull and the bye-only refresh."""
+
+    def test_stamps_week_season_and_team_and_reports_how_many(self):
+        fresh = player("Fresh")
+        stale = player("Stale", team="DET", bye=9, season=2025, bye_team="DET")
+        stamped = fs.apply_schedule_byes([fresh, stale], {"KC": 6, "DET": 7}, 2026)
+        self.assertEqual(stamped, 2)
+        self.assertEqual(fresh.bye_week, 6)
+        self.assertEqual(fresh.metadata, {"bye_season": 2026, "bye_team": "KC"})
+        self.assertEqual(current_bye_week(stale, 2026), 7)
+
+    def test_provenance_keeps_the_board_spelling_of_an_aliased_team(self):
+        # The schedule is keyed by canonical code, but current_bye_week compares
+        # bye_team to player.team literally: stamping "LAR" on a player the
+        # board calls "LA" would verify nothing.
+        for team, code in (("LA", "LAR"), ("JAC", "JAX"), ("WSH", "WAS")):
+            with self.subTest(team=team):
+                aliased = player(team=team)
+                self.assertEqual(fs.apply_schedule_byes([aliased], {code: 11}, 2026), 1)
+                self.assertEqual(aliased.metadata["bye_team"], team)
+                self.assertEqual(current_bye_week(aliased, 2026), 11)
+
+    def test_a_stamp_left_over_from_a_previous_team_is_replaced(self):
+        traded = player(team="DET", bye=6, season=2026, bye_team="KC")
+        self.assertIsNone(current_bye_week(traded, 2026))
+        fs.apply_schedule_byes([traded], {"KC": 6, "DET": 7}, 2026)
+        self.assertEqual(current_bye_week(traded, 2026), 7)
+
+    def test_a_defense_is_stamped_like_any_rostered_player(self):
+        defense = Player(id="sleeper:DET", name="Detroit Lions", position="DST", team="DET")
+        self.assertEqual(fs.apply_schedule_byes([defense], {"DET": 7}, 2026), 1)
+        self.assertEqual(current_bye_week(defense, 2026), 7)
+
+    def test_players_off_the_schedule_are_left_exactly_as_they_were(self):
+        free_agent = player("Free Agent", team=None, bye=9, season=2025, bye_team="KC")
+        unlisted = player("Unlisted", team="XFL", bye=4)
+        self.assertEqual(fs.apply_schedule_byes([free_agent, unlisted], {"KC": 6}, 2026), 0)
+        self.assertEqual((free_agent.bye_week, free_agent.metadata),
+                         (9, {"bye_season": 2025, "bye_team": "KC"}))
+        self.assertEqual((unlisted.bye_week, unlisted.metadata), (4, {}))
+
+    def test_only_the_bye_fields_are_touched(self):
+        board_player = Player(
+            id="sleeper:1", name="Star RB", position="RB", team="KC", adp=5.0,
+            projections={"rush_yd": 1000.0}, historical_stats={2025: {"rush_yd": 900.0}},
+            metadata={"sleeper_id": "1", "sources": ["sleeper_projections"]})
+        fs.apply_schedule_byes([board_player], {"KC": 6}, 2026)
+        self.assertEqual(board_player, Player(
+            id="sleeper:1", name="Star RB", position="RB", team="KC", adp=5.0, bye_week=6,
+            projections={"rush_yd": 1000.0}, historical_stats={2025: {"rush_yd": 900.0}},
+            metadata={"sleeper_id": "1", "sources": ["sleeper_projections"],
+                      "bye_season": 2026, "bye_team": "KC"}))
+
+
 class TestByeMerging(unittest.TestCase):
     def test_unverified_old_and_other_team_byes_do_not_spread(self):
         for donor in (player(bye=6), player(bye=6, season=2025),

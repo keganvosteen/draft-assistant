@@ -262,11 +262,7 @@ def pull_free_data(
 
     try:
         team_byes = _fetch_nflverse_byes(season)
-        for player in merged.values():
-            bye = team_byes.get(_bye_team(player.team))
-            if bye:
-                player.bye_week = bye
-                player.metadata.update({"bye_season": season, "bye_team": player.team})
+        apply_schedule_byes(merged.values(), team_byes, season)
         reports.append(SourceReport("nflverse schedule", len(team_byes),
                                     ok=bool(team_byes), detail=str(season)))
         if not team_byes:
@@ -367,6 +363,29 @@ def _fetch_nflverse_byes(season: int) -> Dict[str, int]:
                 weeks_by_team.setdefault(team, set()).add(week)
     return {team: next(iter(all_weeks - weeks))
             for team, weeks in weeks_by_team.items() if len(all_weeks - weeks) == 1}
+
+
+def apply_schedule_byes(players: Iterable[Player], team_byes: Dict[str, int], season: int) -> int:
+    """Stamp each player whose team is on the schedule; return how many were.
+
+    The stamp is what makes a bye usable at all: ``current_bye_week`` ignores a
+    ``bye_week`` whose ``bye_season``/``bye_team`` do not match. It is shared by
+    the full pull and by ``refresh-byes``, so a board repaired in place carries
+    exactly the provenance a fresh pull would have written. Only the three bye
+    fields are touched, and a player whose team is not in ``team_byes`` is left
+    alone.
+    """
+    stamped = 0
+    for player in players:
+        bye = team_byes.get(_bye_team(player.team))
+        if bye:
+            player.bye_week = bye
+            # The team as the board spells it, not the schedule's code: the
+            # schedule is looked up through _bye_team ("LA" -> "LAR"), but
+            # current_bye_week compares bye_team to player.team literally.
+            player.metadata.update({"bye_season": season, "bye_team": player.team})
+            stamped += 1
+    return stamped
 
 
 def _fill_missing_byes(players: Iterable[Player], season: Optional[int] = None) -> None:
