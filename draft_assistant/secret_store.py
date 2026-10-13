@@ -265,12 +265,22 @@ def _keychain_delete(account: str) -> None:
     )
 
 
-def _read_body(path: str) -> Optional[dict]:
-    """The store file's JSON object, or None if it is missing or not one."""
+def _read_body(path: str, strict: bool = False) -> Optional[dict]:
+    """The store file's JSON object, or None if it is missing or not one.
+
+    *strict* raises OSError for a file that is there but cannot be read just
+    now, instead of passing it off as missing. See _marker_item().
+    """
     try:
         with open(path, encoding="utf-8") as handle:
             body = json.load(handle)
-    except (OSError, ValueError, RecursionError):
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError:
+        if strict:
+            raise
+        return None
+    except (ValueError, RecursionError):
         # RecursionError is how json gives up on a deeply nested file. 0.7.4's
         # save() and forget() never parsed the file at all, so letting it
         # through left a store that could be neither replaced nor forgotten.
@@ -296,13 +306,36 @@ def _keychain_item(body: Optional[dict], account: str) -> Optional[str]:
     return None
 
 
+def _marker_item(path: str, account: str) -> Optional[str]:
+    """_keychain_item() for save() and forget(), which go on to replace or
+    remove the marker.
+
+    The marker is the only record of a per-store item, so one that is there
+    but cannot be read just now — too many open files, a permissions slip, a
+    synced folder that is offline — has to stop them. Taking it for absent had
+    save() mint a second item and forget() delete the file, and either way the
+    item it named stayed in the Keychain where nothing could find it again.
+    0.7.4 could not lose one like that: it recomputed the name from the path.
+    """
+    try:
+        body = _read_body(path, strict=True)
+    except OSError as error:
+        reason = error.strerror or type(error).__name__
+    else:
+        return _keychain_item(body, account)
+    raise OSError(
+        f"Could not read the credential marker {os.path.abspath(path)} ({reason}). It is the "
+        "only record of this profile's Keychain item, so nothing was changed; try again."
+    )
+
+
 def _keychain_save(path: str, account: str, secret: str) -> None:
     from .storage import atomic_write_json
 
     # Reuse the id the marker already holds. A random id that lives in the
     # marker travels with the directory, where 0.7.4's path-derived name lost
     # the credential — and orphaned the item — as soon as the directory moved.
-    item = _keychain_item(_read_body(path), account)
+    item = _marker_item(path, account)
     minted = item is None
     if minted:
         item = f"{account}:{uuid.uuid4().hex}"
@@ -439,7 +472,7 @@ def forget(path: str, account: str) -> None:
             # copy: a 0.7.4 store that was *moved away* still reads that item
             # through its own marker, so forgetting whatever now lives at its
             # old path sends it back to authorize again as well.
-            item = _keychain_item(_read_body(path), account)
+            item = _marker_item(path, account)
             legacy = _keychain_account(path, account)
             if item:
                 _keychain_delete(item)

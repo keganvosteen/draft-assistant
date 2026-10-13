@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 from draft_assistant import secret_store
 from draft_assistant.web.server import DraftAPIHandler
+from tests.test_secret_store import unreadable
 
 
 class _Handlers:
@@ -230,6 +231,25 @@ class TestKeychainCredentialSessions(_Handlers, unittest.TestCase):
         self.assertFalse(self.result(forget)["hasCredentials"])
         self.assertEqual(self.entries, {})
         self.assertEqual(os.listdir(os.path.join(self.directory, "two")), [])
+
+    def test_disconnect_with_the_marker_out_of_reach_fails_instead_of_stranding_the_item(self):
+        # Disconnect loads the store, drops the token and saves what is left.
+        # A marker that cannot be read loads as empty, and saving "nothing" is
+        # a forget: it deleted the marker, lost the Client ID and Secret with
+        # it, and left the item in the Keychain where nothing could find it.
+        saved = {"client_id": "synthetic-id", "client_secret": "synthetic-secret", "token": self.token()}
+        self.handler()._yahoo_save(saved)
+        store = os.path.join(self.directory, "one", "yahoo.json")
+        for body in ({}, {"forgetCredentials": True}):
+            with self.subTest(body=body), unreadable(store):
+                disconnect = self.handler(body)
+                disconnect._handle_yahoo_disconnect()
+                payload, status = disconnect._send_json.call_args[0]
+                self.assertEqual(status, 500)
+                self.assertIn("credential marker", payload["error"])
+                self.assertNotIn("synthetic-secret", payload["error"])
+        self.assertEqual(self.handler()._yahoo_load(), saved)
+        self.assertEqual(len(self.entries), 1)
 
     def test_parallel_first_saves_share_one_keychain_item(self):
         # Each first save mints a random item id. Racing ones must agree on a

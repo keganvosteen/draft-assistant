@@ -23,6 +23,25 @@ def _fake_dpapi(data: bytes, protect: bool) -> bytes:
     return bytes(b ^ 0x5A for b in data)
 
 
+@contextlib.contextmanager
+def unreadable(target, error=None):
+    """Make the store's reads of *target* fail, as a file that is out of reach does.
+
+    Only secret_store's own open() is replaced, so the atomic marker write in
+    storage.py and the test's own file handling carry on working.
+    """
+    error = error or PermissionError(13, "Permission denied", target)
+    real = open
+
+    def guarded(path, *args, **kwargs):
+        if os.path.abspath(os.fspath(path)) == os.path.abspath(target):
+            raise error
+        return real(path, *args, **kwargs)
+
+    with patch.object(secret_store, "open", side_effect=guarded, create=True):
+        yield
+
+
 class TestSecretStore(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -362,6 +381,59 @@ class TestKeychainProfiles(unittest.TestCase):
         secret_store.forget(self.first, "yahoo")
         self.assertNotIn(name, self.entries)
         self.assertFalse(os.path.exists(self.first))
+
+    def test_a_marker_that_cannot_be_read_stops_save_from_minting_a_second_item(self):
+        # "Could not read it" is not "there is none". Taken for that, save()
+        # minted a fresh id and replaced the marker with it, and the first
+        # item stayed in the Keychain with nothing left recording its name.
+        secret_store.save(self.first, "yahoo", {"token": "one"})
+        item = self._marker(self.first)["account"]
+        with unreadable(self.first):
+            self.assertEqual(secret_store.load(self.first, "yahoo"), {})
+            with self.assertRaises(OSError) as raised:
+                secret_store.save(self.first, "yahoo", {"token": "two"})
+        self.assertIn(os.path.abspath(self.first), str(raised.exception))
+        self.assertIn("Permission denied", str(raised.exception))
+        self.assertEqual(self.entries, {item: json.dumps({"token": "one"})})
+        self.assertEqual(self._marker(self.first)["account"], item)
+        # Readable again, the same item simply carries on.
+        secret_store.save(self.first, "yahoo", {"token": "two"})
+        self.assertEqual(self.entries, {item: json.dumps({"token": "two"})})
+
+    def test_a_marker_that_cannot_be_read_is_not_thrown_away_by_forget(self):
+        # Deleting the file on the strength of a failed read reported the
+        # credentials forgotten while the item it named was still there, and
+        # now beyond finding. Saving "nothing" is a forget and must stop too.
+        secret_store.save(self.first, "yahoo", {"token": "one"})
+        item = self._marker(self.first)["account"]
+        errors = (PermissionError(13, "Permission denied"), OSError(24, "Too many open files"),
+                  OSError(5, "Input/output error"), OSError("no errno at all"))
+        for error in errors:
+            for forget in (lambda: secret_store.forget(self.first, "yahoo"),
+                           lambda: secret_store.save(self.first, "yahoo", {})):
+                with self.subTest(error=str(error)), unreadable(self.first, error):
+                    with self.assertRaises(OSError) as raised:
+                        forget()
+                    self.assertIn("nothing was changed", str(raised.exception))
+                    self.assertEqual(self.entries, {item: json.dumps({"token": "one"})})
+                    self.assertTrue(os.path.exists(self.first))
+        self.assertEqual(secret_store.load(self.first, "yahoo"), {"token": "one"})
+        secret_store.forget(self.first, "yahoo")
+        self.assertEqual(self.entries, {})
+        self.assertFalse(os.path.exists(self.first))
+
+    def test_a_marker_that_is_simply_not_there_still_reads_as_absent(self):
+        # Only these two say the file does not exist; neither may be mistaken
+        # for the out-of-reach kind, or a first save could never happen.
+        for error in (FileNotFoundError(2, "No such file or directory"),
+                      NotADirectoryError(20, "Not a directory")):
+            with self.subTest(error=type(error).__name__):
+                with unreadable(self.first, error):
+                    secret_store.forget(self.first, "yahoo")
+                    secret_store.save(self.first, "yahoo", {"token": "one"})
+                self.assertEqual(secret_store.load(self.first, "yahoo"), {"token": "one"})
+                secret_store.forget(self.first, "yahoo")
+                self.assertEqual(self.entries, {})
 
     def test_forget_removes_both_the_marker_item_and_the_0_7_4_path_item(self):
         # 0.7.4 wrote an item here and its marker was lost (the directory was
