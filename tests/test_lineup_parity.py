@@ -141,6 +141,16 @@ EDGE_ROSTERS = [
     # either side's tie-break would then start the wrong RB and flex the TE.
     ("fractions-decide", {"RB": 1, "FLEX": 1, "BN": 1},
      [["RB0", "RB", 100.5], ["RB1", "RB", 100.75], ["TE0", "TE", 110.5], ["WR0", "WR", 110.75]]),
+    # No roster above has a second QB, TE, K or DST slot, a third RB or WR
+    # slot, or a third FLEX - though two-QB and three-WR leagues are ordinary.
+    # A side that stopped counting at the usual number passed every case, so
+    # this one fills one more of everything and leaves a single TE out.
+    ("one-more-of-every-slot", {"QB": 2, "RB": 3, "WR": 3, "TE": 2, "FLEX": 3, "K": 2, "DST": 2},
+     [["QB0", "QB", 351], ["QB1", "QB", 331],
+      ["RB0", "RB", 291], ["RB1", "RB", 271], ["RB2", "RB", 251], ["RB3", "RB", 171],
+      ["WR0", "WR", 281], ["WR1", "WR", 261], ["WR2", "WR", 241], ["WR3", "WR", 181], ["WR4", "WR", 161],
+      ["TE0", "TE", 221], ["TE1", "TE", 201], ["TE2", "TE", 151],
+      ["K0", "K", 141], ["K1", "K", 131], ["DST0", "DST", 121], ["DST1", "DST", 111]]),
 ]
 
 
@@ -483,6 +493,9 @@ class TestLineupParityFixtures(unittest.TestCase):
             "spares that IR does not seat": lambda slots, case: slots.get("IR") and spares(case),
             "a need only reachable by moving a starter": needs_a_starter_to_move,
             "a starter decided by a fraction of a point": decided_by_a_fraction,
+            "a second QB, a third WR and a third FLEX all starting": lambda slots, case: (
+                slots.get("QB", 0) >= 2 and slots.get("WR", 0) >= 3 and slots.get("FLEX", 0) >= 3
+                and not case["open"]),
         }
         for situation, applies in situations.items():
             with self.subTest(situation=situation):
