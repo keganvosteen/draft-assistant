@@ -180,6 +180,27 @@ class TestPartialPastesStillImport(unittest.TestCase):
         self.assertEqual(info["scoringType"], "standard")
         self.assert_defaults_except(info, "scoringType")
 
+    def test_scoring_only_the_loose_search_reads_still_counts(self):
+        # Not every scoring row splits into a label cell and a value cell: one
+        # space between them leaves a single cell, and the 2-point rows are
+        # only ever read by the loose search. Both are still scoring rows.
+        single_space = parse_settings_text("Passing Touchdowns 6\nReceptions 1")
+        self.assertEqual(single_space["scoring"]["pass_td"], 6.0)
+        self.assertEqual(single_space["scoringType"], "ppr")
+        self.assert_defaults_except(single_space, "scoringType")
+
+        two_point = parse_settings_text("2-Point Conversions: 3")
+        self.assertEqual(two_point["scoring"]["rush_2pt"], 3.0)
+        self.assert_defaults_except(two_point)
+
+    def test_an_overridden_offensive_sacks_row_is_enough(self):
+        # Yahoo's three-line override layout. The defensive "Sack" search
+        # cannot bridge the "Yahoo Default" marker, so the offensive row is
+        # the only thing that reads this paste.
+        info = parse_settings_text("Sacks\nYahoo Default\n\t-1 \t0")
+        self.assertEqual(info["scoring"]["sack_taken"], -1.0)
+        self.assert_defaults_except(info)
+
     def test_roster_positions_alone(self):
         expected = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DST": 1, "BN": 6}
         layouts = {
