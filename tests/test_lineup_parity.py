@@ -134,6 +134,13 @@ EDGE_ROSTERS = [
     # Two spare players and two IR slots: nobody is seated, nothing is open.
     ("ir-seats-nobody", {"QB": 1, "RB": 1, "IR": 2},
      [["QB0", "QB", 21], ["QB1", "QB", 15], ["RB0", "RB", 9], ["RB1", "RB", 5]]),
+    # Every other projection here is a whole number and no real one is, so a
+    # side that rounded or truncated before ranking passed every case. Each
+    # pair below collapses to one value under round, floor and ceil alike, and
+    # the better player has the later id and comes later in the list - so
+    # either side's tie-break would then start the wrong RB and flex the TE.
+    ("fractions-decide", {"RB": 1, "FLEX": 1, "BN": 1},
+     [["RB0", "RB", 100.5], ["RB1", "RB", 100.75], ["TE0", "TE", 110.5], ["WR0", "WR", 110.75]]),
 ]
 
 
@@ -176,6 +183,13 @@ def _scored(positions, label):
 
 def production_case(name, slots, players):
     """One fixture case, computed only from the engine's own functions."""
+    # Totals are compared exactly, and each side adds its starters up in its own
+    # order. Whole quarters keep every partial sum exact in binary; 187.4 would
+    # fail in Node alone, on a 0.00000000000003 that is nobody's bug.
+    if any(value * 4 != int(value * 4) for _, _, value in players):
+        raise AssertionError(
+            f"{name}: projections must be whole quarters (x.0, x.25, x.5, x.75) so both sides total them exactly."
+        )
     board = [Player(pid, pid, position) for pid, position, _ in players]
     points = {pid: value for pid, _, value in players}
     lineup = roster_value(board, points, slots)
@@ -448,6 +462,13 @@ class TestLineupParityFixtures(unittest.TestCase):
             by_key = needs_by_position(LeagueConfig(1, slots, {}, {}), {"BN": board})
             return any(not by_key[pos] and not flex_need_for_position(pos, by_key) for pos in case["needs"])
 
+        def decided_by_a_fraction(slots, case):
+            # Dropping the fractions seats someone else: the case a side that
+            # rounds its projections gets wrong.
+            board = [Player(pid, pid, pos) for pid, pos, _ in case["players"]]
+            whole = {pid: int(value) for pid, _, value in case["players"]}
+            return sorted(player.id for player in roster_value(board, whole, slots).starters) != case["starters"]
+
         situations = {
             "W/T and R/W both filled": lambda slots, case: (
                 slots.get("WRTE") and slots.get("RBWR") and not case["open"]),
@@ -461,6 +482,7 @@ class TestLineupParityFixtures(unittest.TestCase):
             "a bench ordered by multiplier, not raw points": lambda slots, case: bench_overrules_raw_points(case),
             "spares that IR does not seat": lambda slots, case: slots.get("IR") and spares(case),
             "a need only reachable by moving a starter": needs_a_starter_to_move,
+            "a starter decided by a fraction of a point": decided_by_a_fraction,
         }
         for situation, applies in situations.items():
             with self.subTest(situation=situation):

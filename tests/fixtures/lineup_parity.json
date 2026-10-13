@@ -663,6 +663,9 @@
   ]},
   {"name":"edge ir-seats-nobody","slots":{"QB":1,"RB":1,"IR":2},"cases":[
    {"name":"only","players":[["QB0","QB",21],["QB1","QB",15],["RB0","RB",9],["RB1","RB",5]],"starters":["QB0","RB0"],"points":30,"open":0,"needs":[],"bench":[]}
+  ]},
+  {"name":"edge fractions-decide","slots":{"RB":1,"FLEX":1,"BN":1},"cases":[
+   {"name":"only","players":[["RB0","RB",100.5],["RB1","RB",100.75],["TE0","TE",110.5],["WR0","WR",110.75]],"starters":["RB1","WR0"],"points":211.5,"open":0,"needs":[],"bench":["RB0"]}
   ]}
  ]
 }
