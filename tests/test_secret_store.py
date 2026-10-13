@@ -562,6 +562,25 @@ class TestKeychainProfiles(unittest.TestCase):
         self.assertEqual(secret_store.load(self.first, "yahoo"), {"token": "one"})
         self.assertEqual(secret_store.load(self.second, "yahoo"), {"token": "two"})
 
+    def test_a_file_without_the_magic_names_no_keychain_item(self):
+        # Only a file this module wrote may say which item is a store's. One
+        # that merely looks like a marker is a legacy plaintext file to
+        # load(), and migrating it has to mint an item of its own — never
+        # write over, or later delete, the one it happens to name.
+        secret_store.save(self.first, "yahoo", {"token": "one"})
+        item = self._marker(self.first)["account"]
+        lookalike = {"backend": "keychain", "account": item}
+        os.makedirs(os.path.dirname(self.second))
+        self._write(self.second, json.dumps(lookalike).encode("utf-8"))
+        secret_store.forget(self.second, "yahoo")
+        self.assertEqual(secret_store.load(self.first, "yahoo"), {"token": "one"})
+        self._write(self.second, json.dumps(lookalike).encode("utf-8"))
+        self.assertEqual(secret_store.load(self.second, "yahoo"), lookalike)
+        self.assertEqual(secret_store.load(self.first, "yahoo"), {"token": "one"})
+        self.assertNotEqual(self._marker(self.second)["account"], item)
+        secret_store.forget(self.second, "yahoo")
+        self.assertEqual(self.entries, {item: json.dumps({"token": "one"})})
+
     def test_a_keychain_marker_is_not_read_by_another_backend(self):
         secret_store.save(self.first, "yahoo", {"token": "one"})
         with patch.object(secret_store, "backend", return_value="dpapi"), \
@@ -929,6 +948,39 @@ class TestKeychainTransport(unittest.TestCase):
                 self.assertEqual(line.count(b"\n"), 1)
                 self.assertIn(b" -X " + secret.encode("utf-8").hex().encode("ascii") + b" -U\n", line)
                 self.assertEqual(self.fake.items[self.ACCOUNT], secret.encode("utf-8"))
+
+    def test_a_long_secret_that_is_not_ascii_never_reaches_the_quoted_form(self):
+        # Too long for hex, so only the quoted form is left, and that line is
+        # sent as ASCII: without the check the encode raised with the whole
+        # line — secret included — riding on the exception. The cap counts
+        # characters, too, which are bytes only while the line is ASCII.
+        for secret in ("é" * 2500, "x" * 2500 + "☃", "日本語" * 900):
+            with self.subTest(secret=secret[-3:]):
+                self.fake.calls.clear()
+                self.assertIsNone(secret_store._keychain_stdin_command(self.ACCOUNT, secret))
+                self.assertEqual(self._write(secret), "argv")
+                self.assertEqual(self._stdin_calls(), [])
+                self.assertEqual(self.fake.items[self.ACCOUNT], secret.encode("utf-8"))
+
+    def test_a_secret_that_cannot_be_encoded_fails_cleanly(self):
+        # A lone surrogate has no UTF-8 form, and the error for that carries
+        # the string it choked on. It has to surface as the same bare failure.
+        secret = "sensitive-token\ud800"
+        self.assertIsNone(secret_store._keychain_stdin_command(self.ACCOUNT, secret))
+        with self.assertRaises(OSError) as raised:
+            self._write(secret)
+        self.assertEqual(str(raised.exception), "Could not save credentials in the macOS Keychain")
+        self.assertIsNone(raised.exception.__context__)
+        self.assertEqual(self._stdin_calls(), [])
+        self.assertEqual(self.fake.items, {})
+
+    def test_a_failed_write_does_not_report_the_transport_of_the_one_before(self):
+        self.assertEqual(self._write(json.dumps({"token": "first"})), "stdin-hex")
+        self.fake.refuse_stdin = True
+        self.fake.fail_argv_writes = True
+        with self.assertRaises(OSError):
+            self._write(json.dumps({"token": "second"}))
+        self.assertIsNone(secret_store._keychain_transport)
 
     def test_a_write_that_reads_back_wrong_is_redone_through_argv(self):
         # Exit status 0 proves nothing: it is only the last command's.
