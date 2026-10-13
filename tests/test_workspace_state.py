@@ -31,17 +31,29 @@ def initial_state():
     }
 
 
-def _save_in_process(value, read_started, release_read, results):
+# Bounds a hang; it does not assert speed. A spawned writer has to start an
+# interpreter and import this module's whole dependency chain before it can
+# signal anything, and beside other work that took longer than the 10 seconds
+# these waits used to allow — queue.Empty on a correct implementation.
+PROCESS_TIMEOUT = 120
+
+
+def _save_in_process(value, ready, read_started, release_read, results):
     """Hold the first writer after reading to expose cross-process lost updates."""
     read = workspace._read
     def pause_after_read(path):
         state = read(path)
         read_started.put(True)
-        if not release_read.wait(10):
+        if not release_read.wait(PROCESS_TIMEOUT):
             raise RuntimeError("Timed out waiting to finish test save")
         return state
     try:
-        with patch.object(workspace, "_read", side_effect=pause_after_read):
+        # The second writer waits on the file lock for as long as the first is
+        # held at its read. Production gives up after LOCK_TIMEOUT_SECONDS; a
+        # slow machine must not turn that wait into a storage error here.
+        with patch.object(workspace, "_read", side_effect=pause_after_read), \
+                patch.object(workspace, "LOCK_TIMEOUT_SECONDS", PROCESS_TIMEOUT):
+            ready.put(True)
             results.put(workspace.save_workspace(value)["revision"])
     except workspace.WorkspaceConflictError:
         results.put("conflict")
@@ -147,27 +159,34 @@ class TestWorkspace(_WorkspaceFixture, unittest.TestCase):
 
     def test_separate_processes_cannot_read_and_replace_the_same_revision(self):
         context = multiprocessing.get_context("spawn")
-        read_started, results = context.Queue(), context.Queue()
+        ready, read_started, results = context.Queue(), context.Queue(), context.Queue()
         release = context.Event()
-        processes = [context.Process(target=_save_in_process, args=(initial_state(), read_started, release, results)) for _ in range(2)]
+        processes = [context.Process(target=_save_in_process, args=(initial_state(), ready, read_started, release, results)) for _ in range(2)]
         try:
             for process in processes:
                 process.start()
-            read_started.get(timeout=10)
+            # Both writers must be at the save before the check below means
+            # anything: one that has not started yet cannot read early either,
+            # so a broken lock would pass on any machine slow to spawn it.
+            for _ in processes:
+                ready.get(timeout=PROCESS_TIMEOUT)
+            read_started.get(timeout=PROCESS_TIMEOUT)
             # While the first writer holds its snapshot, a second process may
             # not read that same old revision and later overwrite its update.
             with self.assertRaises(queue.Empty):
                 read_started.get(timeout=0.2)
             release.set()
-            self.assertCountEqual([results.get(timeout=10), results.get(timeout=10)], [1, "conflict"])
+            self.assertCountEqual(
+                [results.get(timeout=PROCESS_TIMEOUT), results.get(timeout=PROCESS_TIMEOUT)], [1, "conflict"])
             self.assertEqual(workspace.load_workspace()["revision"], 1)
         finally:
             release.set()
             for process in processes:
-                process.join(timeout=10)
+                process.join(timeout=PROCESS_TIMEOUT)
                 if process.is_alive():
                     process.terminate()
                     process.join(timeout=5)
+            ready.close()
             read_started.close()
             results.close()
 
