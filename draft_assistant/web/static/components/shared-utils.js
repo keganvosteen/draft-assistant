@@ -141,6 +141,15 @@ function boardLacksByes(players) {
     && !players.some(player => player && player.byeWeek);
 }
 
+// The NFL season a date belongs to: the year it kicked off, so January and
+// February are still last year's season and March 1 rolls over to the one
+// about to be drafted. Mirrors context.default_season() on the server; forms
+// that defaulted to the calendar year asked for next season's board while
+// week 18 was still being played.
+function currentNflSeason(today = new Date()) {
+  return today.getMonth() < 2 ? today.getFullYear() - 1 : today.getFullYear();
+}
+
 // Weighted player selection with augmenting paths across overlapping slots.
 // Each player has the same value in every eligible slot. Processing highest
 // value first and relocating earlier players preserves the best legal lineup.

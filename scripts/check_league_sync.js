@@ -67,6 +67,17 @@ for (const notLoaded of [null, undefined, [], {}, 'players']) {
 }
 console.log('Bye weeks notice predicate: PASS');
 
+// The forms' season default must agree with context.default_season(): the
+// same anchors tests/test_season_calendar.py pins on the server side.
+for (const [[year, month, day], season] of [
+  [[2026, 10, 14], 2026], [[2026, 12, 31], 2026], [[2027, 1, 3], 2026], [[2027, 1, 10], 2026],
+  [[2027, 2, 28], 2026], [[2027, 3, 1], 2027], [[2027, 7, 15], 2027], [[2028, 2, 29], 2027],
+]) {
+  assert.equal(context.currentNflSeason(new Date(year, month - 1, day)), season,
+    `${year}-${month}-${day} belongs to the ${season} season`);
+}
+console.log('Season default for the pull and import forms: PASS');
+
 // Ownership helpers are plain JavaScript inside the JSX file.
 const ownershipSource = app.slice(app.indexOf('function rosterSyncKey('), app.indexOf('// ─── DRAFT ORDER EDITOR'));
 vm.runInContext(ownershipSource, context);
