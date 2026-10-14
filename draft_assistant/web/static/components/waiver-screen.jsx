@@ -321,8 +321,13 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: T.bg, overflow: 'hidden' }}>
+      {/* A phone header holds a back arrow, the title and three buttons, and
+          nothing more: with the league name beside the arrow and the provider
+          spelled out on Sync, the title was squeezed to nothing and the back
+          label ran under the Roster button. The draft room drops its back
+          label on a phone for the same reason. */}
       <AppBar
-        onBack={onBack} backLabel={league.name}
+        onBack={onBack} backLabel={isMobile ? '' : league.name}
         title="Waiver wire"
         subtitle={subtitle}
         compact>
@@ -332,8 +337,9 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
           </Btn>
         )}
         {linkedTo && (
-          <Btn variant="secondary" size="sm" onClick={sync} disabled={syncing}>
-            {syncing ? 'Syncing…' : `Sync from ${linkedTo}`}
+          <Btn variant="secondary" size="sm" onClick={sync} disabled={syncing}
+            aria-label={syncing ? undefined : `Sync from ${linkedTo}`}>
+            {syncing ? 'Syncing…' : isMobile ? 'Sync' : `Sync from ${linkedTo}`}
           </Btn>
         )}
         <Btn variant="secondary" size="sm" onClick={scan} disabled={loading || syncing || !rosterReady}>
