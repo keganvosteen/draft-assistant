@@ -236,10 +236,7 @@ class TestTheCacheFollowsTheSeason(unittest.TestCase):
         self.assertEqual((context.season, context.selected_week, context.signals), (2026, 17, []))
 
 
-#: Week 17 Sunday of the 2026 season, on the far side of the New Year: fantasy
-#: championship week, and the day the calendar-year season was most wrong.
-TODAY = (2027, 1, 3)
-SEASON, WEEK = 2026, 17
+SEASON = 2026
 LEAGUE = {"id": "manual", "name": "Manual league", "numTeams": 2, "draftPosition": 1,
           "sims": 2, "rosterSlots": {"QB": 1, "RB": 1, "WR": 1, "TE": 0, "FLEX": 0, "BN": 1}}
 
@@ -262,13 +259,13 @@ def _stamped_board(season):
 BYES = {player.name: SCHEDULE[player.team] for player in _stamped_board(SEASON)}
 
 
-class TestEndpointsAgreeOnTheSeason(_ServerFixture):
-    """A board stamped for this season, beside a news cache left from the last.
+class _SeasonServer(_ServerFixture):
+    """A board stamped for SEASON, beside a news cache left from the season before.
 
-    Reproduced on a live server before the fix: `/api/players` reported
-    `byeWeek: null` for all 1,256 stamped players, the bye-weeks notice
-    appeared, and one click on it moved every stamp from 2026 to 2025.
+    No tests of its own: each subclass pins the clock to a different ``TODAY``
+    in ``SEASON`` and states the week that day falls in.
     """
+    TODAY = WEEK = None
 
     def setUp(self):
         self._tmp = tempfile.mkdtemp()
@@ -281,7 +278,7 @@ class TestEndpointsAgreeOnTheSeason(_ServerFixture):
             os.path.join(self._tmp, "draft_state.json"), self.board)
         self._patch("draft_assistant.web.server.ensure_profile", return_value=paths)
         self._patch("draft_assistant.context.context_path", return_value=self.cache)
-        today = _today_is(*TODAY)
+        today = _today_is(*self.TODAY)
         today.start()
         self.addCleanup(today.stop)
         self.schedule = self._patch(
@@ -333,6 +330,20 @@ class TestEndpointsAgreeOnTheSeason(_ServerFixture):
         self.assertEqual(task["status"], "done", task)
         return task["result"]
 
+
+class TestEndpointsAgreeOnTheSeason(_SeasonServer):
+    """A board stamped for this season, beside a news cache left from the last.
+
+    Reproduced on a live server before the fix: `/api/players` reported
+    `byeWeek: null` for all 1,256 stamped players, the bye-weeks notice
+    appeared, and one click on it moved every stamp from 2026 to 2025.
+
+    Pinned to week 17 Sunday of the 2026 season, on the far side of the New
+    Year: fantasy championship week, and the day the calendar-year season was
+    most wrong.
+    """
+    TODAY, WEEK = (2027, 1, 3), 17
+
     def test_a_stale_cache_does_not_hide_a_correctly_stamped_boards_byes(self):
         players = self.players()
         self.assertEqual({name: row["byeWeek"] for name, row in players.items()}, BYES)
@@ -361,7 +372,7 @@ class TestEndpointsAgreeOnTheSeason(_ServerFixture):
 
     def test_the_news_endpoint_reports_this_season_and_that_it_has_no_news(self):
         context = self.json("GET", "/api/context")
-        self.assertEqual((context["season"], context["week"]), (SEASON, WEEK))
+        self.assertEqual((context["season"], context["week"]), (SEASON, self.WEEK))
         self.assertTrue(context["stale"])
         self.assertEqual((context["signalCount"], context["signals"]), (0, []))
         self.assertIsNone(context["refreshedAt"])
@@ -381,7 +392,7 @@ class TestEndpointsAgreeOnTheSeason(_ServerFixture):
             "leagues": [LEAGUE], "top": 30,
             "picks": {LEAGUE["id"]: [{"playerId": "sleeper:4", "teamNum": 1}]},
         })
-        self.assertEqual(result["week"], WEEK)
+        self.assertEqual(result["week"], self.WEEK)
         self.assertTrue(result["contextStale"])
         rows = result["leagues"][0]["rosRecommendations"] + result["leagues"][0]["weeklyRecommendations"]
         self.assertTrue(rows, "the fixture should rank at least one pickup")
@@ -391,20 +402,20 @@ class TestEndpointsAgreeOnTheSeason(_ServerFixture):
     def test_the_startup_refresh_moves_a_stale_cache_onto_this_season_and_week(self):
         # What the app sends on launch: no season, no week.
         result = self.refresh({})
-        self.assertEqual((result["season"], result["week"]), (SEASON, WEEK))
+        self.assertEqual((result["season"], result["week"]), (SEASON, self.WEEK))
         saved = self.cached()
-        self.assertEqual((saved.season, saved.selected_week), (SEASON, WEEK))
+        self.assertEqual((saved.season, saved.selected_week), (SEASON, self.WEEK))
         self.assertEqual(saved.signals, [], "last season's news is not carried into this one")
         context = self.json("GET", "/api/context")
-        self.assertEqual((context["season"], context["week"]), (SEASON, WEEK))
+        self.assertEqual((context["season"], context["week"]), (SEASON, self.WEEK))
 
     def test_the_startup_refresh_advances_the_week_within_a_season(self):
         save_context(_cache(SEASON, 9), self.cache)
         self.assertEqual(self.json("GET", "/api/context")["week"], 9)
         result = self.refresh({})
-        self.assertEqual((result["season"], result["week"]), (SEASON, WEEK))
+        self.assertEqual((result["season"], result["week"]), (SEASON, self.WEEK))
         saved = self.cached()
-        self.assertEqual(saved.selected_week, WEEK)
+        self.assertEqual(saved.selected_week, self.WEEK)
         self.assertEqual(len(saved.signals), 1, "this season's news is kept")
 
     def test_an_explicit_season_and_week_are_still_honoured(self):
@@ -417,6 +428,50 @@ class TestEndpointsAgreeOnTheSeason(_ServerFixture):
         self.assertEqual(self.json("GET", "/api/context")["season"], SEASON)
         self.assertEqual(self.json("POST", "/api/refresh-byes", {"season": SEASON - 1})["season"], SEASON - 1)
         self.assertEqual(self.stamps(), {SEASON - 1})
+
+
+class TestTheReproductionAsFound(_SeasonServer):
+    """Mid-October, nowhere near the New Year: the day the bug was reproduced.
+
+    The calendar year already named the right season here, so this one is the
+    stale cache on its own -- the case January's tests cannot tell apart from
+    the calendar being wrong.
+    """
+    TODAY, WEEK = (2026, 10, 13), 6
+
+    def test_last_seasons_cache_neither_hides_nor_replaces_this_seasons_byes(self):
+        self.assertEqual({name: row["byeWeek"] for name, row in self.players().items()}, BYES)
+        context = self.json("GET", "/api/context")
+        self.assertEqual((context["season"], context["week"], context["signalCount"]), (SEASON, self.WEEK, 0))
+        body = self.json("POST", "/api/refresh-byes", {})
+        self.assertEqual((body["season"], body["changed"]), (SEASON, 0))
+        self.schedule.assert_called_once_with(SEASON)
+        self.assertEqual(self.stamps(), {SEASON})
+        self.assertEqual({name: row["byeWeek"] for name, row in self.players().items()}, BYES)
+
+
+class TestDraftPrepInTheOffSeason(_SeasonServer):
+    """July: a board stamped for the season about to be drafted, and only last
+    season's news in the cache. Both sides of the rollover meet here -- the
+    season has to be this year's for the board's byes to count at all."""
+    TODAY, WEEK = (2026, 7, 15), 1
+
+    def test_the_draft_room_still_prices_byes(self):
+        self.assertEqual({name: row["byeWeek"] for name, row in self.players().items()}, BYES)
+        # Snake order for two teams: me, them, them, me. My QB is on the Eagles,
+        # whose bye the Chiefs share, so the Chiefs back costs a bye penalty and
+        # the Niners back does not.
+        result = self.json("POST", "/api/suggest", {
+            "top": 6, "league": LEAGUE,
+            "picks": ["sleeper:6", "sleeper:3", "sleeper:5"], "my_picks": ["sleeper:6"],
+        })
+        rows = {row["name"]: row for row in result["suggestions"]}
+        self.assertEqual(BYES["Chiefs Back"], BYES["Eagles Passer"], "the fixture needs a shared bye")
+        self.assertEqual(rows["Chiefs Back"]["byeWeek"], BYES["Chiefs Back"])
+        self.assertGreater(rows["Chiefs Back"]["byePenalty"], 0)
+        self.assertEqual(rows["Niners Back"]["byePenalty"], 0)
+        self.assertEqual(self.json("POST", "/api/refresh-byes", {})["season"], SEASON)
+        self.assertEqual(self.stamps(), {SEASON})
 
 
 class TestCurrentByeWeekAcrossTheNewYear(unittest.TestCase):
