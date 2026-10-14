@@ -941,7 +941,9 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             week = _bounded_int(body.get("week", default_week()), "week", 1, 18)
 
             players, config = _load_players(self.profile)
-            context = load_context(season=default_season(), week=week)
+            # No season of its own: load_context() names the current one for
+            # every handler, so this cannot drift from /api/players.
+            context = load_context(week=week)
             by_key, aliases = _player_indexes(players)
             response_rows = []
 
@@ -1819,6 +1821,10 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         -- and in-season a pull also swaps the preseason projections and ADP.
         This touches the bye fields only. Body: {season?}; the default is the
         season /api/players judges byes against, or the stamp would not show.
+        It is the same expression on purpose -- ``load_context().season`` --
+        and that is today's season, never the news cache's: read off a cache
+        left over from last season, this one click replaced a correctly stamped
+        board's byes with last year's schedule.
 
         Inline, not a ``_run_task`` job. It is one schedule fetch and one board
         rewrite (~1.5s) on a threaded server, and the caller needs the outcome

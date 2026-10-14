@@ -121,13 +121,16 @@ class TestGateSeesVerifiedByes(unittest.TestCase):
     def test_the_calendar_rolling_over_does_not_fail_a_stamped_board(self):
         # The gate runs offline on every pull request. Judged against today's
         # year, a board stamped for last season would go red on January 1st and
-        # stay red until the next schedule is published in May.
-        class NextFebruary(date):
+        # stay red until the next schedule is published in May. Pinned to April
+        # rather than February: the engine's season only rolls over on March 1
+        # (January and February still belong to the season being played), and
+        # this has to be a day on which its default really has left the board's.
+        class NextApril(date):
             @classmethod
             def today(cls):
-                return cls(2027, 2, 1)
+                return cls(2027, 4, 1)
 
-        with patch("draft_assistant.context.date", NextFebruary):
+        with patch("draft_assistant.context.date", NextApril):
             self.assertEqual(default_season(), 2027, "the engine's own default has moved on")
             report = evaluate_projection_quality(_healthy_board(2026))
         self.assertTrue(report.ok, report.issues)

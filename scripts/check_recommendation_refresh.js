@@ -69,3 +69,49 @@ const respond = (request, data) => request.resolve({json: () => Promise.resolve(
   assert.equal(requests.length, 4, 'off-turn render must not request suggestions');
   console.log('Recommendation refresh and response ordering: PASS');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+
+// The app's startup news refresh, run for real against a controlled server.
+// It has to ask for "now" -- no season, no week -- and let the server work out
+// both. It used to echo the cached context's own season and week straight
+// back, so a cache from last season was refreshed as last season and the week
+// never advanced past the one it was saved at.
+(async () => {
+  const app = fs.readFileSync('draft_assistant/web/static/components/app-components.jsx', 'utf8');
+  const from = app.indexOf('    const newsFailed = detail => toast(');
+  const to = app.indexOf('  }, [refreshPlayers]);', from);
+  assert.ok(from > 0 && to > from, 'startup news refresh must be found');
+  const launch = async cached => {
+    const posts = [], toasts = [];
+    let reloads = 0;
+    const reply = body => Promise.resolve({json: () => Promise.resolve(body)});
+    vm.runInContext(app.slice(from, to), vm.createContext({
+      toast: (message, tone) => toasts.push({message, tone}),
+      refreshPlayers: () => { reloads++; },
+      setTimeout: fn => fn(),
+      fetch(url, options) {
+        if (url === '/api/context') return reply(cached);
+        if (url === '/api/context/refresh') { posts.push(JSON.parse(options.body)); return reply({taskId: 'news'}); }
+        if (url === '/api/task/news') return reply({status: 'done'});
+        throw new Error(`unexpected request: ${url}`);
+      },
+    }));
+    for (let turn = 0; turn < 12; turn++) await settle();
+    return {posts, toasts, reloads};
+  };
+
+  // Whatever the cache says about itself -- last season, a week long gone --
+  // none of it may come back as a request.
+  for (const cached of [{season: 2025, week: 9, stale: true}, {season: 2026, week: 3, stale: true}]) {
+    const started = await launch(cached);
+    assert.deepEqual(started.posts, [{}], 'the startup refresh must not name a season or a week');
+    assert.equal(started.reloads, 1, 'the board reloads once the refresh lands');
+    assert.deepEqual(started.toasts, []);
+  }
+  const fresh = await launch({season: 2026, week: 6, stale: false});
+  assert.deepEqual(fresh.posts, [], 'a fresh context is not refreshed');
+  assert.equal(fresh.reloads, 0);
+  const failed = await launch({error: 'context unreadable'});
+  assert.deepEqual(failed.posts, []);
+  assert.deepEqual(failed.toasts.map(t => t.tone), ['error'], 'a dead news feed still says so');
+  console.log('Startup news refresh leaves season and week to the server: PASS');
+})().catch(error => { console.error(error); process.exitCode = 1; });

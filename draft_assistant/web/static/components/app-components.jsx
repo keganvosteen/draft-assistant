@@ -1557,9 +1557,15 @@ function App() {
     fetch('/api/context').then(r => r.json()).then(ctx => {
       if (!ctx || ctx.error) { newsFailed(ctx && ctx.error); return; }
       if (!ctx.stale) return;
+      // No season and no week: the server works both out from today's date.
+      // This used to echo ctx.season and ctx.week straight back, which pinned
+      // the cache to whatever it was last refreshed for — the week never
+      // advanced, and a cache from last season was refreshed as last season.
+      // The server cannot tell an echo from a request for an older season
+      // (tools make those on purpose), so the fix is not to send one.
       return fetch('/api/context/refresh', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({season:ctx.season, week:ctx.week}),
+        body:JSON.stringify({}),
       }).then(r => r.json()).then(started => {
         if (!started.taskId) { newsFailed(started && started.error); return; }
         let attempts = 0;
