@@ -22,9 +22,11 @@ from tests.test_cli_refresh_byes import SCHEDULE, _board, _bytes, _without_byes
 from tests.test_web_server import _ServerFixture
 
 
-#: Deliberately not the calendar year. The default season has to be the one the
-#: news context carries -- the season `/api/players` judges byes against -- so a
-#: default read from `date.today()` stamps a season these tests never see.
+#: Deliberately not a season the clock would name. The default has to be
+#: `load_context().season` -- the season `/api/players` judges byes against,
+#: which is today's NFL season and never the one cached in the news file -- so
+#: these tests pin that expression, and any other default stamps a season they
+#: never see.
 SEASON = 2031
 
 
@@ -66,7 +68,7 @@ class TestRefreshByesEndpoint(_ServerFixture):
         self.assertEqual(status, 200, body)
         self.assertEqual(body, {"ok": True, "season": SEASON, "players": 7,
                                 "verified": 6, "changed": 1, "unlistedTeams": []})
-        # The season nobody passed is the context's, not the calendar's.
+        # The season nobody passed is the one load_context() names.
         self.fetch.assert_called_once_with(SEASON)
         # The same board every other handler reads for this profile.
         self.ensure.assert_called_with("default")
