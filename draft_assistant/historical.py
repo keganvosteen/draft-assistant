@@ -6,9 +6,9 @@ This module provides:
     trends, age expectations, and situation changes.
 """
 from __future__ import annotations
-from datetime import date
 from typing import Dict, List, Optional
 
+from .context import default_season
 from .models import Player
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,10 @@ def history_recency_factor(
     """
     if not historical:
         return 1.0
-    season = season if season is not None else date.today().year
+    # The season, not the calendar year: in January the rollout already
+    # passes default_season(), and a calendar-year default here weighted the
+    # board column and the waiver wire against a different season than that.
+    season = season if season is not None else default_season()
     gap = (season - 1) - max(int(year) for year in historical)
     return HISTORY_STALENESS_DECAY ** max(0, gap)
 

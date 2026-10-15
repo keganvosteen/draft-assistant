@@ -78,8 +78,14 @@ def main():
             if secret_store.backend() == "keychain":
                 item = json.loads(Path(moving[1]).read_text())["account"]
                 assert secret_store._keychain_read(item) is not None
+                # forget() keeps the marker when a delete fails, and tells a
+                # failed delete from "no such item" by asking the real tool
+                # whether the item exists. Both answers have to be right.
+                assert secret_store._keychain_has(item)
                 secret_store.forget(moving[1], account)
                 assert secret_store._keychain_read(item) is None
+                assert not secret_store._keychain_has(item)
+                secret_store._keychain_delete(item)
             secret_store.forget(moving[1], account)
             assert secret_store.load(moving[1], account) == {}
 

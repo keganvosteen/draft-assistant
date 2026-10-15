@@ -176,6 +176,21 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
     return () => { clearTimeout(timer); scanSeq.current++; };
   }, [scan, rosterReady]);
 
+  // A re-rank that waits on the network first — a news refresh, a bye-week
+  // reload — lands in a later render than the click that started it, and the
+  // `scan` that click closed over still holds its rosters, week and league.
+  // Pressed while the visit's own sync was running, that scan is the not-ready
+  // no-op, so the list was never re-ranked against the board that came back.
+  // Pressed while a failed sync's saved rosters were on screen and followed by
+  // a Retry that succeeded, it ranked the saved rosters again — last, and with
+  // the "rosters as of" label already cleared. Always run the latest one.
+  const latestScan = React.useRef(scan);
+  latestScan.current = scan;
+  const rescan = () => latestScan.current();
+  // Re-rank once the board is back: a player's week off changes what he is
+  // worth this week, and the list on screen predates it.
+  const reloadBoardAndRescan = () => Promise.resolve(onRefreshPlayers && onRefreshPlayers()).then(rescan);
+
   const syncSeq = React.useRef(0);
   // The league as of the latest render. A sync can fail long after it started,
   // and the snapshot worth falling back to is the one saved by then — the hub's
@@ -270,7 +285,7 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
         if (!started.taskId) throw new Error('Update refresh did not start');
         return pollRefreshTask(started.taskId);
       })
-      .then(() => { toast('Player updates refreshed.', 'ok'); scan(); })
+      .then(() => { toast('Player updates refreshed.', 'ok'); rescan(); })
       .catch(err => toast(String(err.message || err), 'error', 6000))
       .finally(() => setUpdating(false));
   };
@@ -306,8 +321,13 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: T.bg, overflow: 'hidden' }}>
+      {/* A phone header holds a back arrow, the title and three buttons, and
+          nothing more: with the league name beside the arrow and the provider
+          spelled out on Sync, the title was squeezed to nothing and the back
+          label ran under the Roster button. The draft room drops its back
+          label on a phone for the same reason. */}
       <AppBar
-        onBack={onBack} backLabel={league.name}
+        onBack={onBack} backLabel={isMobile ? '' : league.name}
         title="Waiver wire"
         subtitle={subtitle}
         compact>
@@ -317,8 +337,9 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
           </Btn>
         )}
         {linkedTo && (
-          <Btn variant="secondary" size="sm" onClick={sync} disabled={syncing}>
-            {syncing ? 'Syncing…' : `Sync from ${linkedTo}`}
+          <Btn variant="secondary" size="sm" onClick={sync} disabled={syncing}
+            aria-label={syncing ? undefined : `Sync from ${linkedTo}`}>
+            {syncing ? 'Syncing…' : isMobile ? 'Sync' : `Sync from ${linkedTo}`}
           </Btn>
         )}
         <Btn variant="secondary" size="sm" onClick={scan} disabled={loading || syncing || !rosterReady}>
@@ -413,10 +434,7 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? 12 : 18 }}>
-            {/* Re-rank once the board is back: a player's week off changes what
-                he is worth this week, and the list on screen predates it. */}
-            <ByeWeeksNotice players={allPlayers} style={{ marginBottom: 14 }}
-              onLoaded={() => Promise.resolve(onRefreshPlayers && onRefreshPlayers()).then(scan)} />
+            <ByeWeeksNotice players={allPlayers} style={{ marginBottom: 14 }} onLoaded={reloadBoardAndRescan} />
             {error && <Note tone="error" style={{ marginBottom: 14 }}>{error}</Note>}
 
             {(loading || syncing) && !data && (

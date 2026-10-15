@@ -67,6 +67,17 @@ for (const notLoaded of [null, undefined, [], {}, 'players']) {
 }
 console.log('Bye weeks notice predicate: PASS');
 
+// The forms' season default must agree with context.default_season(): the
+// same anchors tests/test_season_calendar.py pins on the server side.
+for (const [[year, month, day], season] of [
+  [[2026, 10, 14], 2026], [[2026, 12, 31], 2026], [[2027, 1, 3], 2026], [[2027, 1, 10], 2026],
+  [[2027, 2, 28], 2026], [[2027, 3, 1], 2027], [[2027, 7, 15], 2027], [[2028, 2, 29], 2027],
+]) {
+  assert.equal(context.currentNflSeason(new Date(year, month - 1, day)), season,
+    `${year}-${month}-${day} belongs to the ${season} season`);
+}
+console.log('Season default for the pull and import forms: PASS');
+
 // Ownership helpers are plain JavaScript inside the JSX file.
 const ownershipSource = app.slice(app.indexOf('function rosterSyncKey('), app.indexOf('// ─── DRAFT ORDER EDITOR'));
 vm.runInContext(ownershipSource, context);
@@ -180,7 +191,106 @@ console.log('Waiver roster fallback decision: PASS');
     assert.equal(state.error, 'Could not sync current rosters from Yahoo. Yahoo authorization expired. '
       + 'Check the league connection in League settings, then retry Sync.');
   }
+
+  // A superseded sync that SUCCEEDS late is no better than one that fails
+  // late: its rosters would sit under the newer failure's "as of" label.
+  screen.latestLeague.current = {...linked, rosterSnapshot:savedRosters};
+  screen.runSync(false);
+  screen.runSync(false);
+  const [superseded, latest] = pending.slice(-2);
+  latest.reject(outage); await settle();
+  superseded.resolve(fresh); await settle();
+  assert.equal(state.rosterSnapshot, savedRosters, 'a superseded sync succeeding late must not replace the newer outcome');
+  assert.equal(state.syncFailure, 'Yahoo authorization expired.');
   console.log('Waiver sync failure fallback and sequencing: PASS');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+
+// A re-rank that waits on the network first (the bye-week reload, a news
+// refresh) lands in a later render than the click that started it. Replay the
+// screen's own hook body render by render, the way React does -- refs persist,
+// everything else is that render's closure -- and check which rosters the
+// re-rank is sent with.
+(async () => {
+  const waiverSource = fs.readFileSync('draft_assistant/web/static/components/waiver-screen.jsx', 'utf8');
+  const from = waiverSource.indexOf('  const scanSeq = React.useRef(0);');
+  const to = waiverSource.indexOf('  // The waiver wire ranks pickups against');
+  assert.ok(from > 0 && to > from, 'waiver scan and refresh handlers must be found');
+  const league = {...linked, rosterSnapshot:savedRosters};
+  const liveRosters = {picks:[{playerId:'b',teamNum:2}], syncedAt:'2026-10-12T15:00:00.000Z', leagueKey:savedRosters.leagueKey};
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  const reply = body => Promise.resolve({json:async () => body});
+
+  const visit = () => {
+    const refs = [], ranked = [], syncs = [], state = {rosterSnapshot:null, syncFailure:null};
+    const waits = {};
+    const render = () => {
+      let hook = 0;
+      const rosterReady = Boolean(state.rosterSnapshot && state.rosterSnapshot.leagueKey === savedRosters.leagueKey);
+      const screen = vm.createContext({
+        React:{
+          useRef:value => { const index = hook++; return refs[index] || (refs[index] = {current:value}); },
+          useCallback:fn => fn, useEffect:() => {},
+        },
+        league, linkedTo:'Yahoo', rosterKey:savedRosters.leagueKey, rosterReady, week:null, data:null,
+        rosterPicks:rosterReady ? state.rosterSnapshot.picks : [],
+        onSyncLeague:() => new Promise((resolve, reject) => syncs.push({resolve, reject})),
+        onRefreshPlayers:() => new Promise(resolve => { waits.board = resolve; }),
+        fetch:(url, init) => {
+          if (url === '/api/free-agents') { ranked.push(plain(JSON.parse(init.body).rosters.league)); return new Promise(() => {}); }
+          if (url === '/api/context/refresh') return new Promise(resolve => { waits.news = () => resolve({json:async () => ({taskId:'t'})}); });
+          return reply({status:'done'});
+        },
+        toast:() => {}, setData:() => {}, setError:() => {}, setLoading:() => {}, setSyncing:() => {}, setUpdating:() => {},
+        setRosterSnapshot:value => { state.rosterSnapshot = value; }, setSyncFailure:value => { state.syncFailure = value; },
+      });
+      vm.runInContext(ownershipSource, screen);
+      return vm.runInContext(
+        `(function () {${waiverSource.slice(from, to)}\nreturn {runSync, reloadBoardAndRescan, refreshUpdates};})()`, screen);
+    };
+    return {render, ranked, syncs, state, waits};
+  };
+
+  // "Load bye weeks" pressed while the visit's own sync is still running: the
+  // list that sync ranks may predate the stamped board, so the reload has to
+  // re-rank -- with the rosters that have landed since, not the click's none.
+  let page = visit();
+  page.render().runSync(false);
+  page.render().reloadBoardAndRescan();
+  page.syncs[0].resolve({message:'Synced.', rosterSnapshot:liveRosters}); await settle();
+  page.render();
+  page.waits.board(); await settle();
+  assert.deepEqual(page.ranked, [liveRosters.picks], 'the board reload must re-rank once the rosters are in');
+
+  // Pressed with a failed sync's saved rosters on screen, then Retry succeeds
+  // before the board is back: the re-rank is the last word on the list, and
+  // the "rosters as of" label is already gone -- it may only rank live rosters.
+  for (const press of ['reloadBoardAndRescan', 'refreshUpdates']) {
+    page = visit();
+    page.render().runSync(false);
+    page.syncs[0].reject(new Error('Yahoo authorization expired.')); await settle();
+    assert.equal(page.state.rosterSnapshot, savedRosters);
+    const stale = page.render();
+    stale[press]();
+    stale.runSync();
+    page.syncs[1].resolve({message:'Synced.', rosterSnapshot:liveRosters}); await settle();
+    assert.equal(page.state.syncFailure, null, 'the retry cleared the stale-roster label');
+    page.render();
+    (press === 'refreshUpdates' ? page.waits.news : page.waits.board)(); await settle();
+    assert.deepEqual(page.ranked, [liveRosters.picks], `${press} must not rank the saved rosters once they are unlabelled`);
+  }
+
+  // ...and when it lands while that retry is still running there are no
+  // rosters to rank at all: the sync's own scan follows when it finishes.
+  page = visit();
+  page.render().runSync(false);
+  page.syncs[0].reject(new Error('Yahoo authorization expired.')); await settle();
+  const fallback = page.render();
+  fallback.reloadBoardAndRescan();
+  fallback.runSync();
+  page.render();
+  page.waits.board(); await settle();
+  assert.deepEqual(page.ranked, [], 'a reload landing mid-retry must not rank the saved rosters behind it');
+  console.log('Waiver re-rank after a deferred reload: PASS');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
 // Execute the real restore handler: old provider IDs must resolve immediately,

@@ -40,6 +40,7 @@ What a case pins, and why only that:
 import itertools
 import json
 import sys
+import tempfile
 import unittest
 import zlib
 from functools import lru_cache
@@ -134,6 +135,30 @@ EDGE_ROSTERS = [
     # Two spare players and two IR slots: nobody is seated, nothing is open.
     ("ir-seats-nobody", {"QB": 1, "RB": 1, "IR": 2},
      [["QB0", "QB", 21], ["QB1", "QB", 15], ["RB0", "RB", 9], ["RB1", "RB", 5]]),
+    # Every other projection here is a whole number and no real one is, so a
+    # side that rounded or truncated before ranking passed every case. Each
+    # pair below collapses to one value under round, floor and ceil alike, and
+    # the better player has the later id and comes later in the list - so
+    # either side's tie-break would then start the wrong RB and flex the TE.
+    ("fractions-decide", {"RB": 1, "FLEX": 1, "BN": 1},
+     [["RB0", "RB", 100.5], ["RB1", "RB", 100.75], ["TE0", "TE", 110.5], ["WR0", "WR", 110.75]]),
+    # No roster above has a second QB, TE, K or DST slot, a third RB or WR
+    # slot, or a third FLEX - though two-QB and three-WR leagues are ordinary.
+    # A side that stopped counting at the usual number passed every case, so
+    # this one fills one more of everything and leaves a single TE out.
+    ("one-more-of-every-slot", {"QB": 2, "RB": 3, "WR": 3, "TE": 2, "FLEX": 3, "K": 2, "DST": 2},
+     [["QB0", "QB", 351], ["QB1", "QB", 331],
+      ["RB0", "RB", 291], ["RB1", "RB", 271], ["RB2", "RB", 251], ["RB3", "RB", 171],
+      ["WR0", "WR", 281], ["WR1", "WR", 261], ["WR2", "WR", 241], ["WR3", "WR", 181], ["WR4", "WR", 161],
+      ["TE0", "TE", 221], ["TE1", "TE", 201], ["TE2", "TE", 151],
+      ["K0", "K", 141], ["K1", "K", 131], ["DST0", "DST", 121], ["DST1", "DST", 111]]),
+    # The browser's search walks dedicated slots as well as flex ones. The
+    # third TE starts only if the TE in each TE slot moves along and the WR
+    # leaves W/T for R/W: three starters relocating for one. No case above
+    # needs more than two, so a search that gave up after two passed them all
+    # while random rosters showed it leaving a starter on the bench.
+    ("three-starters-move", {"TE": 2, "WRTE": 1, "RBWR": 1},
+     [["TE0", "TE", 131], ["TE1", "TE", 121], ["WR0", "WR", 111], ["TE2", "TE", 101]]),
 ]
 
 
@@ -176,6 +201,13 @@ def _scored(positions, label):
 
 def production_case(name, slots, players):
     """One fixture case, computed only from the engine's own functions."""
+    # Totals are compared exactly, and each side adds its starters up in its own
+    # order. Whole quarters keep every partial sum exact in binary; 187.4 would
+    # fail in Node alone, on a 0.00000000000003 that is nobody's bug.
+    if any(value * 4 != int(value * 4) for _, _, value in players):
+        raise AssertionError(
+            f"{name}: projections must be whole quarters (x.0, x.25, x.5, x.75) so both sides total them exactly."
+        )
     board = [Player(pid, pid, position) for pid, position, _ in players]
     points = {pid: value for pid, _, value in players}
     lineup = roster_value(board, points, slots)
@@ -264,6 +296,20 @@ def render(document):
         ' "rosters":[\n' + ",\n".join(rosters) + "\n ]\n"
         "}\n"
     )
+
+
+def write_fixture(document, path=FIXTURE_PATH):
+    """Regenerate the file with the line endings this checkout already gave it.
+
+    It is LF in the repository, but git hands it out with CRLF wherever
+    core.autocrlf is on. Rewriting that copy with LF changes its size, and git
+    calls a changed size a modification without reading the file: a regenerate
+    that altered nothing left ``git status`` listing the file beside an empty
+    ``git diff``.
+    """
+    newline = "\r\n" if path.is_file() and b"\r\n" in path.read_bytes() else "\n"
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(render(document), encoding="utf-8", newline=newline)
 
 
 # ── The independent reference ────────────────────────────────────────────────
@@ -364,6 +410,21 @@ class TestLineupParityFixtures(unittest.TestCase):
             "`node scripts/check_lineup_parity.js`, because the browser must reproduce the new file too."
         )
 
+    def test_regenerating_keeps_the_line_endings_of_the_checkout(self):
+        rendered = render(self.document)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "lineup_parity.json"
+            write_fixture(self.document, path)
+            self.assertEqual(path.read_bytes(), rendered.encode("utf-8"), "a new file is written with LF")
+            for newline in ("\r\n", "\n"):
+                with self.subTest(newline=newline):
+                    checked_out = rendered.replace("\n", newline).encode("utf-8")
+                    path.write_bytes(checked_out)
+                    write_fixture(self.document, path)
+                    # Byte for byte: a different size is all git needs to
+                    # report the file as modified.
+                    self.assertEqual(path.read_bytes(), checked_out)
+
     def test_every_case_matches_an_exhaustive_search(self):
         for label, slots, case in _cases(self.document):
             with self.subTest(case=label):
@@ -448,6 +509,21 @@ class TestLineupParityFixtures(unittest.TestCase):
             by_key = needs_by_position(LeagueConfig(1, slots, {}, {}), {"BN": board})
             return any(not by_key[pos] and not flex_need_for_position(pos, by_key) for pos in case["needs"])
 
+        def decided_by_a_fraction(slots, case):
+            # Dropping the fractions seats someone else: the case a side that
+            # rounds its projections gets wrong.
+            board = [Player(pid, pid, pos) for pid, pos, _ in case["players"]]
+            whole = {pid: int(value) for pid, _, value in case["players"]}
+            return sorted(player.id for player in roster_value(board, whole, slots).starters) != case["starters"]
+
+        def three_starters_move(slots, case):
+            # The browser seats the lowest projection last. A TE arriving to
+            # find both TE slots and W/T taken starts only if all three move.
+            if not (slots.get("TE", 0) >= 2 and slots.get("WRTE") and slots.get("RBWR")) or case["open"]:
+                return False
+            last = min(case["players"], key=lambda player: player[2])
+            return last[1] == "TE" and started(case, "TE") > slots["TE"] and started(case, "WR") > 0
+
         situations = {
             "W/T and R/W both filled": lambda slots, case: (
                 slots.get("WRTE") and slots.get("RBWR") and not case["open"]),
@@ -461,6 +537,11 @@ class TestLineupParityFixtures(unittest.TestCase):
             "a bench ordered by multiplier, not raw points": lambda slots, case: bench_overrules_raw_points(case),
             "spares that IR does not seat": lambda slots, case: slots.get("IR") and spares(case),
             "a need only reachable by moving a starter": needs_a_starter_to_move,
+            "a starter decided by a fraction of a point": decided_by_a_fraction,
+            "a second QB, a third WR and a third FLEX all starting": lambda slots, case: (
+                slots.get("QB", 0) >= 2 and slots.get("WR", 0) >= 3 and slots.get("FLEX", 0) >= 3
+                and not case["open"]),
+            "three starters moving to seat one more": three_starters_move,
         }
         for situation, applies in situations.items():
             with self.subTest(situation=situation):
@@ -470,8 +551,7 @@ class TestLineupParityFixtures(unittest.TestCase):
 if __name__ == "__main__":
     if "--write" in sys.argv[1:]:
         document = build_document()
-        FIXTURE_PATH.parent.mkdir(exist_ok=True)
-        FIXTURE_PATH.write_text(render(document), encoding="utf-8", newline="\n")
+        write_fixture(document)
         print(f"Wrote {sum(1 for _ in _cases(document))} cases to {FIXTURE_PATH}")
         print("Now run: node scripts/check_lineup_parity.js")
     else:

@@ -156,15 +156,22 @@ class TestMalformedInputScaling(unittest.TestCase):
                     durations = []
                     for size in (2048, 8192):
                         value = make_input(size)
+                        # The fastest single call. A batch of calls is
+                        # pre-empted part-way on a busy machine, and its
+                        # average then measures the scheduler: correct code
+                        # showed 20x growth. A backtracking pattern is slow
+                        # on every call, so its fastest still grows 16x.
                         durations.append(min(timeit.repeat(
-                            lambda: function(value), number=3, repeat=3,
-                        )) / 3)
+                            lambda: function(value), number=1, repeat=25,
+                        )))
                     timings[name] = durations
             print(json.dumps(timings))
         """)
+        # The timeout only stops a hang. Starting the child and importing the
+        # parsers has by itself outlasted the 20 seconds this used to allow.
         result = subprocess.run(
             [sys.executable, "-c", code], capture_output=True, text=True,
-            cwd=Path(__file__).resolve().parents[1], timeout=20, check=True,
+            cwd=Path(__file__).resolve().parents[1], timeout=180, check=True,
         )
         timings = json.loads(result.stdout)
         self.assertEqual(len(timings), 9)

@@ -193,7 +193,9 @@ class TestPlayerContext(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = str(Path(tmp) / "context.json")
             save_context(context, path)
-            loaded = load_context(path)
+            # Named, because an unnamed load means "today's season": the file
+            # comes back whole only while that is still the one it was saved for.
+            loaded = load_context(path, season=2026)
             self.assertEqual(context_to_dict(loaded), context_to_dict(context))
 
     def test_week_selection_does_not_relabel_cached_projection(self):

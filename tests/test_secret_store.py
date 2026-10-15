@@ -23,6 +23,25 @@ def _fake_dpapi(data: bytes, protect: bool) -> bytes:
     return bytes(b ^ 0x5A for b in data)
 
 
+@contextlib.contextmanager
+def unreadable(target, error=None):
+    """Make the store's reads of *target* fail, as a file that is out of reach does.
+
+    Only secret_store's own open() is replaced, so the atomic marker write in
+    storage.py and the test's own file handling carry on working.
+    """
+    error = error or PermissionError(13, "Permission denied", target)
+    real = open
+
+    def guarded(path, *args, **kwargs):
+        if os.path.abspath(os.fspath(path)) == os.path.abspath(target):
+            raise error
+        return real(path, *args, **kwargs)
+
+    with patch.object(secret_store, "open", side_effect=guarded, create=True):
+        yield
+
+
 class TestSecretStore(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -182,6 +201,27 @@ class TestSecretStore(unittest.TestCase):
                 secret_store.save(self.path, "espn", self.data)
                 self.assertTrue(secret_store.is_sealed(self.path))
         self.assertEqual(stderr.getvalue(), "")
+
+    def test_a_notice_that_cannot_be_written_does_not_fail_the_read(self):
+        # The file is deleted and its credentials are in memory by the time
+        # the notice is printed. A closed or broken stderr raised out of
+        # load() right there, where 0.7.4 simply returned the credentials.
+        class BrokenPipe(io.StringIO):
+            def write(self, text):
+                raise BrokenPipeError(32, "Broken pipe")
+
+        closed = io.StringIO()
+        closed.close()
+        for label, stream in (("broken pipe", BrokenPipe()), ("closed", closed)):
+            with self.subTest(stderr=label):
+                self._plaintext()
+                with patch.object(secret_store, "backend", return_value="none"), \
+                     contextlib.redirect_stderr(stream):
+                    self.assertEqual(secret_store.load(self.path, "espn"), self.data)
+                    self.assertFalse(os.path.exists(self.path))
+                    # What the UI is told does not depend on stderr.
+                    self.assertTrue(secret_store.plaintext_removed(self.path, "espn"))
+                    secret_store.forget(self.path, "espn")
 
     def test_forgetting_ends_the_removed_plaintext_report(self):
         self._plaintext()
@@ -348,6 +388,74 @@ class TestKeychainProfiles(unittest.TestCase):
         with open(path, "wb") as handle:
             handle.write(content)
 
+    def test_a_marker_nested_too_deep_to_parse_can_still_be_replaced_and_forgotten(self):
+        # json reports that with RecursionError, not ValueError. 0.7.4 never
+        # parsed the file in save() or forget(), so it could stop neither;
+        # here it left a store nothing in the app could clear.
+        nested = b"[" * 100000
+        name = self._store_from_0_7_4(self.first, {"token": "old"})
+        self._write(self.first, nested)
+        self.assertEqual(secret_store.load(self.first, "yahoo"), {})
+        secret_store.save(self.first, "yahoo", {"token": "new"})
+        self.assertEqual(secret_store.load(self.first, "yahoo"), {"token": "new"})
+        self._write(self.first, nested)
+        secret_store.forget(self.first, "yahoo")
+        self.assertNotIn(name, self.entries)
+        self.assertFalse(os.path.exists(self.first))
+
+    def test_a_marker_that_cannot_be_read_stops_save_from_minting_a_second_item(self):
+        # "Could not read it" is not "there is none". Taken for that, save()
+        # minted a fresh id and replaced the marker with it, and the first
+        # item stayed in the Keychain with nothing left recording its name.
+        secret_store.save(self.first, "yahoo", {"token": "one"})
+        item = self._marker(self.first)["account"]
+        with unreadable(self.first):
+            self.assertEqual(secret_store.load(self.first, "yahoo"), {})
+            with self.assertRaises(OSError) as raised:
+                secret_store.save(self.first, "yahoo", {"token": "two"})
+        self.assertIn(os.path.abspath(self.first), str(raised.exception))
+        self.assertIn("Permission denied", str(raised.exception))
+        self.assertEqual(self.entries, {item: json.dumps({"token": "one"})})
+        self.assertEqual(self._marker(self.first)["account"], item)
+        # Readable again, the same item simply carries on.
+        secret_store.save(self.first, "yahoo", {"token": "two"})
+        self.assertEqual(self.entries, {item: json.dumps({"token": "two"})})
+
+    def test_a_marker_that_cannot_be_read_is_not_thrown_away_by_forget(self):
+        # Deleting the file on the strength of a failed read reported the
+        # credentials forgotten while the item it named was still there, and
+        # now beyond finding. Saving "nothing" is a forget and must stop too.
+        secret_store.save(self.first, "yahoo", {"token": "one"})
+        item = self._marker(self.first)["account"]
+        errors = (PermissionError(13, "Permission denied"), OSError(24, "Too many open files"),
+                  OSError(5, "Input/output error"), OSError("no errno at all"))
+        for error in errors:
+            for forget in (lambda: secret_store.forget(self.first, "yahoo"),
+                           lambda: secret_store.save(self.first, "yahoo", {})):
+                with self.subTest(error=str(error)), unreadable(self.first, error):
+                    with self.assertRaises(OSError) as raised:
+                        forget()
+                    self.assertIn("nothing was changed", str(raised.exception))
+                    self.assertEqual(self.entries, {item: json.dumps({"token": "one"})})
+                    self.assertTrue(os.path.exists(self.first))
+        self.assertEqual(secret_store.load(self.first, "yahoo"), {"token": "one"})
+        secret_store.forget(self.first, "yahoo")
+        self.assertEqual(self.entries, {})
+        self.assertFalse(os.path.exists(self.first))
+
+    def test_a_marker_that_is_simply_not_there_still_reads_as_absent(self):
+        # Only these two say the file does not exist; neither may be mistaken
+        # for the out-of-reach kind, or a first save could never happen.
+        for error in (FileNotFoundError(2, "No such file or directory"),
+                      NotADirectoryError(20, "Not a directory")):
+            with self.subTest(error=type(error).__name__):
+                with unreadable(self.first, error):
+                    secret_store.forget(self.first, "yahoo")
+                    secret_store.save(self.first, "yahoo", {"token": "one"})
+                self.assertEqual(secret_store.load(self.first, "yahoo"), {"token": "one"})
+                secret_store.forget(self.first, "yahoo")
+                self.assertEqual(self.entries, {})
+
     def test_forget_removes_both_the_marker_item_and_the_0_7_4_path_item(self):
         # 0.7.4 wrote an item here and its marker was lost (the directory was
         # deleted and recreated, say). The next save mints a fresh id, so
@@ -454,6 +562,25 @@ class TestKeychainProfiles(unittest.TestCase):
         self.assertEqual(secret_store.load(self.first, "yahoo"), {"token": "one"})
         self.assertEqual(secret_store.load(self.second, "yahoo"), {"token": "two"})
 
+    def test_a_file_without_the_magic_names_no_keychain_item(self):
+        # Only a file this module wrote may say which item is a store's. One
+        # that merely looks like a marker is a legacy plaintext file to
+        # load(), and migrating it has to mint an item of its own — never
+        # write over, or later delete, the one it happens to name.
+        secret_store.save(self.first, "yahoo", {"token": "one"})
+        item = self._marker(self.first)["account"]
+        lookalike = {"backend": "keychain", "account": item}
+        os.makedirs(os.path.dirname(self.second))
+        self._write(self.second, json.dumps(lookalike).encode("utf-8"))
+        secret_store.forget(self.second, "yahoo")
+        self.assertEqual(secret_store.load(self.first, "yahoo"), {"token": "one"})
+        self._write(self.second, json.dumps(lookalike).encode("utf-8"))
+        self.assertEqual(secret_store.load(self.second, "yahoo"), lookalike)
+        self.assertEqual(secret_store.load(self.first, "yahoo"), {"token": "one"})
+        self.assertNotEqual(self._marker(self.second)["account"], item)
+        secret_store.forget(self.second, "yahoo")
+        self.assertEqual(self.entries, {item: json.dumps({"token": "one"})})
+
     def test_a_keychain_marker_is_not_read_by_another_backend(self):
         secret_store.save(self.first, "yahoo", {"token": "one"})
         with patch.object(secret_store, "backend", return_value="dpapi"), \
@@ -532,6 +659,7 @@ class FakeSecurity:
         self.stdin_exit = None
         self.mangle_stdin = None
         self.fail_argv_writes = False
+        self.refuse_delete = False
 
     def run(self, argv, input=None, capture_output=False, text=False, timeout=None, **_):
         argv = list(argv)
@@ -661,13 +789,23 @@ class FakeSecurity:
         secret = self.items.get(options[b"-a"].decode("utf-8"))
         if secret is None:
             return 44  # errSecItemNotFound
+        if b"-w" not in options:
+            # Attributes only: all this says is that the item exists.
+            out.append(b'keychain: "login.keychain-db"\n')
+            return 0
         # -w prints anything that is not printable ASCII as hex.
         printable = all(0x20 <= byte < 0x7F for byte in secret)
         out.append((secret if printable else secret.hex().encode("ascii")) + b"\n")
         return 0
 
     def _delete(self, options, out, mangle):
-        return 0 if self.items.pop(options[b"-a"].decode("utf-8"), None) is not None else 44
+        account = options[b"-a"].decode("utf-8")
+        if account not in self.items:
+            return 44
+        if self.refuse_delete:
+            return 36  # errSecInteractionNotAllowed: found, and still there
+        del self.items[account]
+        return 0
 
 
 class TestKeychainTransport(unittest.TestCase):
@@ -811,6 +949,39 @@ class TestKeychainTransport(unittest.TestCase):
                 self.assertIn(b" -X " + secret.encode("utf-8").hex().encode("ascii") + b" -U\n", line)
                 self.assertEqual(self.fake.items[self.ACCOUNT], secret.encode("utf-8"))
 
+    def test_a_long_secret_that_is_not_ascii_never_reaches_the_quoted_form(self):
+        # Too long for hex, so only the quoted form is left, and that line is
+        # sent as ASCII: without the check the encode raised with the whole
+        # line — secret included — riding on the exception. The cap counts
+        # characters, too, which are bytes only while the line is ASCII.
+        for secret in ("é" * 2500, "x" * 2500 + "☃", "日本語" * 900):
+            with self.subTest(secret=secret[-3:]):
+                self.fake.calls.clear()
+                self.assertIsNone(secret_store._keychain_stdin_command(self.ACCOUNT, secret))
+                self.assertEqual(self._write(secret), "argv")
+                self.assertEqual(self._stdin_calls(), [])
+                self.assertEqual(self.fake.items[self.ACCOUNT], secret.encode("utf-8"))
+
+    def test_a_secret_that_cannot_be_encoded_fails_cleanly(self):
+        # A lone surrogate has no UTF-8 form, and the error for that carries
+        # the string it choked on. It has to surface as the same bare failure.
+        secret = "sensitive-token\ud800"
+        self.assertIsNone(secret_store._keychain_stdin_command(self.ACCOUNT, secret))
+        with self.assertRaises(OSError) as raised:
+            self._write(secret)
+        self.assertEqual(str(raised.exception), "Could not save credentials in the macOS Keychain")
+        self.assertIsNone(raised.exception.__context__)
+        self.assertEqual(self._stdin_calls(), [])
+        self.assertEqual(self.fake.items, {})
+
+    def test_a_failed_write_does_not_report_the_transport_of_the_one_before(self):
+        self.assertEqual(self._write(json.dumps({"token": "first"})), "stdin-hex")
+        self.fake.refuse_stdin = True
+        self.fake.fail_argv_writes = True
+        with self.assertRaises(OSError):
+            self._write(json.dumps({"token": "second"}))
+        self.assertIsNone(secret_store._keychain_transport)
+
     def test_a_write_that_reads_back_wrong_is_redone_through_argv(self):
         # Exit status 0 proves nothing: it is only the last command's.
         secret = json.dumps({"token": "t" * 300})
@@ -947,6 +1118,65 @@ class TestKeychainTransport(unittest.TestCase):
                     self.assertRegex(json.load(handle)["account"], r"\Aespn:[0-9a-f]{32}\Z")
             secret_store.forget(path, "espn")
         self.assertEqual(self.fake.items, {})
+        self.assertFalse(os.path.exists(path))
+
+    def _store(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return os.path.join(directory.name, "profile", "yahoo.json")
+
+    def test_forget_keeps_the_marker_when_the_item_could_not_be_deleted(self):
+        # The tool exits non-zero and the item is still there — a locked
+        # keychain whose unlock prompt was dismissed, say. forget() used to
+        # remove the marker regardless and report success, and with the id
+        # recorded nowhere else the secret stayed in the Keychain for good.
+        path = self._store()
+        with patch.object(secret_store, "backend", return_value="keychain"):
+            secret_store.save(path, "yahoo", {"token": "sensitive-token"})
+            with open(path, encoding="utf-8") as handle:
+                item = json.load(handle)["account"]
+            self.fake.refuse_delete = True
+            for forget in (lambda: secret_store.forget(path, "yahoo"),
+                           lambda: secret_store.save(path, "yahoo", {})):
+                with self.assertRaises(OSError) as raised:
+                    forget()
+                self.assertEqual(str(raised.exception), "Could not remove credentials from the macOS Keychain")
+                self.assertIsNone(raised.exception.__context__)
+                self.assertIn(item, self.fake.items)
+                self.assertEqual(secret_store.load(path, "yahoo"), {"token": "sensitive-token"})
+            # Nothing was lost: once the tool will delete, the marker that was
+            # kept finishes the job.
+            self.fake.refuse_delete = False
+            secret_store.forget(path, "yahoo")
+        self.assertEqual(self.fake.items, {})
+        self.assertFalse(os.path.exists(path))
+
+    def test_deleting_what_is_not_there_is_not_a_failure(self):
+        # "No such item" exits non-zero too, and forget() asks for the 0.7.4
+        # path-derived name every time although it almost never exists.
+        path = self._store()
+        with patch.object(secret_store, "backend", return_value="keychain"):
+            secret_store.forget(path, "yahoo")
+            secret_store.save(path, "yahoo", {"token": "one"})
+            secret_store.forget(path, "yahoo")
+        self.assertEqual(self.fake.items, {})
+        self.assertFalse(os.path.exists(path))
+        secret_store._keychain_delete("yahoo:" + "b" * 32)
+        # Telling the two apart asks whether the item exists, never for its password.
+        probes = [argv for argv, _, _ in self.fake.calls
+                  if argv[1] == "find-generic-password" and "-w" not in argv]
+        self.assertTrue(probes)
+        for argv in probes:
+            self.assertEqual(argv, ["security", "find-generic-password", "-s", "DraftAssistant", "-a", argv[5]])
+
+    def test_a_refused_cleanup_does_not_hide_why_the_first_save_failed(self):
+        path = self._store()
+        self.fake.refuse_delete = True
+        with patch.object(secret_store, "backend", return_value="keychain"), \
+             patch("draft_assistant.storage.atomic_write_json", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError) as raised:
+                secret_store.save(path, "yahoo", {"token": "one"})
+        self.assertEqual(str(raised.exception), "disk full")
         self.assertFalse(os.path.exists(path))
 
 

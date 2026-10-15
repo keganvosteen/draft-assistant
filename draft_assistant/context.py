@@ -83,19 +83,53 @@ def isoformat(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat()
 
 
+#: The first (month, day) that belongs to the upcoming season. January and
+#: February are still last year's: week 17 straddles New Year, week 18 follows
+#: it, and the playoffs run to a Super Bowl no later than mid-February. March 1
+#: sits in the dead air after that and ahead of everything that is about the
+#: next season -- the league year turns over in mid-March, and a board,
+#: projections or ADP pulled from spring on are for the season about to be
+#: drafted. A fixed date on purpose: nothing is played or published in late
+#: February, so there is no boundary there worth computing.
+SEASON_ROLLOVER = (3, 1)
+REGULAR_SEASON_WEEKS = 18
+
+
+def season_kickoff(season: int) -> date:
+    """The Thursday that opens NFL week 1: the one after September's first Monday."""
+    september = date(season, 9, 1)
+    first_monday = september + timedelta(days=-september.weekday() % 7)
+    return first_monday + timedelta(days=3)
+
+
 def default_season(today: Optional[date] = None) -> int:
-    return (today or date.today()).year
+    """The NFL season in play on ``today``, named for the year it kicked off.
+
+    Not the calendar year. That put New Year's Day in week 1 of a season with
+    no games, in the middle of fantasy championship week: every bye was judged
+    against the wrong season and ignored, and the news cache read as empty.
+    """
+    today = today or date.today()
+    return today.year if (today.month, today.day) >= SEASON_ROLLOVER else today.year - 1
 
 
 def default_week(today: Optional[date] = None) -> int:
-    """Return a practical regular-season default; the UI remains editable."""
+    """The fantasy week of ``default_season(today)``; the UI remains editable.
+
+    Fantasy weeks run Tuesday through Monday, so week 1 opens two days before
+    the kickoff Thursday and the answer never depends on which day a week's
+    first game is played. Anything earlier is still week 1 (draft prep), and
+    from the end of week 18 until the season rolls over it stays 18.
+
+    This used to count 7-day blocks from September 1, which is never the
+    Tuesday week 1 opens on: in 2025 every Monday night game counted as the
+    following week, and 2026 ran a full week ahead all season. It also returned
+    1 for every date before September, so weeks 17 and 18 -- played in January
+    -- came back as week 1.
+    """
     today = today or date.today()
-    if today.month < 9:
-        return 1
-    if today.month > 12:
-        return 18
-    opener = date(today.year, 9, 1)
-    return max(1, min(18, ((today - opener).days // 7) + 1))
+    week_one = season_kickoff(default_season(today)) - timedelta(days=2)
+    return max(1, min(REGULAR_SEASON_WEEKS, (today - week_one).days // 7 + 1))
 
 
 def context_path() -> str:
@@ -197,13 +231,30 @@ def context_from_dict(raw: object) -> PlayerContext:
 
 
 def load_context(path: Optional[str] = None, season: Optional[int] = None, week: Optional[int] = None) -> PlayerContext:
+    """Return the news cache as it applies to ``season`` -- today's, unless named.
+
+    The cache is one slot, not one per season, and whatever season it was last
+    refreshed for is not evidence of what season it is now. Loading it with no
+    season used to hand back the file's own: a cache written last autumn made
+    /api/players judge this year's correctly stamped byes against last year
+    and report none, and the "Load bye weeks" repair that offered itself then
+    re-stamped the whole board from last year's schedule. So the season is
+    always asked for, and a cache for any other one reads as no news for this
+    season yet -- the eligibility gate fails open and every caller already
+    reports an unrefreshed context as stale.
+
+    The returned ``season`` is therefore the one requested, never merely the
+    one found. That is what lets a handler use ``load_context().season`` as
+    "the current season" and keeps every endpoint on the same answer.
+    """
     path = path or context_path()
+    season = default_season() if season is None else season
     try:
         with open(path, "r", encoding="utf-8") as handle:
             context = context_from_dict(json.load(handle))
     except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError, ValueError):
         context = empty_context(season, week)
-    if season is not None and context.season != season:
+    if context.season != season:
         return empty_context(season, week)
     if week is not None:
         context.selected_week = max(1, min(18, int(week)))

@@ -109,12 +109,19 @@ def _report_plaintext_removed(path: str, account: str) -> None:
     # enough — moves it into memory and deletes it. Doing that quietly meant
     # saved credentials simply vanished at the next restart.
     _plaintext_removed.add(_identity(path, account))
-    print(
-        f"WARNING: removed the unencrypted credential file {os.path.abspath(path)}. "
-        "This platform has no supported keystore, so those credentials are now held "
-        "only in memory and must be re-entered after the app restarts.",
-        file=sys.stderr,
-    )
+    try:
+        print(
+            f"WARNING: removed the unencrypted credential file {os.path.abspath(path)}. "
+            "This platform has no supported keystore, so those credentials are now held "
+            "only in memory and must be re-entered after the app restarts.",
+            file=sys.stderr,
+        )
+    except (OSError, ValueError):
+        # A closed or broken stderr must not fail the read that got here. By
+        # now the file is gone and its credentials are in memory, so raising
+        # only turned the first status poll into an error; describe() still
+        # tells the UI what this line could not.
+        pass
 
 
 # ── Windows DPAPI ────────────────────────────────────────────────────────────
@@ -259,18 +266,47 @@ def _keychain_read(account: str) -> Optional[str]:
 
 
 def _keychain_delete(account: str) -> None:
-    subprocess.run(
+    result = subprocess.run(
         ["security", "delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account],
         capture_output=True,
     )
+    # A delete that failed used to pass for one that worked, and forget() went
+    # on to remove the marker. That was survivable while the item's name could
+    # be recomputed from the path; a random id lives nowhere but that marker.
+    # "No such item" exits non-zero as well, so the status cannot tell the two
+    # apart — ask whether the item is still there.
+    if result.returncode != 0 and _keychain_has(account):
+        raise OSError("Could not remove credentials from the macOS Keychain")
 
 
-def _read_body(path: str) -> Optional[dict]:
-    """The store file's JSON object, or None if it is missing or not one."""
+def _keychain_has(account: str) -> bool:
+    # Without -w this prints the item's attributes and never its password.
+    result = subprocess.run(
+        ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def _read_body(path: str, strict: bool = False) -> Optional[dict]:
+    """The store file's JSON object, or None if it is missing or not one.
+
+    *strict* raises OSError for a file that is there but cannot be read just
+    now, instead of passing it off as missing. See _marker_item().
+    """
     try:
         with open(path, encoding="utf-8") as handle:
             body = json.load(handle)
-    except (OSError, ValueError):
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError:
+        if strict:
+            raise
+        return None
+    except (ValueError, RecursionError):
+        # RecursionError is how json gives up on a deeply nested file. 0.7.4's
+        # save() and forget() never parsed the file at all, so letting it
+        # through left a store that could be neither replaced nor forgotten.
         return None
     return body if isinstance(body, dict) else None
 
@@ -293,13 +329,36 @@ def _keychain_item(body: Optional[dict], account: str) -> Optional[str]:
     return None
 
 
+def _marker_item(path: str, account: str) -> Optional[str]:
+    """_keychain_item() for save() and forget(), which go on to replace or
+    remove the marker.
+
+    The marker is the only record of a per-store item, so one that is there
+    but cannot be read just now — too many open files, a permissions slip, a
+    synced folder that is offline — has to stop them. Taking it for absent had
+    save() mint a second item and forget() delete the file, and either way the
+    item it named stayed in the Keychain where nothing could find it again.
+    0.7.4 could not lose one like that: it recomputed the name from the path.
+    """
+    try:
+        body = _read_body(path, strict=True)
+    except OSError as error:
+        reason = error.strerror or type(error).__name__
+    else:
+        return _keychain_item(body, account)
+    raise OSError(
+        f"Could not read the credential marker {os.path.abspath(path)} ({reason}). It is the "
+        "only record of this profile's Keychain item, so nothing was changed; try again."
+    )
+
+
 def _keychain_save(path: str, account: str, secret: str) -> None:
     from .storage import atomic_write_json
 
     # Reuse the id the marker already holds. A random id that lives in the
     # marker travels with the directory, where 0.7.4's path-derived name lost
     # the credential — and orphaned the item — as soon as the directory moved.
-    item = _keychain_item(_read_body(path), account)
+    item = _marker_item(path, account)
     minted = item is None
     if minted:
         item = f"{account}:{uuid.uuid4().hex}"
@@ -436,12 +495,15 @@ def forget(path: str, account: str) -> None:
             # copy: a 0.7.4 store that was *moved away* still reads that item
             # through its own marker, so forgetting whatever now lives at its
             # old path sends it back to authorize again as well.
-            item = _keychain_item(_read_body(path), account)
+            item = _marker_item(path, account)
             legacy = _keychain_account(path, account)
             if item:
                 _keychain_delete(item)
             if legacy != item:
                 _keychain_delete(legacy)
+        # Last, and only once the items are gone: a delete that fails raises,
+        # and until it succeeds the marker is all that says which item to
+        # come back for.
         try:
             os.remove(path)
         except FileNotFoundError:

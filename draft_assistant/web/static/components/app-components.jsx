@@ -342,7 +342,7 @@ function ImportPanel({ form, setForm }) {
     setImporting(true); setImportMsg(null);
     fetch('/api/import-espn', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leagueId: id, season: form.season || new Date().getFullYear(), ...getEspnAccess(form.id) }),
+      body: JSON.stringify({ leagueId: id, season: form.season || currentNflSeason(), ...getEspnAccess(form.id) }),
     })
       .then(r => r.json())
       .then(d => {
@@ -508,7 +508,7 @@ function ImportPanel({ form, setForm }) {
       {provider === 'espn' && (
         <div>
           <Field label="Season"><Input type="number" min={2018} max={new Date().getFullYear() + 1}
-            aria-label="ESPN season" value={form.season || new Date().getFullYear()}
+            aria-label="ESPN season" value={form.season || currentNflSeason()}
             onChange={e => setForm(f => ({...f, season:Number(e.target.value)}))} style={{width:130}} /></Field>
           <div style={{display:'flex', gap:8, alignItems:'center'}}>
             <Input value={espnId} onChange={e=>setEspnId(e.target.value)}
@@ -960,10 +960,10 @@ function adpFormatForLeague(league) {
 
 // ─── PULL DATA MODAL ─────────────────────────────────────────────────────────
 function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
-  const currentYear = new Date().getFullYear();
+  const currentSeason = currentNflSeason();
   const [mode, setMode]         = React.useState('free');
-  const [season, setSeason]     = React.useState(currentYear);
-  const [statsSeason, setStats] = React.useState(currentYear - 1);
+  const [season, setSeason]     = React.useState(currentSeason);
+  const [statsSeason, setStats] = React.useState(currentSeason - 1);
   const [skipFf, setSkipFf]     = React.useState(false);
   const [history, setHistory]   = React.useState(3);
   const [advanced, setAdvanced] = React.useState(false);
@@ -1093,10 +1093,10 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
             <div style={{marginTop:14}}>
               <div style={{display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:12}}>
                 <Field label="Projections" hint="season">
-                  <Input type="number" value={season} onChange={e => setSeason(parseInt(e.target.value) || currentYear)} />
+                  <Input type="number" value={season} onChange={e => setSeason(parseInt(e.target.value) || currentSeason)} />
                 </Field>
                 <Field label="Stats" hint="most recent">
-                  <Input type="number" value={statsSeason} onChange={e => setStats(parseInt(e.target.value) || currentYear-1)} />
+                  <Input type="number" value={statsSeason} onChange={e => setStats(parseInt(e.target.value) || currentSeason - 1)} />
                 </Field>
                 <Field label="History" hint="years">
                   <Input type="number" value={history} min={1} max={5}
@@ -1557,9 +1557,15 @@ function App() {
     fetch('/api/context').then(r => r.json()).then(ctx => {
       if (!ctx || ctx.error) { newsFailed(ctx && ctx.error); return; }
       if (!ctx.stale) return;
+      // No season and no week: the server works both out from today's date.
+      // This used to echo ctx.season and ctx.week straight back, which pinned
+      // the cache to whatever it was last refreshed for — the week never
+      // advanced, and a cache from last season was refreshed as last season.
+      // The server cannot tell an echo from a request for an older season
+      // (tools make those on purpose), so the fix is not to send one.
       return fetch('/api/context/refresh', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({season:ctx.season, week:ctx.week}),
+        body:JSON.stringify({}),
       }).then(r => r.json()).then(started => {
         if (!started.taskId) { newsFailed(started && started.error); return; }
         let attempts = 0;

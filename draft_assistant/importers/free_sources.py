@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from ..context import default_season
 from ..fuzzy import normalize_player_name
 from ..identity import player_aliases, player_indexes, retain_aliases
 from ..models import LeagueConfig, Player
@@ -102,13 +103,21 @@ def _seg(value: object) -> str:
 
 
 def default_projection_season(today: Optional[date] = None) -> int:
-    today = today or date.today()
-    return today.year
+    """The season a pull builds the board for: the one the app says is current.
+
+    ``context.default_season``, not the calendar year. The two differ only in
+    January and February, when the calendar year names a season nobody has
+    published a projection, an ADP or a schedule for while the one before it
+    is still being played. On the calendar year a pull, an ESPN roster sync and
+    the CLI's ``refresh-byes`` would all change season on New Year's Day, and
+    the CLI would stamp a different season from ``POST /api/refresh-byes``.
+    """
+    return default_season(today)
 
 
 def default_stats_season(today: Optional[date] = None) -> int:
-    today = today or date.today()
-    return today.year - 1
+    """The last season before the board's: the history baseline of a pull."""
+    return default_season(today) - 1
 
 
 def scoring_format(config: LeagueConfig) -> str:
