@@ -14,7 +14,8 @@ from draft_assistant.models import DraftState, LeagueConfig, Player
 def _make_player(name, pos, projections=None, bye=None, adp=None):
     return Player(
         id=f"{name}|{pos}", name=name, position=pos,
-        projections=projections or {}, bye_week=bye, adp=adp,
+        projections=projections or {}, bye_week=bye, adp=adp, team="BUF",
+        metadata={"bye_season": 2026, "bye_team": "BUF"} if bye else {},
     )
 
 
@@ -108,7 +109,7 @@ class TestByeWeekPenalty(unittest.TestCase):
         cand = _make_player("RB3", "RB", bye=9)
         pts = {rb1.key(): 200.0, rb2.key(): 190.0, cand.key(): 10.0}
         roster = {"RB": 2, "FLEX": 0, "BN": 3}
-        penalty = _bye_week_penalty(cand, [rb1, rb2], pts, roster)
+        penalty = _bye_week_penalty(cand, [rb1, rb2], pts, roster, season=2026)
         # Two same-position starters share the bye: 2*0.75 + 2*0.75 = 3.0
         self.assertAlmostEqual(penalty, 3.0)
 
@@ -116,8 +117,21 @@ class TestByeWeekPenalty(unittest.TestCase):
         rb1 = _make_player("RB1", "RB", bye=5)
         cand = _make_player("RB2", "RB", bye=9)
         pts = {rb1.key(): 200.0, cand.key(): 150.0}
-        penalty = _bye_week_penalty(cand, [rb1], pts, {"RB": 2, "BN": 2})
+        penalty = _bye_week_penalty(cand, [rb1], pts, {"RB": 2, "BN": 2}, season=2026)
         self.assertEqual(penalty, 0.0)
+
+    def test_missing_stale_and_previous_team_byes_do_not_affect_penalty(self):
+        for changed_player in ("candidate", "starter"):
+            for metadata in ({}, {"bye_season": 2025, "bye_team": "BUF"},
+                             {"bye_season": 2026, "bye_team": "KC"}):
+                starter = _make_player("RB1", "RB", bye=9)
+                candidate = _make_player("RB2", "RB", bye=9)
+                changed = candidate if changed_player == "candidate" else starter
+                changed.metadata = metadata
+                points = {starter.key(): 200, candidate.key(): 150}
+                with self.subTest(player=changed_player, metadata=metadata):
+                    penalty = _bye_week_penalty(candidate, [starter], points, {"RB": 2}, season=2026)
+                    self.assertEqual(penalty, 0.0)
 
 
 class TestTypedFlex(unittest.TestCase):

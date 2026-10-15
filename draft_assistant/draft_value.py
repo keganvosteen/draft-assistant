@@ -13,7 +13,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Set
 
-from .models import DraftState, FLEX_TYPES, LeagueConfig, Player
+from .context import current_bye_week, default_season
+from .models import DraftState, LeagueConfig, Player
+from .slot_assignment import assign_flex_slots, flex_layout
 
 
 LINEUP_POSITIONS = ["QB", "RB", "WR", "TE", "K", "DST"]
@@ -54,26 +56,15 @@ def roster_value(players: Sequence[Player], points_map: Dict[str, float], roster
         starters.extend(group[:count])
         ptr[position] = min(count, len(group))
 
-    # Typed flex slots: fill the most restrictive (e.g. WR/TE) first, each taking
-    # the best still-unstarted ELIGIBLE player — so a WR/TE slot never takes an
-    # RB, a superflex can take a QB, etc.
-    flex_slots: List[tuple] = []
-    for fkey, elig in FLEX_TYPES.items():
-        flex_slots.extend([elig] * max(0, int(roster.get(fkey, 0))))
-    flex_slots.sort(key=len)
-    for elig in flex_slots:
-        best_pos = None
-        best_pts = 0.0
-        for pos in elig:
-            group = by_pos.get(pos, [])
-            i = ptr.get(pos, 0)
-            if i < len(group):
-                pv = pts[id(group[i])]
-                if best_pos is None or pv > best_pts:
-                    best_pos, best_pts = pos, pv
-        if best_pos is not None:
-            starters.append(by_pos[best_pos][ptr[best_pos]])
-            ptr[best_pos] += 1
+    # Matching may move a WR between overlapping slots to make room for a TE.
+    # Starter points are optimized first; bench value keeps its existing role.
+    flex_slots = flex_layout(roster)
+    if flex_slots:
+        overflow = [p for pos, group in by_pos.items() for p in group[ptr.get(pos, 0):]]
+        assigned = assign_flex_slots(
+            flex_slots, [p.position for p in overflow], [pts[id(p)] for p in overflow],
+        )
+        starters.extend(overflow[index] for index in assigned.values())
 
     used: Set[str] = {pkey[id(player)] for player in starters}
     bench_count = max(0, int(roster.get("BN", roster.get("BENCH", 0))))
@@ -131,8 +122,16 @@ def _snake_pick_numbers(teams: int, draft_slot: int, rounds: int) -> List[int]:
     return picks
 
 
-def _bye_week_penalty(player: Player, roster_players: List[Player], points_map: Dict[str, float], roster: Dict[str, int]) -> float:
-    if not player.bye_week or player.position in {"K", "DST"}:
+def _bye_week_penalty(
+    player: Player,
+    roster_players: List[Player],
+    points_map: Dict[str, float],
+    roster: Dict[str, int],
+    season: Optional[int] = None,
+) -> float:
+    season = default_season() if season is None else season
+    bye_week = current_bye_week(player, season)
+    if bye_week is None or player.position in {"K", "DST"}:
         return 0.0
     lineup = roster_value(roster_players + [player], points_map, roster)
     # Count starters OTHER than the candidate sharing his bye — the candidate
@@ -141,7 +140,7 @@ def _bye_week_penalty(player: Player, roster_players: List[Player], points_map: 
         p for p in lineup.starters
         if p.key() != player.key()
         and p.position not in {"K", "DST"}
-        and p.bye_week == player.bye_week
+        and current_bye_week(p, season) == bye_week
     ]
     same_position = [p for p in shared if p.position == player.position]
     penalty = len(shared) * 0.75 + len(same_position) * 0.75

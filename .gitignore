@@ -9,6 +9,8 @@ __pycache__/
 
 # Build/package artifacts (regenerable)
 .venv-build/
+.venv/
+*.log
 build/
 dist/
 *.spec

@@ -64,6 +64,10 @@ class PlayerContext:
     weekly_projections: Dict[str, Dict[str, float]] = field(default_factory=dict)
     actual_stats: Dict[str, Dict[str, float]] = field(default_factory=dict)
     source_health: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    # Provenance belongs to the data, not the currently selected UI week or a
+    # source's most recent (possibly failed) refresh attempt.
+    weekly_projection_season: Optional[int] = None
+    weekly_projection_week: Optional[int] = None
 
 
 @dataclass

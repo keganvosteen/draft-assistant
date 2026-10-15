@@ -23,6 +23,30 @@ class TestComputePoints(unittest.TestCase):
 
 
 class TestReplacementLevels(unittest.TestCase):
+    def test_overlapping_flex_replacement_uses_optimal_assignment(self):
+        players = [
+            _make_player("WR", "WR", {"rec_yd": 110}),
+            _make_player("TE", "TE", {"rec_yd": 100}),
+            _make_player("RB", "RB", {"rec_yd": 1}),
+        ]
+        replacement = replacement_levels(players, {"rec_yd": 1}, 1, {"WRTE": 1, "RBWR": 1})
+        self.assertEqual(replacement["WR"], 110)
+        self.assertEqual(replacement["TE"], 100)
+        self.assertEqual(replacement["RB"], 0)
+
+    def test_occupied_wr_moves_to_allow_available_te(self):
+        occupied = [_make_player("Taken WR", "WR", {"rec_yd": 110})]
+        available = [
+            _make_player("TE1", "TE", {"rec_yd": 100}),
+            _make_player("TE2", "TE", {"rec_yd": 80}),
+            _make_player("TE3", "TE", {"rec_yd": 60}),
+            _make_player("RB", "RB", {"rec_yd": 1}),
+        ]
+        replacement = replacement_levels(
+            available, {"rec_yd": 1}, 1, {"WRTE": 2, "RBWR": 1}, occupied_players=occupied,
+        )
+        self.assertEqual(replacement["TE"], 80)
+
     def test_basic_replacement(self):
         # 2-team league, 1 QB each = replacement is the 2nd-best QB
         players = [

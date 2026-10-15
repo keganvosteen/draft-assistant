@@ -49,16 +49,19 @@ function leagueFromBackendConfig(cfg) {
 // soon as the current player board arrives so renames and punctuation changes
 // no longer orphan picks.
 function migratePickIds(picksByLeague, players) {
-  const aliases = {};
+  const aliases = new Map();
+  const canonical = new Set((players || []).map(player => player.id));
   (players || []).forEach(player => {
-    aliases[player.id] = player.id;
-    if (player.legacyId) aliases[player.legacyId] = player.id;
+    [player.legacyId, ...(player.aliases || [])].filter(Boolean).forEach(alias => {
+      if (canonical.has(alias)) return;
+      aliases.set(alias, !aliases.has(alias) || aliases.get(alias) === player.id ? player.id : null);
+    });
   });
   let changed = false;
   const migrated = {};
   Object.entries(picksByLeague || {}).forEach(([leagueId, leaguePicks]) => {
     migrated[leagueId] = (Array.isArray(leaguePicks) ? leaguePicks : []).map(pick => {
-      const stableId = aliases[pick.playerId] || pick.playerId;
+      const stableId = aliases.get(pick.playerId) || pick.playerId;
       if (stableId === pick.playerId) return pick;
       changed = true;
       return { ...pick, playerId: stableId };
@@ -80,6 +83,26 @@ function rosterSyncKey(league) {
 function preserveRosterSnapshot(previous, next) {
   return rosterSyncKey(previous) === rosterSyncKey(next)
     ? next : { ...next, rosterSnapshot: null };
+}
+
+// The one case a saved snapshot may stand in for a live sync: the sync FAILED
+// (provider down, Yahoo token lapsed, ESPN cookies cleared), and the snapshot
+// was taken under the same provider/season/seat mapping. A provider outage used
+// to leave the waiver wire with an error and nothing to rank, an hour-old
+// snapshot sitting unused beside it. The caller must label everything it ranks
+// from this with syncedAt — silently ranking against stale ownership is still
+// the bug — so a snapshot with no usable date is refused: it could not be
+// labelled. So is one with no players. A live "nobody is rostered" is
+// authoritative for right now; a saved one would put every rostered player on
+// the wire as of some earlier moment, and holds no roster of yours to rank a
+// pickup against anyway — the sync error says more. A sync that SUCCEEDED never
+// comes through here, however empty its answer.
+function fallbackRosterSnapshot(league) {
+  const snapshot = league && league.rosterSnapshot;
+  if (!snapshot || !Array.isArray(snapshot.picks) || snapshot.picks.length === 0) return null;
+  if (snapshot.leagueKey !== rosterSyncKey(league)) return null;
+  if (Number.isNaN(Date.parse(snapshot.syncedAt))) return null;
+  return snapshot;
 }
 
 function migrateRosterIds(leagues, players) {
@@ -319,7 +342,7 @@ function ImportPanel({ form, setForm }) {
     setImporting(true); setImportMsg(null);
     fetch('/api/import-espn', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leagueId: id, season: form.season || new Date().getFullYear(), ...getEspnAccess(form.id) }),
+      body: JSON.stringify({ leagueId: id, season: form.season || currentNflSeason(), ...getEspnAccess(form.id) }),
     })
       .then(r => r.json())
       .then(d => {
@@ -373,13 +396,14 @@ function ImportPanel({ form, setForm }) {
     pasteText: '',
     clientId: '', clientSecret: '', redirectUri: 'https://localhost/',
     authUrl: '', code: '', leagues: null, leagueKey: '', busy: false, msg: null,
-    credsSaved: false, showCredForm: false, needsApproval: false, approvalUrl: '',
+    credsSaved: false, canSave: false, storage: '', showCredForm: false, needsApproval: false, approvalUrl: '',
   });
   const yhSet = patch => setYh(s => ({ ...s, ...patch }));
   // Pick up credentials already saved on this machine (so re-auth is one click).
   React.useEffect(() => {
     fetch('/api/yahoo/status').then(r => r.json()).then(d => {
       if (d && d.hasCredentials) yhSet({ credsSaved: true, hasToken: !!d.hasToken,
+                                         canSave: !!d.canSave, storage: d.storage || '',
                                          redirectUri: d.redirectUri || 'https://localhost/' });
     }).catch(() => {});
   }, []);
@@ -484,7 +508,7 @@ function ImportPanel({ form, setForm }) {
       {provider === 'espn' && (
         <div>
           <Field label="Season"><Input type="number" min={2018} max={new Date().getFullYear() + 1}
-            aria-label="ESPN season" value={form.season || new Date().getFullYear()}
+            aria-label="ESPN season" value={form.season || currentNflSeason()}
             onChange={e => setForm(f => ({...f, season:Number(e.target.value)}))} style={{width:130}} /></Field>
           <div style={{display:'flex', gap:8, alignItems:'center'}}>
             <Input value={espnId} onChange={e=>setEspnId(e.target.value)}
@@ -576,7 +600,8 @@ function ImportPanel({ form, setForm }) {
                 <>
                   {yh.credsSaved && !yh.showCredForm ? (
                     <div style={{fontSize:12.5, color:T.text, marginBottom:8}}>
-                      ✓ Yahoo credentials saved on this machine.{' '}
+                      ✓ {yh.canSave ? 'Yahoo credentials saved on this machine.' : 'Yahoo credentials available for this session.'}{' '}
+                      {yh.storage && <span title={yh.storage}>ⓘ </span>}
                       <button onClick={()=>yhSet({showCredForm:true})} style={{
                         background:'none', border:'none', padding:0, color:T.primary,
                         cursor:'pointer', textDecoration:'underline', fontSize:12.5,
@@ -935,10 +960,10 @@ function adpFormatForLeague(league) {
 
 // ─── PULL DATA MODAL ─────────────────────────────────────────────────────────
 function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
-  const currentYear = new Date().getFullYear();
+  const currentSeason = currentNflSeason();
   const [mode, setMode]         = React.useState('free');
-  const [season, setSeason]     = React.useState(currentYear);
-  const [statsSeason, setStats] = React.useState(currentYear - 1);
+  const [season, setSeason]     = React.useState(currentSeason);
+  const [statsSeason, setStats] = React.useState(currentSeason - 1);
   const [skipFf, setSkipFf]     = React.useState(false);
   const [history, setHistory]   = React.useState(3);
   const [advanced, setAdvanced] = React.useState(false);
@@ -1068,10 +1093,10 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
             <div style={{marginTop:14}}>
               <div style={{display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:12}}>
                 <Field label="Projections" hint="season">
-                  <Input type="number" value={season} onChange={e => setSeason(parseInt(e.target.value) || currentYear)} />
+                  <Input type="number" value={season} onChange={e => setSeason(parseInt(e.target.value) || currentSeason)} />
                 </Field>
                 <Field label="Stats" hint="most recent">
-                  <Input type="number" value={statsSeason} onChange={e => setStats(parseInt(e.target.value) || currentYear-1)} />
+                  <Input type="number" value={statsSeason} onChange={e => setStats(parseInt(e.target.value) || currentSeason - 1)} />
                 </Field>
                 <Field label="History" hint="years">
                   <Input type="number" value={history} min={1} max={5}
@@ -1086,6 +1111,54 @@ function PullDataModal({ league, espnLeagueId, onClose, onComplete }) {
         </>
       )}
     </Modal>
+  );
+}
+
+// ─── BYE WEEKS NOTICE ────────────────────────────────────────────────────────
+// An install keeps the board it already has, so one saved before 0.7.4 carries
+// bye weeks the engine cannot verify and the server reports none: no bye
+// penalty in the draft room, no bye flags, no week-off handling on the waiver
+// wire — and nothing said so. The repair is one click here because the
+// packaged app has no terminal to run `refresh-byes` from, and a full Pull
+// Data would also swap a preseason board's projections and ADP mid-season.
+// `onLoaded` is the same refreshPlayers a finished Pull Data calls. This is a
+// Note in the body on purpose: the draft room's phone header fits four
+// controls and has none to spare.
+function ByeWeeksNotice({ players, onLoaded, style = {} }) {
+  const [busy, setBusy] = React.useState(false);
+  if (!boardLacksByes(players)) return null;
+
+  const load = () => {
+    setBusy(true);
+    fetch('/api/refresh-byes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    })
+      .then(r => r.json())
+      .then(d => {
+        // Failure leaves the notice where it is: the board still has no byes.
+        if (d.error) throw new Error(d.error);
+        if (d.verified) {
+          toast(`Loaded ${d.season} bye weeks for ${Number(d.verified).toLocaleString()} players.`, 'ok');
+        } else {
+          toast(`No player on this board is on a team in the ${d.season} NFL schedule, so there were no bye weeks to load.`, 'info', 7000);
+        }
+        // Stay busy until the board is back, so the button cannot be pressed
+        // again in the moment before this notice goes away.
+        return onLoaded && onLoaded();
+      })
+      .catch(err => toast(String(err.message || err), 'error', 7000))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Note style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', ...style }}>
+      <span style={{ flex: '1 1 220px' }}>
+        Bye weeks are not loaded for this board, so bye penalties and bye flags are off.
+      </span>
+      <Btn variant="secondary" size="sm" onClick={load} disabled={busy}>
+        {busy ? 'Loading bye weeks…' : 'Load bye weeks'}
+      </Btn>
+    </Note>
   );
 }
 
@@ -1484,9 +1557,15 @@ function App() {
     fetch('/api/context').then(r => r.json()).then(ctx => {
       if (!ctx || ctx.error) { newsFailed(ctx && ctx.error); return; }
       if (!ctx.stale) return;
+      // No season and no week: the server works both out from today's date.
+      // This used to echo ctx.season and ctx.week straight back, which pinned
+      // the cache to whatever it was last refreshed for — the week never
+      // advanced, and a cache from last season was refreshed as last season.
+      // The server cannot tell an echo from a request for an older season
+      // (tools make those on purpose), so the fix is not to send one.
       return fetch('/api/context/refresh', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({season:ctx.season, week:ctx.week}),
+        body:JSON.stringify({}),
       }).then(r => r.json()).then(started => {
         if (!started.taskId) { newsFailed(started && started.error); return; }
         let attempts = 0;
@@ -1562,8 +1641,8 @@ function App() {
       setRestoreBusy(true);
       workspaceGeneration.current++;
       const restored = await workspace.restore(candidate);
-      setLeagues(restored.leagues);
-      setPicks(restored.picks);
+      setLeagues(migrateRosterIds(restored.leagues, players));
+      setPicks(migratePickIds(restored.picks, players));
       setPreferences(restored.preferences);
       try { localStorage.setItem('fda_tweaks', JSON.stringify(restored.preferences.tweaks || {})); } catch {}
       setRoute({screen:'home', leagueId:null});
@@ -1724,6 +1803,7 @@ function App() {
         onBack={() => setRoute({ screen: 'league', leagueId: routeLeague.id })}
         onSyncLeague={syncLeague}
         onEditLeague={openEditor}
+        onRefreshPlayers={refreshPlayers}
       />
     );
   } else if (screen === 'league') {
@@ -1813,7 +1893,7 @@ Object.assign(window, {
   calcProjection, withProjections, withVORP,
   getSnakeTeam, getCurrentRoundPick, getRosterNeeds,
   makeLeague, leagueFromBackendConfig, SCORING_LABELS,
-  rosterSyncKey,
-  useTask, PullDataModal, AuctionModal,
+  rosterSyncKey, fallbackRosterSnapshot,
+  useTask, PullDataModal, ByeWeeksNotice, AuctionModal,
   DraftOrderEditor, LeagueSetupModal, HomeScreen, SetupGuide, App,
 });

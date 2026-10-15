@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from ..platform_sync import SyncedDraftPick, SyncedRosterPlayer, SyncedRosterTeam
+from ..input_limits import validate_pasted_text
 
 APPROVAL_URL = "https://sports.yahoo.com/developer/access/"
 
@@ -118,6 +119,24 @@ YAHOO_POS = {
 # Page headings and field labels that are never a league's actual name.
 _NAME_NON_VALUES = ("settings", "name", "http", "draft", "scoring", "roster", "league")
 
+# The draft formats Yahoo's settings page names. "snake" is also what an
+# unreadable value falls back to, so only one of these proves the row was read.
+_DRAFT_TYPE_WORDS = ("auction", "salary cap", "standard", "snake", "autopick", "offline")
+
+_UNRECOGNIZED_SETTINGS = (
+    "That text does not look like a Yahoo league settings page: no team count, "
+    "roster position or scoring row could be read from it. On Yahoo, open "
+    "League > Settings, select the whole page (Ctrl+A), copy it, and paste it here."
+)
+
+
+# A settings row opens with its label; a sentence only mentions it. "League
+# Name: Sunday Football" is a field and "what should my league name be" is
+# not, and position is all that separates the two. Put in front of a label
+# pattern (with re.M) this allows indentation and bullets ahead of the label,
+# but not an earlier word.
+_ROW_START = r"^[^\w\r\n]*"
+
 # Roster labels for the line-per-position settings layout, most specific first:
 # parse_settings_text takes the first label that matches a line, so "W/R/T" must
 # be offered as FLEX before "W/R" can claim it as RBWR.
@@ -135,6 +154,53 @@ _LINE_POSITION_LABELS = (
     (r"Bench|BN", "BN"),
     (r"Injured Reserve|IR", "IR"),
 )
+
+
+def _roster_position_row(line: str) -> Optional[tuple[str, int]]:
+    """Read a label, optional abbreviation and count without overlapping scans."""
+    line = line.strip()
+    for label, key in _LINE_POSITION_LABELS:
+        match = re.match(rf"(?:{label})(?![A-Za-z/])", line, re.I)
+        if not match:
+            continue
+        rest = line[match.end():].strip()
+        if rest.startswith("("):
+            closing = rest.find(")")
+            if closing < 0:
+                continue
+            rest = rest[closing + 1:].strip()
+        if rest.startswith(":"):
+            rest = rest[1:].strip()
+        if not rest:
+            return key, 1
+        if rest.isdecimal():
+            return key, int(rest)
+    return None
+
+
+def _numbered_team_name(line: str) -> Optional[str]:
+    """Read an indexed team name and discard an optional trailing manager."""
+    # Scan the numeric prefix once, including malformed all-digit lines. This
+    # keeps the work explicitly linear without depending on regex anchoring.
+    index = 0
+    while index < len(line) and line[index].isdecimal():
+        index += 1
+    if (index == 0 or index + 1 >= len(line) or line[index] not in ".)"
+            or not line[index + 1].isspace()):
+        return None
+    candidate = line[index + 1:].strip()
+    opening = candidate.find("(")
+    if opening >= 0:
+        if (not candidate.endswith(")") or opening == 0
+                or not candidate[opening - 1].isspace()):
+            return None
+        candidate = candidate[:opening].rstrip()
+    if len(candidate) < 2 or not all(
+        char.isascii() and char.isalnum() or char.isspace() or char in "_-.'"
+        for char in candidate
+    ):
+        return None
+    return candidate
 
 
 def extract_code(code_or_url: str) -> str:
@@ -736,10 +802,30 @@ def _row_value(rows: Dict[str, List[str]], label: str) -> Optional[float]:
 
 
 def parse_settings_text(text: str) -> Dict[str, object]:
-    """Parse copied/pasted text from a Yahoo Fantasy league settings page."""
+    """Parse copied/pasted text from a Yahoo Fantasy league settings page.
+
+    A partial paste is fine — the roster table alone, or the scoring table
+    alone, imports with defaults for the rest. Text in which nothing at all
+    can be read is a ``ValueError``.
+    """
+    validate_pasted_text(text, "Yahoo settings text")
     raw = text.strip()
     if not raw:
         raise ValueError("Please paste your Yahoo league settings text")
+
+    # Which parts of the league the text itself supplied. Every value below
+    # has a default behind it, so the finished result cannot say whether
+    # anything was read: "lorem ipsum dolor sit amet" imported as a 10-team
+    # league with the stock roster and scoring, named after its own first
+    # line. Each section records what it found here instead.
+    recognized = set()
+    # The row-start checks ask whether a label opens a line, and a line is
+    # whatever str.splitlines() cuts: that is how the size guard, the roster
+    # rows and the scoring rows all read this text. "^" only breaks on "\n",
+    # so a paste whose rows are separated by a bare "\r", a soft return
+    # ("\x0b") or U+2028 had its team count read and was then refused as
+    # holding no settings at all.
+    row_text = "\n".join(raw.splitlines())
 
     # 1. League name. Try candidates in priority order and keep the first
     # plausible one — a single regex stopped at the page heading "League
@@ -753,36 +839,52 @@ def parse_settings_text(text: str) -> Dict[str, object]:
             return None
         return candidate
 
+    name_row = r"League\s+Name[\s:]*([^\n\r]+)"
+    league_values = re.findall(r"^[^\S\r\n]*League[^\S\r\n]*[:\t]\s*([^\n\r]+)", raw, re.I | re.M)
     name = "Yahoo League"
-    for value in (
-        *re.findall(r"League\s+Name\s*[:\t]?\s*([^\n\r]+)", raw, re.I),
-        *re.findall(r"^\s*League\s*[:\t]\s*([^\n\r]+)", raw, re.I | re.M),
-        raw.splitlines()[0],
-    ):
+    for value in (*re.findall(name_row, raw, re.I), *league_values, raw.splitlines()[0]):
         plausible = _plausible_name(value)
         if plausible:
             name = plausible
             break
+    # Only a labelled row counts as having read a name. The first-line
+    # fallback will name a league after anything at all, which is the bug.
+    if any(_plausible_name(value) for value in (
+            *re.findall(_ROW_START + name_row, row_text, re.I | re.M), *league_values)):
+        recognized.add("league name")
 
-    # 2. Number of teams
-    teams_m = re.search(r"(?:Max Teams|Teams|Number of Teams)\s*[:\t]?\s*(\d+)", raw, re.I)
+    # 2. Number of teams. A bare "Teams" is a label of its own ("Teams: 10"),
+    # but it is also the tail of the "Defense/Special Teams" roster row, and a
+    # paste holding only the roster table has no real team count ahead of that
+    # row to win the search — so the league came back with as many teams as it
+    # had defense slots, which the web layer then refuses as out of range.
+    teams_row = r"(?:Max Teams|(?<!Special\s)Teams|Number of Teams)[\s:]*(\d+)"
+    teams_m = re.search(teams_row, raw, re.I)
     num_teams = int(teams_m.group(1)) if teams_m else 10
+    if re.search(_ROW_START + teams_row, row_text, re.I | re.M):
+        recognized.add("team count")
 
     # 3. Draft type
+    draft_row = r"Draft Type[\s:]*([^\n\r]+)"
     draft_type = "snake"
-    dt_m = re.search(r"Draft Type\s*[:\t]?\s*([^\n\r]+)", raw, re.I)
+    dt_m = re.search(draft_row, raw, re.I)
     if dt_m and any(k in dt_m.group(1).lower() for k in ("auction", "salary cap")):
         draft_type = "auction"
+    if any(word in value.lower()
+           for value in re.findall(_ROW_START + draft_row, row_text, re.I | re.M)
+           for word in _DRAFT_TYPE_WORDS):
+        recognized.add("draft type")
 
     # 4. Roster positions
     roster = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "FLEX": 0, "K": 0, "DST": 0, "BN": 0}
-    pos_m = re.search(r"Roster Positions\s*[:\t]?\s*([^\n\r]+)", raw, re.I)
+    pos_m = re.search(r"Roster Positions[\s:]*([^\n\r]+)", raw, re.I)
     if pos_m:
         tokens = [p.strip().upper() for p in pos_m.group(1).split(",") if p.strip()]
         for tok in tokens:
             key = YAHOO_POS.get(tok)
             if key:
                 roster[key] = roster.get(key, 0) + 1
+                recognized.add("roster")
     else:
         # Line-per-position layout. The label must start the line and the count
         # must end it: searching the whole blob let any word ending in the
@@ -792,16 +894,11 @@ def parse_settings_text(text: str) -> Dict[str, object]:
         # "W/R/T" is claimed as FLEX before the narrower "W/R" can also read it
         # as a phantom RBWR slot.
         for line in raw.splitlines():
-            for label, key in _LINE_POSITION_LABELS:
-                # The optional parenthetical carries Yahoo's abbreviation, as in
-                # "Wide Receiver (WR): 3".
-                match = re.match(
-                    rf"\s*(?:{label})\s*(?:\([^)]*\))?\s*[:\t]?\s*(\d*)\s*$", line, re.I)
-                if not match:
-                    continue
-                # A bare label line is the one-slot-per-line rendering.
-                roster[key] = roster.get(key, 0) + (int(match.group(1)) if match.group(1) else 1)
-                break
+            position_row = _roster_position_row(line)
+            if position_row is not None:
+                key, count = position_row
+                roster[key] = roster.get(key, 0) + count
+                recognized.add("roster")
 
     if not any(roster.values()):
         roster = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DST": 1, "BN": 6}
@@ -815,9 +912,11 @@ def parse_settings_text(text: str) -> Dict[str, object]:
         if not m:
             return default
         try:
-            return float(m.group(1))
+            value = float(m.group(1))
         except (ValueError, TypeError):
             return default
+        recognized.add("scoring")
+        return value
 
     def _stat(labels, pat, default=None):
         """The league's value for a stat, falling back to a loose search.
@@ -830,80 +929,89 @@ def parse_settings_text(text: str) -> Dict[str, object]:
         for label in labels:
             value = _row_value(rows, label)
             if value is not None:
+                recognized.add("scoring")
                 return value
         return _parse_num(pat, default)
 
     # Passing
-    pass_yd_raw = _stat(["Passing Yards"], r"Passing Yards?\s*[:\t]?\s*(\d+(?:\.\d+)?)")
+    pass_yd_raw = _stat(["Passing Yards"], r"Passing Yards?[\s:]*(\d+(?:\.\d+)?)")
     if pass_yd_raw is not None:
         scoring["pass_yd"] = round(1.0 / pass_yd_raw, 4) if pass_yd_raw >= 1 else pass_yd_raw
     else:
         scoring["pass_yd"] = 0.04
 
-    scoring["pass_td"] = _stat(["Passing Touchdowns"], r"Passing Touchdowns?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 4.0)
-    scoring["pass_int"] = _stat(["Interceptions", "Interceptions Thrown", "Pass Int"], r"(?:Interceptions|Interceptions Thrown|Pass Int)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", -2.0)
+    scoring["pass_td"] = _stat(["Passing Touchdowns"], r"Passing Touchdowns?[\s:]*([+-]?\d+(?:\.\d+)?)", 4.0)
+    scoring["pass_int"] = _stat(["Interceptions", "Interceptions Thrown", "Pass Int"], r"(?:Interceptions|Interceptions Thrown|Pass Int)[\s:]*([+-]?\d+(?:\.\d+)?)", -2.0)
     # An offensive "Sacks" row is the sack a QB takes, not a defensive sack.
     sack_taken = _row_value(rows, "Sacks")
     if sack_taken is not None:
         scoring["sack_taken"] = sack_taken
+        recognized.add("scoring")
 
     # Rushing
-    rush_yd_raw = _stat(["Rushing Yards"], r"Rushing Yards?\s*[:\t]?\s*(\d+(?:\.\d+)?)")
+    rush_yd_raw = _stat(["Rushing Yards"], r"Rushing Yards?[\s:]*(\d+(?:\.\d+)?)")
     if rush_yd_raw is not None:
         scoring["rush_yd"] = round(1.0 / rush_yd_raw, 4) if rush_yd_raw >= 1 else rush_yd_raw
     else:
         scoring["rush_yd"] = 0.1
 
-    scoring["rush_td"] = _stat(["Rushing Touchdowns"], r"Rushing Touchdowns?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 6.0)
+    scoring["rush_td"] = _stat(["Rushing Touchdowns"], r"Rushing Touchdowns?[\s:]*([+-]?\d+(?:\.\d+)?)", 6.0)
 
     # Receiving
-    rec = _stat(["Receptions", "Reception"], r"Receptions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 0.5)
+    rec = _stat(["Receptions", "Reception"], r"Receptions?[\s:]*([+-]?\d+(?:\.\d+)?)", 0.5)
     scoring["rec"] = rec
-    rec_yd_raw = _stat(["Receiving Yards"], r"Receiving Yards?\s*[:\t]?\s*(\d+(?:\.\d+)?)")
+    rec_yd_raw = _stat(["Receiving Yards"], r"Receiving Yards?[\s:]*(\d+(?:\.\d+)?)")
     if rec_yd_raw is not None:
         scoring["rec_yd"] = round(1.0 / rec_yd_raw, 4) if rec_yd_raw >= 1 else rec_yd_raw
     else:
         scoring["rec_yd"] = 0.1
-    scoring["rec_td"] = _stat(["Receiving Touchdowns"], r"Receiving Touchdowns?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 6.0)
+    scoring["rec_td"] = _stat(["Receiving Touchdowns"], r"Receiving Touchdowns?[\s:]*([+-]?\d+(?:\.\d+)?)", 6.0)
 
     # 2PT & Fumbles
-    two_pt = _parse_num(r"(?:2-Point Conversions?|2PT Conversions?)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
-    scoring["pass_2pt"] = _parse_num(r"Passing 2-Point Conversions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", two_pt)
-    scoring["rush_2pt"] = _parse_num(r"Rushing 2-Point Conversions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", two_pt)
-    scoring["rec_2pt"] = _parse_num(r"Receiving 2-Point Conversions?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", two_pt)
-    scoring["fumbles"] = _stat(["Fumbles Lost"], r"Fumbles Lost\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", -2.0)
-    fumbles_tot = _parse_num(r"(?:Total Fumbles|Fumbles Total|Fumbles \(Total\))\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
+    two_pt = _parse_num(r"(?:2-Point Conversions?|2PT Conversions?)[\s:]*([+-]?\d+(?:\.\d+)?)", 2.0)
+    scoring["pass_2pt"] = _parse_num(r"Passing 2-Point Conversions?[\s:]*([+-]?\d+(?:\.\d+)?)", two_pt)
+    scoring["rush_2pt"] = _parse_num(r"Rushing 2-Point Conversions?[\s:]*([+-]?\d+(?:\.\d+)?)", two_pt)
+    scoring["rec_2pt"] = _parse_num(r"Receiving 2-Point Conversions?[\s:]*([+-]?\d+(?:\.\d+)?)", two_pt)
+    scoring["fumbles"] = _stat(["Fumbles Lost"], r"Fumbles Lost[\s:]*([+-]?\d+(?:\.\d+)?)", -2.0)
+    fumbles_tot = _parse_num(r"(?:Total Fumbles|Fumbles Total|Fumbles \(Total\))[\s:]*([+-]?\d+(?:\.\d+)?)")
     if fumbles_tot is not None:
         scoring["fumbles_total"] = fumbles_tot
 
     # Defense
-    scoring["sack"] = _stat(["Sack"], r"Sacks?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 1.0)
-    scoring["def_int"] = _parse_num(r"(?:Interception Return|Interceptions? \(DEF\))\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
-    scoring["fumble_recovery"] = _stat(["Fumble Recovery", "Fumble Recoveries"], r"Fumble Recover(?:y|ies)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
-    def_td = _parse_num(r"(?:Touchdown \(DEF\)|Defensive Touchdowns?)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 6.0)
+    scoring["sack"] = _stat(["Sack"], r"Sacks?[\s:]*([+-]?\d+(?:\.\d+)?)", 1.0)
+    scoring["def_int"] = _parse_num(r"(?:Interception Return|Interceptions? \(DEF\))[\s:]*([+-]?\d+(?:\.\d+)?)", 2.0)
+    scoring["fumble_recovery"] = _stat(["Fumble Recovery", "Fumble Recoveries"], r"Fumble Recover(?:y|ies)[\s:]*([+-]?\d+(?:\.\d+)?)", 2.0)
+    def_td = _parse_num(r"(?:Touchdown \(DEF\)|Defensive Touchdowns?)[\s:]*([+-]?\d+(?:\.\d+)?)", 6.0)
     scoring["int_ret_td"] = def_td
     scoring["fum_ret_td"] = def_td
-    scoring["safety"] = _stat(["Safety", "Safeties"], r"Safet(?:y|ies)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
-    scoring["blk_kick"] = _stat(["Block Kick", "Blocked Kick", "Blocked Kicks"], r"Blocked? Kicks?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 2.0)
+    scoring["safety"] = _stat(["Safety", "Safeties"], r"Safet(?:y|ies)[\s:]*([+-]?\d+(?:\.\d+)?)", 2.0)
+    scoring["blk_kick"] = _stat(["Block Kick", "Blocked Kick", "Blocked Kicks"], r"Blocked? Kicks?[\s:]*([+-]?\d+(?:\.\d+)?)", 2.0)
 
     # Kicking
-    fg_0_19 = _stat(["Field Goals 0-19 Yards"], r"Field Goals? 0-19 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
-    fg_20_29 = _stat(["Field Goals 20-29 Yards"], r"Field Goals? 20-29 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
-    fg_30_39 = _stat(["Field Goals 30-39 Yards"], r"Field Goals? 30-39 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
+    fg_0_19 = _stat(["Field Goals 0-19 Yards"], r"Field Goals? 0-19 Yards?[\s:]*([+-]?\d+(?:\.\d+)?)")
+    fg_20_29 = _stat(["Field Goals 20-29 Yards"], r"Field Goals? 20-29 Yards?[\s:]*([+-]?\d+(?:\.\d+)?)")
+    fg_30_39 = _stat(["Field Goals 30-39 Yards"], r"Field Goals? 30-39 Yards?[\s:]*([+-]?\d+(?:\.\d+)?)")
     fg_short = [v for v in (fg_0_19, fg_20_29, fg_30_39) if v is not None]
     if fg_short:
         scoring["fg_0_39"] = round(sum(fg_short) / len(fg_short), 2)
     else:
         scoring["fg_0_39"] = 3.0
 
-    scoring["fg_40_49"] = _stat(["Field Goals 40-49 Yards"], r"Field Goals? 40-49 Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 4.0)
-    fg_50 = _stat(["Field Goals 50+ Yards"], r"Field Goals? 50\+ Yards?\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 5.0)
+    scoring["fg_40_49"] = _stat(["Field Goals 40-49 Yards"], r"Field Goals? 40-49 Yards?[\s:]*([+-]?\d+(?:\.\d+)?)", 4.0)
+    fg_50 = _stat(["Field Goals 50+ Yards"], r"Field Goals? 50\+ Yards?[\s:]*([+-]?\d+(?:\.\d+)?)", 5.0)
     scoring["fg_50_59"] = fg_50
     scoring["fg_60_plus"] = fg_50
-    scoring["pat_made"] = _stat(["Point After Attempt Made", "PAT Made"], r"(?:Point After Attempt Made|PAT Made)\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)", 1.0)
-    fg_miss = _parse_num(r"Field Goals? Missed\s*[:\t]?\s*([+-]?\d+(?:\.\d+)?)")
+    scoring["pat_made"] = _stat(["Point After Attempt Made", "PAT Made"], r"(?:Point After Attempt Made|PAT Made)[\s:]*([+-]?\d+(?:\.\d+)?)", 1.0)
+    fg_miss = _parse_num(r"Field Goals? Missed[\s:]*([+-]?\d+(?:\.\d+)?)")
     if fg_miss is not None:
         scoring["fg_miss"] = fg_miss
+
+    # Nothing read anywhere means this was not a settings page. Say so rather
+    # than hand back a league built entirely from the defaults above — the form
+    # fills in, the import reports success, and the user drafts against rules
+    # that are not their league's.
+    if not recognized:
+        raise ValueError(_UNRECOGNIZED_SETTINGS)
 
     # A reception value that is not one of the three named formats has to be
     # carried as custom scoring: the UI rewrites rec from the scoring type
@@ -949,11 +1057,9 @@ def parse_settings_text(text: str) -> Dict[str, object]:
     team_names = []
     for line in raw.splitlines():
         line = line.strip()
-        tm = re.match(r"^\d+[\.\)]\s+([A-Za-z0-9\s_\-\.']+?)(?:\s+\(.*?\))?$", line)
-        if tm:
-            candidate = tm.group(1).strip()
-            if len(candidate) > 1 and candidate not in team_names:
-                team_names.append(candidate)
+        candidate = _numbered_team_name(line)
+        if candidate and candidate not in team_names:
+            team_names.append(candidate)
 
     out: Dict[str, object] = {
         "name": name,

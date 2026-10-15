@@ -10,11 +10,14 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
+from ..context import default_season
 from ..fuzzy import normalize_player_name
+from ..identity import player_aliases, player_indexes, retain_aliases
 from ..models import LeagueConfig, Player
 from ..platform_sync import SyncedDraftPick, SyncedRosterPlayer, SyncedRosterTeam
 from ..projection_archive import record_snapshot
 from ..scoring import fantasy_points
+from ..storage import update_players
 from .cbs import fetch_all_cbs
 from .fftoday import fetch_all_fftoday
 
@@ -22,6 +25,7 @@ from .fftoday import fetch_all_fftoday
 SLEEPER_BASE = "https://api.sleeper.app/v1"
 FFC_ADP_BASE = "https://fantasyfootballcalculator.com/api/v1/adp"
 NFLVERSE_RELEASE_API = "https://api.github.com/repos/nflverse/nflverse-data/releases/tags/{tag}"
+NFLVERSE_SCHEDULE_URL = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
 
 POSITIONS = {"QB", "RB", "WR", "TE", "K", "DST", "DEF"}
 APP_STAT_KEYS = {
@@ -99,13 +103,21 @@ def _seg(value: object) -> str:
 
 
 def default_projection_season(today: Optional[date] = None) -> int:
-    today = today or date.today()
-    return today.year
+    """The season a pull builds the board for: the one the app says is current.
+
+    ``context.default_season``, not the calendar year. The two differ only in
+    January and February, when the calendar year names a season nobody has
+    published a projection, an ADP or a schedule for while the one before it
+    is still being played. On the calendar year a pull, an ESPN roster sync and
+    the CLI's ``refresh-byes`` would all change season on New Year's Day, and
+    the CLI would stamp a different season from ``POST /api/refresh-byes``.
+    """
+    return default_season(today)
 
 
 def default_stats_season(today: Optional[date] = None) -> int:
-    today = today or date.today()
-    return today.year - 1
+    """The last season before the board's: the history baseline of a pull."""
+    return default_season(today) - 1
 
 
 def scoring_format(config: LeagueConfig) -> str:
@@ -258,7 +270,17 @@ def pull_free_data(
             "opinion — consider re-running Pull Data."
         )
 
-    _fill_missing_byes(merged.values())
+    try:
+        team_byes = _fetch_nflverse_byes(season)
+        apply_schedule_byes(merged.values(), team_byes, season)
+        reports.append(SourceReport("nflverse schedule", len(team_byes),
+                                    ok=bool(team_byes), detail=str(season)))
+        if not team_byes:
+            warnings.append(f"No complete {season} team schedules are available; unverified bye weeks are ignored.")
+    except Exception as exc:
+        reports.append(SourceReport("nflverse schedule", ok=False, detail=f"{season}: {exc}"))
+        warnings.append(f"Could not load the {season} schedule; unverified bye weeks are ignored.")
+    _fill_missing_byes(merged.values(), season)
 
     players = sorted(
         merged.values(),
@@ -289,44 +311,221 @@ def pull_free_data(
 
 
 def merge_historical_into(new_players: List[Player], existing_players: Iterable[Player]) -> List[Player]:
-    """Carry forward prior pulls' historical seasons onto a fresh pull.
+    """Carry forward saved identities and historical seasons onto a fresh pull.
 
     The new pull defines the current player pool, projections, and ADP; only
     each player's ``historical_stats`` are unioned from what was saved before,
     so repeated single-season pulls accumulate a multi-year corpus instead of
     overwriting it. Players no longer in the latest pull are dropped (they're
     not draftable), and the new pull's value for a season always wins.
+    Unambiguous matches retain their saved ID and provider aliases so picks and
+    roster snapshots survive source outages and recovery. Current projections,
+    status, team and bye provenance always come from the fresh pull.
     """
-    existing_by_key: Dict[str, Player] = {}
+    existing_players = list(existing_players)
+    canonical, aliases = player_indexes(existing_players)
+    existing_by_key: Dict[str, List[Player]] = {}
     for player in existing_players:
-        existing_by_key.setdefault(_merge_key(player), player)
+        existing_by_key.setdefault(_merge_key(player), []).append(player)
     for player in new_players:
-        prior = existing_by_key.get(_merge_key(player))
+        candidates = {
+            aliases.get(alias, alias) for alias in player_aliases(player)
+            if aliases.get(alias, alias) in canonical
+        }
+        prior = canonical[next(iter(candidates))] if len(candidates) == 1 else None
+        if not candidates:
+            same_name = existing_by_key.get(_merge_key(player), [])
+            prior = same_name[0] if len(same_name) == 1 else None
         if not prior:
             continue
+        retain_aliases(player, prior)
+        # Keep the persisted ID even when a different provider now leads the
+        # pull. Provider-qualified aliases still resolve historical snapshots.
+        player.id = prior.key()
         for season, season_stats in prior.historical_stats.items():
             player.historical_stats.setdefault(season, season_stats)
     return new_players
 
 
-def _fill_missing_byes(players: Iterable[Player]) -> None:
-    """Spread known bye weeks across teammates.
+def _bye_team(team: Optional[str]) -> str:
+    code = str(team or "").strip().upper()
+    return {"LA": "LAR", "JAC": "JAX", "WSH": "WAS", "OAK": "LV",
+            "SD": "LAC", "STL": "LAR"}.get(code, code)
 
-    Only some sources carry byes per player; every teammate shares the same
-    one, so derive a team->bye map and fill the gaps. Without this the
-    engine's bye-week penalties only see the handful of players whose source
-    happened to include a bye.
+
+def _fetch_nflverse_byes(season: int) -> Dict[str, int]:
+    """Read the maintained nflverse schedule without optional data packages.
+
+    Do not infer a bye from an unpublished or partial season: each team must
+    have games in every regular-season week except exactly one.
     """
+    all_weeks = set(range(1, (18 if season >= 2021 else 17) + 1))
+    weeks_by_team: Dict[str, set] = {}
+    for row in _read_csv_url(NFLVERSE_SCHEDULE_URL):
+        if _to_int(row.get("season")) != season or row.get("game_type") != "REG":
+            continue
+        week = _to_int(row.get("week"))
+        if week not in all_weeks:
+            continue
+        for field in ("home_team", "away_team"):
+            team = _bye_team(row.get(field))
+            if team:
+                weeks_by_team.setdefault(team, set()).add(week)
+    return {team: next(iter(all_weeks - weeks))
+            for team, weeks in weeks_by_team.items() if len(all_weeks - weeks) == 1}
+
+
+def apply_schedule_byes(players: Iterable[Player], team_byes: Dict[str, int], season: int) -> int:
+    """Stamp each player whose team is on the schedule; return how many were.
+
+    The stamp is what makes a bye usable at all: ``current_bye_week`` ignores a
+    ``bye_week`` whose ``bye_season``/``bye_team`` do not match. It is shared by
+    the full pull and by ``refresh-byes``, so a board repaired in place carries
+    exactly the provenance a fresh pull would have written. Only the three bye
+    fields are touched, and a player whose team is not in ``team_byes`` is left
+    alone.
+    """
+    stamped = 0
+    for player in players:
+        bye = team_byes.get(_bye_team(player.team))
+        if bye:
+            player.bye_week = bye
+            # The team as the board spells it, not the schedule's code: the
+            # schedule is looked up through _bye_team ("LA" -> "LAR"), but
+            # current_bye_week compares bye_team to player.team literally.
+            player.metadata.update({"bye_season": season, "bye_team": player.team})
+            stamped += 1
+    return stamped
+
+
+def _fill_missing_byes(players: Iterable[Player], season: Optional[int] = None) -> None:
+    """Fill gaps from teammates with matching season/team bye provenance."""
+    from ..context import current_bye_week
+
+    season = season if season is not None else default_projection_season()
     players = list(players)
-    team_byes: Dict[str, int] = {}
+    team_byes: Dict[str, set] = {}
     for player in players:
-        if player.team and player.bye_week and player.team not in team_byes:
-            team_byes[player.team] = player.bye_week
+        bye = current_bye_week(player, season)
+        if player.team and bye:
+            team_byes.setdefault(_bye_team(player.team), set()).add(bye)
     for player in players:
-        if player.team and not player.bye_week:
-            bye = team_byes.get(player.team)
-            if bye:
-                player.bye_week = bye
+        if player.team and current_bye_week(player, season) is None:
+            byes = team_byes.get(_bye_team(player.team), set())
+            if len(byes) == 1:
+                player.bye_week = next(iter(byes))
+                player.metadata.update({"bye_season": season, "bye_team": player.team})
+
+
+@dataclass
+class ByeRefreshResult:
+    season: int
+    players: int
+    #: Players ``current_bye_week`` now returns a bye for.
+    verified: int
+    #: Stored bye weeks that were replaced by a different week.
+    changed: int
+    #: Team codes on the board the schedule (and the teammate gap-fill) had no
+    #: bye for -- named so a bye-less player is never a silent one.
+    unlisted_teams: List[str]
+
+
+class ByeScheduleError(Exception):
+    """No complete schedule for the season, so nobody was stamped.
+
+    Raised before the board is opened: the saved file is byte-for-byte what it
+    was. ``cause`` is set when the fetch itself failed; otherwise ``missing``
+    names the teams without a bye and ``listed`` is how many teams the schedule
+    did list (0 before it is published). The message is written for the web UI
+    to show as it stands; the CLI words its own from the fields.
+    """
+
+    def __init__(self, season: int, missing: Iterable[str] = (), listed: int = 0,
+                 cause: Optional[BaseException] = None):
+        self.season = season
+        self.missing = sorted(missing)
+        self.listed = listed
+        self.cause = cause
+        if cause is not None:
+            message = (f"Could not load the {season} NFL schedule, so bye weeks were not "
+                       "changed. Check your connection and try again.")
+        elif not listed:
+            message = (f"The {season} NFL schedule is not published yet, so bye weeks "
+                       "cannot be loaded.")
+        else:
+            # A toast, not a report: name a few teams, count the rest.
+            more = len(self.missing) - 5
+            which = ", ".join(self.missing[:5]) + (f" and {more} more" if more > 0 else "")
+            message = (f"The {season} NFL schedule does not list a bye week for every team "
+                       f"yet (missing {which}), so bye weeks cannot be loaded.")
+        super().__init__(message)
+
+
+class EmptyBoardError(Exception):
+    """The board has no players to stamp; it was not rewritten."""
+
+    def __init__(self, board_path: str):
+        self.board_path = board_path
+        super().__init__("There is no player data to load bye weeks for yet. "
+                         "Pull player data first.")
+
+
+def refresh_board_byes(board_path: str, season: int) -> ByeRefreshResult:
+    """Repair bye provenance on a saved board without re-pulling it.
+
+    ``current_bye_week`` only trusts a bye stamped with its season and team, so
+    a board saved before that stamp existed has every bye ignored. Re-pulling
+    would fix it, but in-season a pull also replaces the preseason projections
+    and ADP the draft board is built on. Only the stamp is missing, so only
+    ``bye_week``/``bye_season``/``bye_team`` change here. Shared by the
+    ``refresh-byes`` command and ``POST /api/refresh-byes`` -- an installed
+    build has no terminal to run the command from.
+    """
+    from ..context import current_bye_week
+
+    # Everything that can fail happens before the board is opened, so a bad
+    # schedule leaves the file exactly as it was. All 32 teams or nothing: a
+    # half-published schedule would verify some teams and leave the rest
+    # looking like players who simply have no bye.
+    try:
+        team_byes = _fetch_nflverse_byes(season)
+    except Exception as exc:
+        raise ByeScheduleError(season, cause=exc) from exc
+    missing = set(NFL_TEAM_NAMES) - set(team_byes)
+    if missing:
+        raise ByeScheduleError(season, missing=missing, listed=len(team_byes))
+
+    changed = 0
+
+    def stamp(current: List[Player]) -> List[Player]:
+        # Mutate the loaded board in place and hand the same list back.
+        # Unlike a pull there is no fresh pool to reconcile, so
+        # merge_historical_into has no place here -- it drops whoever is
+        # missing from its "new" side. Stamping in place is what keeps
+        # every player, history season and metadata key.
+        nonlocal changed
+        if not current:
+            # Raising inside the updater is what keeps update_players from
+            # saving: an empty board is reported, not rewritten.
+            raise EmptyBoardError(board_path)
+        before = [p.bye_week for p in current]
+        apply_schedule_byes(current, team_byes, season)
+        _fill_missing_byes(current, season)
+        changed = sum(
+            old is not None and old != p.bye_week
+            for p, old in zip(current, before)
+        )
+        return current
+
+    players = update_players(board_path, stamp)
+    return ByeRefreshResult(
+        season=season,
+        players=len(players),
+        verified=sum(current_bye_week(p, season) is not None for p in players),
+        changed=changed,
+        unlisted_teams=sorted({str(p.team) for p in players
+                               if p.team and current_bye_week(p, season) is None}),
+    )
 
 
 def _fetch_json(url: str, timeout: int = 30, extra_headers: Optional[dict] = None) -> object:
@@ -451,6 +650,8 @@ def _player_from_ffc_row(row: dict, adp_format: str, year: int) -> Player:
             "ffc_player_id": row.get("player_id"),
             "adp_format": adp_format,
             "adp_year": year,
+            "bye_season": year if bye and 1 <= bye <= 18 else None,
+            "bye_team": team if bye and 1 <= bye <= 18 else None,
             "times_drafted": row.get("times_drafted"),
             "adp_high": row.get("high"),
             "adp_low": row.get("low"),
@@ -1089,10 +1290,25 @@ def _merge_many(
 
 
 def _merge_player(base: Player, incoming: Player, source: str) -> None:
+    retain_aliases(base, incoming)
     if not base.team and incoming.team:
         base.team = incoming.team
-    if not base.bye_week and incoming.bye_week:
+    incoming_bye_team = incoming.metadata.get("bye_team") or incoming.team
+    incoming_bye_season = _to_int(incoming.metadata.get("bye_season"))
+    base_bye_season = _to_int(base.metadata.get("bye_season"))
+    if _bye_team(base.metadata.get("bye_team") or base.team) != _bye_team(base.team):
+        base_bye_season = None
+    newer_bye = incoming_bye_season is not None and (
+        base_bye_season is None or incoming_bye_season > base_bye_season)
+    if (incoming.bye_week and (not base.bye_week or newer_bye)
+            and (not base.team or _bye_team(incoming_bye_team) == _bye_team(base.team))):
         base.bye_week = incoming.bye_week
+        for field in ("bye_season", "bye_team"):
+            base.metadata.pop(field, None)
+            if field in incoming.metadata:
+                base.metadata[field] = incoming.metadata[field]
+        if incoming_bye_team:
+            base.metadata["bye_team"] = base.team or incoming_bye_team
     if incoming.adp is not None and (base.adp is None or incoming.adp < base.adp):
         base.adp = incoming.adp
     if base.age is None and incoming.age is not None:
@@ -1117,7 +1333,7 @@ def _merge_player(base: Player, incoming: Player, source: str) -> None:
             if key not in base.projections or not base.projections[key]:
                 base.projections[key] = value
     for key, value in incoming.metadata.items():
-        if key == "sources":
+        if key in {"sources", "identity_aliases", "bye_season", "bye_team"}:
             continue
         if key not in base.metadata or base.metadata[key] in (None, "", []):
             base.metadata[key] = value

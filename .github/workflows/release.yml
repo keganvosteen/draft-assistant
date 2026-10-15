@@ -24,7 +24,9 @@ jobs:
       - run: python -m unittest discover tests -v
       - run: node scripts/check_web_syntax.js
       - run: node scripts/check_league_sync.js
+      - run: node scripts/check_lineup_parity.js
       - run: node scripts/check_workspace_store.js
+      - run: node scripts/check_recommendation_refresh.js
       - run: python -m pip install --no-deps .
       - run: python -I scripts/check_installed_assets.py
 
@@ -46,6 +48,9 @@ jobs:
       - name: Build installer
         run: powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
         shell: pwsh
+
+      - name: Verify native Windows credentials
+        run: python scripts/check_native_secret_store.py
 
       - uses: actions/upload-artifact@v4
         with:
@@ -90,6 +95,9 @@ jobs:
           lipo -archs "$BIN" | tee /tmp/archs
           grep -q x86_64 /tmp/archs && grep -q arm64 /tmp/archs \
             || { echo "ERROR: binary is not universal (Intel testers would get a broken app)" >&2; exit 1; }
+
+      - name: Verify native Keychain profile isolation and migration
+        run: '"$PYTHON_BIN" scripts/check_native_secret_store.py'
 
       - uses: actions/upload-artifact@v4
         with:

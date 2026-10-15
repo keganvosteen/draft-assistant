@@ -105,6 +105,18 @@ class TestConfigDriven(unittest.TestCase):
 
 
 class TestPolicyDetails(unittest.TestCase):
+    def test_provider_alias_pick_does_not_add_a_duplicate_roster_placeholder(self):
+        owned = _p("RB1", "RB", 100)
+        owned.id = "sleeper:11"
+        owned.metadata = {"ffc_player_id": "77"}
+        board = [_p("Needed", "TE", 50), _p("Bench", "RB", 90)]
+        cfg = _config({"RB": 1, "TE": 1, "BN": 1}, teams=1, sims=4, noise=0)
+        aliased = DraftState("Me", ["Me"], picks=["ffc:77"], my_picks=["ffc:77"])
+        canonical = DraftState("Me", ["Me"], picks=[owned.key()], my_picks=[owned.key()])
+        actual = rollout_values(cfg, board, {"RB": [owned]}, aliased, top_n=2)
+        expected = rollout_values(cfg, board, {"RB": [owned]}, canonical, top_n=2)
+        self.assertEqual(actual, expected)
+
     def test_vor_uses_remaining_league_demand_mid_draft(self):
         drafted = [
             _p("RB1", "RB", 100, adp=1.0),
@@ -338,6 +350,106 @@ class TestDegenerate(unittest.TestCase):
     def test_empty_board(self):
         cfg = _config({"RB": 1, "WR": 1, "BN": 1})
         self.assertEqual(rollout_values(cfg, [], {}, top_n=5), [])
+
+
+class TestMandatoryCompletion(unittest.TestCase):
+    def test_last_pick_fills_every_required_position_even_without_simulation(self):
+        for required in ("QB", "RB", "WR", "TE", "K", "DST"):
+            for sims in (0, 4):
+                filler = "RB" if required != "RB" else "WR"
+                rostered = [_p("Starter", filler, 100), _p("Bench", filler, 90)]
+                board = [_p(f"Luxury{i}", filler, 400 - i) for i in range(30)]
+                board.append(_p("Needed", required, 50))
+                config = _config({filler: 1, required: 1, "BN": 1}, teams=1, sims=sims)
+                with self.subTest(position=required, sims=sims):
+                    rows = rollout_values(config, board, {filler: rostered}, top_n=40)
+                    self.assertEqual([row.player.name for row in rows], ["Needed"])
+                    self.assertTrue(rows[0].roster_feasible)
+
+    def test_final_pick_fills_overlapping_flex(self):
+        owned = [_p("TE1", "TE", 100), _p("TE2", "TE", 90)]
+        board = [_p("LuxuryTE", "TE", 400), _p("NeededWR", "WR", 50)]
+        cfg = _config({"WRTE": 1, "RBWR": 1, "BN": 1}, teams=1, sims=4)
+        rows = rollout_values(cfg, board, {"TE": owned}, top_n=10)
+        self.assertEqual([row.player.name for row in rows], ["NeededWR"])
+
+    def test_multi_pick_rollout_completes_skill_and_flex_slots(self):
+        from draft_assistant.draft_value import roster_value
+        from draft_assistant.projections import compute_points
+        config = _config({"WRTE": 1, "RBWR": 1, "QB": 1, "BN": 1}, teams=1, sims=4, noise=0)
+        board = [_p(f"TE{i}", "TE", 500 - i) for i in range(5)]
+        board += [_p("WR", "WR", 50), _p("QB", "QB", 1)]
+        owned = {}
+        for _ in range(4):
+            row = rollout_values(config, board, owned, top_n=1)[0]
+            owned.setdefault(row.player.position, []).append(row.player)
+            board.remove(row.player)
+            self.assertTrue(row.roster_feasible)
+        chosen = [p for group in owned.values() for p in group]
+        lineup = roster_value(chosen, compute_points(chosen, SCORING), config.roster)
+        self.assertEqual(len(lineup.starters), 3)
+        self.assertEqual({p.position for p in lineup.starters}, {"QB", "WR", "TE"})
+
+    def test_impossible_pool_is_identified(self):
+        config = _config({"RB": 1, "TE": 1}, teams=1, sims=4)
+        rows = rollout_values(config, [_p("RB", "RB", 100)], {}, top_n=10)
+        self.assertTrue(rows)
+        self.assertTrue(all(not row.roster_feasible for row in rows))
+
+
+class TestExplanationMetrics(unittest.TestCase):
+    def test_bye_penalty_uses_requested_season_in_simulated_and_fallback_rows(self):
+        incumbent = _p("Owned", "RB", 100, bye=9)
+        incumbent.team = "BUF"
+        incumbent.metadata = {"bye_season": 2026, "bye_team": "BUF"}
+        candidate = _p("Candidate", "RB", 90, bye=9)
+        candidate.team = "KC"
+        candidate.metadata = {"bye_season": 2026, "bye_team": "KC"}
+        for sims in (0, 4):
+            cfg = _config({"RB": 2}, teams=1, sims=sims)
+            for season, expected_penalty in ((2026, 1.5), (2027, 0.0)):
+                with self.subTest(sims=sims, season=season):
+                    rows = rollout_values(cfg, [candidate], {"RB": [incumbent]}, season=season)
+                    self.assertEqual(rows[0].bye_penalty, expected_penalty)
+
+    def test_gain_excludes_vor_bonus_in_simulated_and_fallback_rows(self):
+        from draft_assistant.draft_value import roster_value
+        from draft_assistant.projections import compute_points
+        board = [_p(f"RB{i}", "RB", 100 - i * 2) for i in range(30)]
+        for sims in (0, 4):
+            cfg = _config({"RB": 1}, teams=2, sims=sims)
+            cfg.draft["rollout_candidates"] = 1
+            rows = rollout_values(cfg, board, {}, top_n=30)
+            points = compute_points(board, SCORING)
+            for row in rows:
+                expected = roster_value([row.player], points, cfg.roster).total_value
+                self.assertEqual(row.immediate_gain, expected)
+                if not row.simulated:
+                    self.assertEqual(row.expected_roster_points, expected)
+
+    def test_waiting_counts_opponents_before_upcoming_pick(self):
+        cfg = _config({"RB": 1, "BN": 1}, teams=2, slot=2, sims=4, noise=0)
+        board = [_p("First", "RB", 100, 1), _p("Second", "RB", 90, 2), _p("Third", "RB", 80, 3)]
+        rows = rollout_values(cfg, board, {}, DraftState("Me", ["Opponent", "Me"]), top_n=3)
+        risk = {row.player.name: row.gone_risk for row in rows}
+        self.assertEqual(risk["First"], 1)
+        self.assertEqual(risk["Second"], 0)
+
+    def test_on_turn_accounts_for_the_alternative_pick(self):
+        cfg = _config({"RB": 1, "BN": 1}, teams=2, slot=1, sims=4, noise=0)
+        board = [_p(f"RB{i}", "RB", 100 - i, i + 1) for i in range(5)]
+        rows = rollout_values(cfg, board, {}, DraftState("Me", ["Me", "Opponent"]), top_n=5)
+        risk = {row.player.name: row.gone_risk for row in rows}
+        self.assertEqual(risk["RB2"], 1)  # our alternative RB0 is removed first
+        self.assertEqual(risk["RB3"], 0)
+
+    def test_turnaround_and_last_pick_have_no_intervening_opponents(self):
+        board = [_p(f"RB{i}", "RB", 100 - i, i + 1) for i in range(3)]
+        cfg = _config({"RB": 1, "BN": 1}, teams=2, slot=2, sims=4, noise=0)
+        state = DraftState("Me", ["Opponent", "Me"], picks=["Other|WR"])
+        self.assertTrue(all(row.gone_risk == 0 for row in rollout_values(cfg, board, {}, state, top_n=3)))
+        cfg = _config({"RB": 1}, teams=2, slot=1, sims=4, noise=0)
+        self.assertTrue(all(row.gone_risk == 0 for row in rollout_values(cfg, board, {}, top_n=3)))
 
 
 if __name__ == "__main__":

@@ -14,11 +14,13 @@ import json
 import math
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
+from operator import itemgetter
 from typing import Dict, Iterable, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from .fuzzy import normalize_player_name
+from .identity import player_aliases
 from .models import Player, PlayerContext, PlayerSignal
 from .paths import resolve
 from .storage import atomic_write_json
@@ -81,19 +83,53 @@ def isoformat(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat()
 
 
+#: The first (month, day) that belongs to the upcoming season. January and
+#: February are still last year's: week 17 straddles New Year, week 18 follows
+#: it, and the playoffs run to a Super Bowl no later than mid-February. March 1
+#: sits in the dead air after that and ahead of everything that is about the
+#: next season -- the league year turns over in mid-March, and a board,
+#: projections or ADP pulled from spring on are for the season about to be
+#: drafted. A fixed date on purpose: nothing is played or published in late
+#: February, so there is no boundary there worth computing.
+SEASON_ROLLOVER = (3, 1)
+REGULAR_SEASON_WEEKS = 18
+
+
+def season_kickoff(season: int) -> date:
+    """The Thursday that opens NFL week 1: the one after September's first Monday."""
+    september = date(season, 9, 1)
+    first_monday = september + timedelta(days=-september.weekday() % 7)
+    return first_monday + timedelta(days=3)
+
+
 def default_season(today: Optional[date] = None) -> int:
-    return (today or date.today()).year
+    """The NFL season in play on ``today``, named for the year it kicked off.
+
+    Not the calendar year. That put New Year's Day in week 1 of a season with
+    no games, in the middle of fantasy championship week: every bye was judged
+    against the wrong season and ignored, and the news cache read as empty.
+    """
+    today = today or date.today()
+    return today.year if (today.month, today.day) >= SEASON_ROLLOVER else today.year - 1
 
 
 def default_week(today: Optional[date] = None) -> int:
-    """Return a practical regular-season default; the UI remains editable."""
+    """The fantasy week of ``default_season(today)``; the UI remains editable.
+
+    Fantasy weeks run Tuesday through Monday, so week 1 opens two days before
+    the kickoff Thursday and the answer never depends on which day a week's
+    first game is played. Anything earlier is still week 1 (draft prep), and
+    from the end of week 18 until the season rolls over it stays 18.
+
+    This used to count 7-day blocks from September 1, which is never the
+    Tuesday week 1 opens on: in 2025 every Monday night game counted as the
+    following week, and 2026 ran a full week ahead all season. It also returned
+    1 for every date before September, so weeks 17 and 18 -- played in January
+    -- came back as week 1.
+    """
     today = today or date.today()
-    if today.month < 9:
-        return 1
-    if today.month > 12:
-        return 18
-    opener = date(today.year, 9, 1)
-    return max(1, min(18, ((today - opener).days // 7) + 1))
+    week_one = season_kickoff(default_season(today)) - timedelta(days=2)
+    return max(1, min(REGULAR_SEASON_WEEKS, (today - week_one).days // 7 + 1))
 
 
 def context_path() -> str:
@@ -145,12 +181,14 @@ def _signal_from_dict(raw: object) -> Optional[PlayerSignal]:
 
 def context_to_dict(context: PlayerContext) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "season": context.season,
         "selected_week": context.selected_week,
         "refreshed_at": context.refreshed_at,
         "signals": [_signal_to_dict(signal) for signal in context.signals],
         "weekly_projections": context.weekly_projections,
+        "weekly_projection_season": context.weekly_projection_season,
+        "weekly_projection_week": context.weekly_projection_week,
         "actual_stats": context.actual_stats,
         "source_health": context.source_health,
     }
@@ -171,6 +209,14 @@ def context_from_dict(raw: object) -> PlayerContext:
     projections = raw.get("weekly_projections")
     actuals = raw.get("actual_stats")
     health = raw.get("source_health")
+    # Old caches only recorded selected_week, which may already have been
+    # changed without fetching data. Do not invent provenance for that bucket.
+    projection_season = raw.get("weekly_projection_season")
+    projection_week = raw.get("weekly_projection_week")
+    if (not isinstance(projection_season, int) or isinstance(projection_season, bool)
+            or not isinstance(projection_week, int) or isinstance(projection_week, bool)
+            or not 1 <= projection_week <= 18):
+        projection_season = projection_week = None
     return PlayerContext(
         season=season,
         selected_week=week,
@@ -179,17 +225,36 @@ def context_from_dict(raw: object) -> PlayerContext:
         weekly_projections=projections if isinstance(projections, dict) else {},
         actual_stats=actuals if isinstance(actuals, dict) else {},
         source_health=health if isinstance(health, dict) else {},
+        weekly_projection_season=projection_season,
+        weekly_projection_week=projection_week,
     )
 
 
 def load_context(path: Optional[str] = None, season: Optional[int] = None, week: Optional[int] = None) -> PlayerContext:
+    """Return the news cache as it applies to ``season`` -- today's, unless named.
+
+    The cache is one slot, not one per season, and whatever season it was last
+    refreshed for is not evidence of what season it is now. Loading it with no
+    season used to hand back the file's own: a cache written last autumn made
+    /api/players judge this year's correctly stamped byes against last year
+    and report none, and the "Load bye weeks" repair that offered itself then
+    re-stamped the whole board from last year's schedule. So the season is
+    always asked for, and a cache for any other one reads as no news for this
+    season yet -- the eligibility gate fails open and every caller already
+    reports an unrefreshed context as stale.
+
+    The returned ``season`` is therefore the one requested, never merely the
+    one found. That is what lets a handler use ``load_context().season`` as
+    "the current season" and keeps every endpoint on the same answer.
+    """
     path = path or context_path()
+    season = default_season() if season is None else season
     try:
         with open(path, "r", encoding="utf-8") as handle:
             context = context_from_dict(json.load(handle))
     except (FileNotFoundError, OSError, UnicodeError, json.JSONDecodeError, ValueError):
         context = empty_context(season, week)
-    if season is not None and context.season != season:
+    if context.season != season:
         return empty_context(season, week)
     if week is not None:
         context.selected_week = max(1, min(18, int(week)))
@@ -214,6 +279,13 @@ def _source_due(context: PlayerContext, source: str, now: datetime, force: bool,
     if force:
         return True
     health = context.source_health.get(source, {})
+    if health.get("ok") is False:
+        return True
+    if source == "sleeper_weekly" and (
+        context.weekly_projection_season != context.season
+        or context.weekly_projection_week != week
+    ):
+        return True
     if week is not None and health.get("week") != week:
         return True
     refreshed = _parse_time(health.get("refreshed_at"))
@@ -384,6 +456,8 @@ def _refresh_sleeper_weekly(context: PlayerContext) -> int:
         for player_id, row in raw.items()
         if (stats := _stats(row))
     }
+    context.weekly_projection_season = context.season
+    context.weekly_projection_week = context.selected_week
     return len(context.weekly_projections)
 
 
@@ -554,19 +628,98 @@ def player_context_ids(player: Player) -> List[str]:
         ids.append(str(player.id).replace("nflverse:", "gsis:", 1))
     if gsis_id:
         ids.append(f"gsis:{gsis_id}")
+    # A refreshed board can retain the old provider only as an identity alias.
+    # Use the same continuity information as draft ownership and roster sync,
+    # keeping canonical/current provider precedence when two sources overlap.
+    ids.extend(sorted(player_aliases(player)))
+    ids.extend(identity.replace("nflverse:", "gsis:", 1)
+               for identity in list(ids) if identity.startswith("nflverse:"))
     ids.append(f"name:{normalize_player_name(player.name, compact=True)}")
     return list(dict.fromkeys(item for item in ids if item))
+
+
+#: Where signals_for_player parks its index on a context. A plain instance
+#: attribute on purpose, not a PlayerContext field: fields are serialized,
+#: compared, and carried across by dataclasses.replace(), and a derived cache
+#: must be none of those.
+_SIGNAL_INDEX_ATTR = "_signal_index"
+_position = itemgetter(0)
+
+
+class _SignalIndex:
+    """``context.signals`` grouped by ``player_id``, each group in list order.
+
+    Every per-player helper below used to walk the whole signal list. Against
+    a real news cache (~6,000 signals) and the ~2,200-player board that is half
+    a second or more per pass, and one request makes several: two in
+    /api/suggest, five in /api/players.
+
+    The context is a plain mutable dataclass whose list anyone may touch --
+    ``_replace_signals`` rebinds it, tests append to it -- so the index has to
+    prove it is current rather than assume nobody did. Identity plus length is
+    not proof: a same-length in-place replacement (``signals[i] = other``, a
+    sort) passes both. So the index keeps a copy of the list it was built from
+    and is valid only while the context still holds that list and the list
+    still equals the copy. Identical objects short-circuit, which makes that
+    one C-level pass over pointers: about 5 microseconds at 6,000 signals,
+    against about 200 for the Python scan it replaces. Not free, but it cannot
+    go stale.
+    """
+
+    __slots__ = ("_source", "_snapshot", "by_id")
+
+    def __init__(self, signals: List[PlayerSignal]) -> None:
+        self._source = signals
+        # Index the copy, never the live list: if another thread mutates the
+        # list mid-build, the index still describes exactly this snapshot, and
+        # the next lookup sees the mismatch and rebuilds.
+        self._snapshot = list(signals)
+        by_id: Dict[str, List[Tuple[int, PlayerSignal]]] = {}
+        for position, signal in enumerate(self._snapshot):
+            by_id.setdefault(signal.player_id, []).append((position, signal))
+        self.by_id = by_id
+
+    def is_current(self, signals: List[PlayerSignal]) -> bool:
+        # ``is`` first. A rebound list of equal-but-distinct signals would pass
+        # the comparison alone, but only by falling off the identity fast path
+        # into a field-by-field dataclass __eq__ per element, on every lookup.
+        # (Equal is enough for the comparison itself: PlayerSignal is a frozen
+        # value type, so an equal signal in the same slot is not a change.)
+        return self._source is signals and self._snapshot == signals
+
+
+def _signal_index(context: PlayerContext) -> Dict[str, List[Tuple[int, PlayerSignal]]]:
+    signals = context.signals
+    index = getattr(context, _SIGNAL_INDEX_ATTR, None)
+    if index is None or not index.is_current(signals):
+        # Built completely before it is published and never mutated afterwards,
+        # so threads sharing a context see the old index or the new one, never
+        # a half-built one. Two racing here just build it twice.
+        index = _SignalIndex(signals)
+        setattr(context, _SIGNAL_INDEX_ATTR, index)
+    return index.by_id
 
 
 def signals_for_player(context: Optional[PlayerContext], player: Player, *, now: Optional[datetime] = None) -> List[PlayerSignal]:
     if context is None:
         return []
-    aliases = set(player_context_ids(player))
+    by_id = _signal_index(context)
     now = now or utc_now()
+    found: List[Tuple[int, PlayerSignal]] = []
+    groups = 0
+    for identity in player_context_ids(player):
+        group = by_id.get(identity)
+        if group:
+            found.extend(group)
+            groups += 1
+    if groups > 1:
+        # A player is usually known under several ids (sleeper:, gsis:, name:),
+        # each with its own group. Callers depend on the order of
+        # context.signals -- primary_availability returns the *first* injury it
+        # meets -- so merge back into list order, not the order of the ids.
+        found.sort(key=_position)
     signals = []
-    for signal in context.signals:
-        if signal.player_id not in aliases:
-            continue
+    for _, signal in found:
         expires = _parse_time(signal.expires_at)
         if expires is not None and expires < now:
             continue
@@ -622,7 +775,29 @@ def _context_stats(context: Optional[PlayerContext], player: Player, bucket: str
 
 
 def weekly_projection_for(context: Optional[PlayerContext], player: Player) -> Optional[Dict[str, float]]:
+    if context is None or (
+        context.weekly_projection_season != context.season
+        or context.weekly_projection_week != context.selected_week
+    ):
+        return None
     return _context_stats(context, player, "weekly")
+
+
+def current_bye_week(player: Player, season: Optional[int]) -> Optional[int]:
+    """Return a bye only when its schedule season and team are known to match."""
+    if season is None:
+        return None
+    try:
+        bye_season = int(player.metadata.get("bye_season"))
+        bye_week = int(player.bye_week)
+    except (TypeError, ValueError):
+        return None
+    bye_team = player.metadata.get("bye_team")
+    if bye_season != season or not 1 <= bye_week <= 18:
+        return None
+    if bye_team and str(bye_team).upper() != str(player.team or "").upper():
+        return None
+    return bye_week
 
 
 def actual_stats_for(context: Optional[PlayerContext], player: Player) -> Optional[Dict[str, float]]:

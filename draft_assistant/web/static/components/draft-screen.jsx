@@ -1338,7 +1338,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     // `stale` has to clear here as well: RecommendationBar tests it before
     // `loading`, so leaving it set makes the bar read "ON DECK — 0 picks until
     // you're up" for the whole rollout instead of showing the spinner.
-    setSuggest(s => ({ ...s, loading: true, err: null, stale: false }));
+    setSuggest(s => ({ ...s, rows: {}, loading: true, err: null, stale: false, rosterFeasible: null }));
     const timer = setTimeout(() => {
       fetch('/api/suggest', {
         method: 'POST',
@@ -1348,6 +1348,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       })
         .then(r => r.json())
         .then(d => {
+          if (ctrl.signal.aborted) return;
           if (d.error) {
             setSuggest({ rows: {}, loading: false, sims: 0, err: d.error, stale: false,
                          newsStale: false, newsSources: [] });
@@ -1358,18 +1359,19 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
           setSuggest({
             rows, loading: false, sims: d.sims || 0, err: null, stale: false,
             newsStale: !!d.contextStale, newsSources: d.contextFailedSources || [],
+            rosterFeasible: d.rosterFeasible,
           });
         })
         .catch(e => {
-          if (e.name !== 'AbortError') {
+          if (!ctrl.signal.aborted && e.name !== 'AbortError') {
             setSuggest({ rows: {}, loading: false, sims: 0, err: String(e), stale: false,
                          newsStale: false, newsSources: [] });
           }
         });
     }, 120);
     return () => { ctrl.abort(); clearTimeout(timer); };
-  }, [picks, untilMyTurn, trackingBlocked, league.numTeams, league.draftPosition, league.rosterSlots,
-      league.scoringType, league.customScoring, refreshNonce]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [picks, allPlayers, untilMyTurn, trackingBlocked, league.numTeams, league.draftPosition, league.rosterSlots,
+      league.scoringType, league.customScoring, league.importedScoring, league.draftType, adpNoise, refreshNonce]);
 
   const tweakSig = `${tweaks.sims}|${tweaks.autoDrafters}`;
   const prevTweakSig = React.useRef(tweakSig);
@@ -1657,6 +1659,8 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
           : 'Draft recommendations support standard snake drafts. This league uses a different format.'}
       </Note>}
       {provider === 'ESPN' && !draftComplete && <Note>ESPN publishes draft results after completion. More → Sync completed ESPN draft imports the final results. {!trackingBlocked && 'During the draft, use More → Paste draft history or record picks.'}</Note>}
+      {/* The reloaded board is a new allPlayers, which is what re-runs the rollout. */}
+      <ByeWeeksNotice players={allPlayers} onLoaded={onRefreshPlayers} />
       {!isMobile && !trackingBlocked && <PickTicker league={league} picks={picks} playersById={playersById} />}
 
       <div style={{flex:1, display:'flex', minHeight:0}}>
@@ -1708,6 +1712,9 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
           {!trackingBlocked && <RecommendationBar scored={scored} myPlayers={myPlayers} league={league} oppData={oppData}
             onDraft={editingBlocked ? null : handleDraft} stale={suggest.stale && !suggest.err}
             untilMyTurn={untilMyTurn} loading={suggest.loading} />}
+          {!trackingBlocked && !suggest.loading && !suggest.stale && suggest.rosterFeasible === false && <Note tone="warn">
+            The available player pool and remaining picks cannot fill every starting slot. Check your roster settings and refresh player data before following these recommendations.
+          </Note>}
 
           <PlayerList players={enriched} onDraft={editingBlocked ? null : handleDraft}
             showDrafted={showDrafted} onToggleDrafted={() => setShowDrafted(v => !v)} />

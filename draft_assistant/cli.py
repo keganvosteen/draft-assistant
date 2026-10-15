@@ -7,7 +7,14 @@ from .draft import DraftTracker
 from .export import export_players_csv
 from .importers.fantasypros import load_dst_csv, load_k_csv, load_offense_csv, merge_players
 from .importers.fftoday import fetch_all_fftoday
-from .importers.free_sources import merge_historical_into, pull_free_data
+from .importers.free_sources import (
+    ByeScheduleError,
+    EmptyBoardError,
+    default_projection_season,
+    merge_historical_into,
+    pull_free_data,
+    refresh_board_byes,
+)
 from .models import FLEX_TYPES
 from .profiles import DEFAULT_PROFILE, ensure_profile, load_profile_config
 from .providers.base import build_provider
@@ -264,9 +271,8 @@ def main() -> None:
     p_import.set_defaults(func=cmd_import_fpros)
 
     def cmd_pull_fftoday(args: argparse.Namespace) -> None:
-        from datetime import date
         paths = ensure_profile(args.profile)
-        season = args.season or date.today().year
+        season = args.season or default_projection_season()
         print(f"Fetching FFToday projections for {season}...")
         players = fetch_all_fftoday(season)
         if not players:
@@ -281,7 +287,7 @@ def main() -> None:
 
     p_pull = sub.add_parser("pull-fftoday", help="Fetch free FFToday projections and save to JSON/CSV")
     p_pull.add_argument("--season", type=int, default=None,
-                        help="Defaults to the current year")
+                        help="Defaults to the current NFL season, which rolls over on March 1")
     p_pull.add_argument("--out", type=str, default=None)
     p_pull.add_argument("--csv", type=str, default=None)
     p_pull.set_defaults(func=cmd_pull_fftoday)
@@ -329,8 +335,8 @@ def main() -> None:
             print(f"- {report.source}: {status}, {report.records} records{detail}")
 
     p_free = sub.add_parser("pull-free-data", help="Fetch and merge free public data sources")
-    p_free.add_argument("--season", type=int, default=None, help="Projection season; defaults to current year")
-    p_free.add_argument("--stats-season", type=int, default=None, help="Historical stats season; defaults to last year")
+    p_free.add_argument("--season", type=int, default=None, help="Projection season. Defaults to the current NFL season, which rolls over on March 1")
+    p_free.add_argument("--stats-season", type=int, default=None, help="Historical stats season; defaults to the season before the current one")
     p_free.add_argument("--teams", type=int, default=None, help="League team count for ADP")
     p_free.add_argument("--adp-format", choices=["standard", "half-ppr", "ppr"], default=None)
     p_free.add_argument("--espn-league-id", type=str, default=None, help="Optional public ESPN league id")
@@ -339,6 +345,44 @@ def main() -> None:
     p_free.add_argument("--out", type=str, default=None)
     p_free.add_argument("--csv", type=str, default=None)
     p_free.set_defaults(func=cmd_pull_free_data)
+
+    def cmd_refresh_byes(args: argparse.Namespace) -> None:
+        """Repair bye provenance on the saved board without re-pulling it.
+
+        The work is ``refresh_board_byes``, shared with the web UI's
+        ``/api/refresh-byes``; this only picks the board and season and words
+        the outcome for a terminal.
+        """
+        paths = ensure_profile(args.profile)
+        season = args.season or default_projection_season()
+        board_path = paths.projections_path
+        print(f"Refreshing {season} bye weeks from the nflverse schedule...")
+        try:
+            result = refresh_board_byes(board_path, season)
+        except ByeScheduleError as exc:
+            if exc.cause is not None:
+                print(f"Could not load the {season} schedule ({exc.cause}); the board was not changed.")
+            else:
+                which = ", ".join(exc.missing) if exc.listed else "any team"
+                print(f"The {season} schedule has no bye week yet for {which}; "
+                      "the board was not changed.")
+            raise SystemExit(1)
+        except EmptyBoardError:
+            print(f"No players on the board at {board_path}; run pull-free-data first.")
+            raise SystemExit(1)
+        print(f"{result.verified} of {result.players} players now carry a verified {season} bye; "
+              f"{result.changed} stored bye week(s) changed.")
+        if result.unlisted_teams:
+            print(f"No {season} schedule entry for team code(s): {', '.join(result.unlisted_teams)}")
+        print(f"Saved to {board_path}")
+
+    p_byes = sub.add_parser(
+        "refresh-byes",
+        help="Re-stamp bye weeks on the saved board from the NFL schedule "
+             "(projections, ADP and history are left untouched)",
+    )
+    p_byes.add_argument("--season", type=int, default=None, help="Schedule season. Defaults to the current NFL season, which rolls over on March 1")
+    p_byes.set_defaults(func=cmd_refresh_byes)
 
     # log command
     def cmd_log(args: argparse.Namespace) -> None:
@@ -378,7 +422,7 @@ def main() -> None:
         paths = ensure_profile(args.profile)
         from .collectors.sleeper_historical import collect_players
         players = collect_players(
-            current_season=args.season,
+            current_season=args.season or default_projection_season(),
             history_seasons=args.history,
         )
         if not players:
@@ -389,7 +433,7 @@ def main() -> None:
         print(f"Saved {len(players)} enriched players to {out}")
 
     p_collect = sub.add_parser("collect", help="Collect Sleeper player data with historical stats")
-    p_collect.add_argument("--season", type=int, default=2026)
+    p_collect.add_argument("--season", type=int, default=None, help="Defaults to the current NFL season, which rolls over on March 1")
     p_collect.add_argument("--history", type=int, default=3)
     p_collect.add_argument("--out", type=str, default=None)
     p_collect.set_defaults(func=cmd_collect)
@@ -399,7 +443,7 @@ def main() -> None:
         paths = ensure_profile(args.profile)
         from .collectors.combined import collect_all
         players = collect_all(
-            current_season=args.season,
+            current_season=args.season or default_projection_season(),
             history_seasons=args.history,
             scoring_format=args.scoring,
             teams=args.teams,
@@ -420,10 +464,10 @@ def main() -> None:
     p_ca = sub.add_parser("collect-all",
         help="Collect from every source: the free pull plus nfl_data_py and "
              "Sleeper's stats archive (nfl_data_py optional)")
-    p_ca.add_argument("--season", type=int, default=2026)
+    p_ca.add_argument("--season", type=int, default=None, help="Defaults to the current NFL season, which rolls over on March 1")
     p_ca.add_argument("--history", type=int, default=3)
     p_ca.add_argument("--stats-season", type=int, default=None,
-        help="most recent completed season (default: last year)")
+        help="most recent completed season (default: the season before the current one)")
     p_ca.add_argument("--scoring", choices=["ppr", "half-ppr", "standard"], default="ppr")
     p_ca.add_argument("--teams", type=int, default=12)
     p_ca.add_argument("--out", type=str, default=None)

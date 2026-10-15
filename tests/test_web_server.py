@@ -10,7 +10,9 @@ import unittest
 from functools import partial
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
+from unittest.mock import patch
 
+from draft_assistant.models import LeagueConfig, Player, PlayerContext
 from draft_assistant.web.server import MAX_BODY_BYTES, DraftAPIHandler
 
 
@@ -279,12 +281,43 @@ class TestContextAndUpdateEndpoints(_ServerFixture):
         # The eligibility filter is only as good as the feed behind it, so the
         # draft room has to be told when that feed is out of date rather than
         # being left to imply the news was checked.
-        status, body = self.request("POST", "/api/suggest", {"top": 1})
+        #
+        # A six-player board and a stubbed feed, because what is under test is
+        # the freshness report, not the engine. Served from the repo's cwd this
+        # was a default-sims rollout of the whole board against whatever news
+        # cache the developer happened to have: 3 to 5 s behind request()'s
+        # 10 s timeout, which it missed whenever the suite shared a busy machine.
+        board = [
+            Player("board:RB1", "RB One", "RB", adp=1.0, projections={"rush_yd": 1400}),
+            Player("board:WR1", "WR One", "WR", adp=2.0, projections={"rec_yd": 1300}),
+            Player("board:QB1", "QB One", "QB", adp=3.0, projections={"pass_yd": 4500}),
+            Player("board:RB2", "RB Two", "RB", adp=4.0, projections={"rush_yd": 900}),
+            Player("board:WR2", "WR Two", "WR", adp=5.0, projections={"rec_yd": 800}),
+            Player("board:QB2", "QB Two", "QB", adp=6.0, projections={"pass_yd": 3500}),
+        ]
+        config = LeagueConfig(
+            teams=2, roster={"QB": 1, "RB": 1, "WR": 1},
+            scoring={"pass_yd": 0.04, "rush_yd": 0.1, "rec_yd": 0.1},
+            provider={}, draft={"slot": 1, "rollout_sims": 2},
+        )
+        # Never refreshed, and one source's last attempt failed.
+        context = PlayerContext(2026, 1, source_health={
+            "sleeper_players": {"ok": False}, "nflverse_depth": {"ok": True},
+        })
+        with patch("draft_assistant.web.server._load_players", return_value=(board, config)), \
+                patch("draft_assistant.web.server.load_context", return_value=context):
+            status, body = self.request("POST", "/api/suggest", {"top": 1})
         payload = json.loads(body)
         self.assertEqual(status, 200)
         self.assertIn("contextStale", payload)
         self.assertIsInstance(payload["contextStale"], bool)
         self.assertIsInstance(payload["contextFailedSources"], list)
+        self.assertTrue(payload["contextStale"])
+        self.assertEqual(payload["contextFailedSources"], ["sleeper_players"])
+        # The answer came from the stub board, not from data/projections.json.
+        # Which of the six the engine prefers is not this test's business.
+        self.assertEqual(len(payload["suggestions"]), 1)
+        self.assertIn(payload["suggestions"][0]["id"], {player.key() for player in board})
 
     def test_update_endpoint_is_safe_in_source_checkout(self):
         status, body = self.request("GET", "/api/update")

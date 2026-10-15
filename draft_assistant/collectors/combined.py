@@ -314,7 +314,7 @@ def collect_all_result(
     elif not have_adp:
         _fill_adp_gaps(pool, current_season, scoring_format, teams, reports)
 
-    _fill_missing_byes(pool.values())
+    _fill_missing_byes(pool.values(), current_season)
 
     merged = sorted(
         pool.values(),

@@ -3,14 +3,14 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from .models import DraftState, LeagueConfig, Player
 from .fuzzy import fuzzy_match
+from .identity import player_indexes
 
 
 class DraftTracker:
     def __init__(self, config: LeagueConfig, state: DraftState, players: List[Player]):
         self.config = config
         self.state = state
-        self.players = {p.key(): p for p in players}
-        self.aliases = {p.legacy_key(): p.key() for p in players}
+        self.players, self.aliases = player_indexes(players)
 
     def _canonical_key(self, key: str) -> str:
         return self.aliases.get(key, key)
