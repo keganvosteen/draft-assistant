@@ -21,7 +21,7 @@ function WaiverRosterPanel({ league, myPlayers, fullWidth = false, asOf = null }
       borderBottom: `1px solid ${T.borderLight}`, minHeight: 36,
     }}>
       <span style={{
-        fontSize: 10, fontWeight: 800, color: dim ? T.mutedLight : T.muted,
+        fontSize: 11, fontWeight: 800, color: dim ? T.mutedLight : T.muted,
         width: 30, flexShrink: 0, letterSpacing: .3,
       }}>{slot.label}</span>
       {player ? (
@@ -29,7 +29,7 @@ function WaiverRosterPanel({ league, myPlayers, fullWidth = false, asOf = null }
           <div className="da-ellipsis" style={{ fontSize: 12.5, fontWeight: 600, color: T.text }}>
             {player.name}
           </div>
-          <div style={{ fontSize: 10.5, color: T.muted, display: 'flex', gap: 6 }}>
+          <div style={{ fontSize: 11, color: T.muted, display: 'flex', gap: 6 }}>
             <span>{player.pos} · {player.nflTeam || 'FA'}</span>
             {player.byeWeek ? <span style={{ color: T.mutedLight }}>BYE {player.byeWeek}</span> : null}
             {player.unmatched && <span>No projection yet</span>}
@@ -398,17 +398,11 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
             padding: '8px 14px', background: T.surface, borderBottom: `1px solid ${T.border}`,
             display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', flexShrink: 0,
           }}>
-            <div role="radiogroup" aria-label="Ranking horizon"
-              style={{ display: 'inline-flex', border: `1px solid ${T.border}`, borderRadius: T.rsm, overflow: 'hidden' }}>
-              {[['weekly', 'This week'], ['ros', 'Rest of season']].map(([value, label]) => {
-                const on = horizon === value;
-                return (
-                  <button key={value} onClick={() => setHorizon(value)} aria-pressed={on} style={{
-                    border: 'none', padding: '6px 13px', cursor: 'pointer', fontSize: 12.5, fontWeight: 700,
-                    background: on ? T.primary : T.surface, color: on ? '#fff' : T.muted,
-                  }}>{label}</button>
-                );
-              })}
+            <div role="group" aria-label="Ranking horizon" style={{ display: 'inline-flex', gap: 5 }}>
+              {[['weekly', 'This week'], ['ros', 'Rest of season']].map(([value, label]) => (
+                <Chip key={value} on={horizon === value} onClick={() => setHorizon(value)}
+                  style={{ fontSize: 12.5, padding: '5px 13px' }}>{label}</Chip>
+              ))}
             </div>
 
             {horizon === 'weekly' && (
@@ -548,7 +542,7 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
                                 </div>
                               ))}
                               {horizon === 'weekly' && row.weeklyProjectionOrigin && (
-                                <div style={{ fontSize: 10.5, marginTop: 2, color: T.mutedLight }}>
+                                <div style={{ fontSize: 11, marginTop: 2, color: T.mutedLight }}>
                                   {row.weeklyProjectionOrigin}
                                 </div>
                               )}

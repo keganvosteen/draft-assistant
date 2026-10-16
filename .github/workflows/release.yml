@@ -23,6 +23,7 @@ jobs:
           node-version: "22"
       - run: python -m unittest discover tests -v
       - run: node scripts/check_web_syntax.js
+      - run: node scripts/check_theme_tokens.js
       - run: node scripts/check_league_sync.js
       - run: node scripts/check_lineup_parity.js
       - run: node scripts/check_workspace_store.js
