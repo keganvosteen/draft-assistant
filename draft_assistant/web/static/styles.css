@@ -5,11 +5,22 @@
    per-component layout work; this file owns what inline styles cannot express:
    the font stack, focus rings, :hover/:active states on native elements,
    scrollbars, animations, and the primitives (menus, toasts, dialogs) that
-   need real CSS. Tokens are declared once here and mirrored in `T` so both
-   layers stay on the same values.
+   need real CSS.
+
+   THEMES. Every colour, radius and shadow is a custom property, and `T` in
+   ui-kit.jsx holds `var(--…)` references to them rather than values — so an
+   inline style follows whichever theme is active without knowing themes
+   exist. `:root` is the Classic theme; each `:root[data-theme=…]` block below
+   redefines the whole set (scripts/check_theme_tokens.js fails a block that
+   misses one, and checks every text/background pair for WCAG AA contrast).
+   The themes are inspired by the platforms' apps — colour, shape, density —
+   and deliberately carry none of their logos or typefaces.
    ───────────────────────────────────────────────────────────────────────── */
 
+/* ─── Classic ────────────────────────────────────────────────────────────── */
 :root {
+  color-scheme: light;
+
   --bg:            #f4f6fb;
   --surface:       #ffffff;
   --surface-alt:   #f7f9fd;
@@ -18,21 +29,59 @@
   --primary:       #3a5bef;
   --primary-hover: #2d4ad4;
   --primary-light: #eef1fd;
+  --primary-tint:  rgba(58, 91, 239, .05);
+  --on-primary:    #ffffff;
   --green:         #15803d;
   --green-light:   #dcfce7;
   --amber:         #b45309;
   --amber-light:   #fef3c7;
-  --red:           #dc2626;
+  --red:           #c21b1b;
   --red-light:     #fee2e2;
   --blue:          #0369a1;
   --blue-light:    #e0f2fe;
   --text:          #171a2b;
-  --muted:         #66708a;
-  --muted-light:   #98a1b6;
+  --muted:         #5f6984;
+  --muted-light:   #676f88;
+  --row-hover:     #f3f6ff;
+  --overlay:       rgba(15, 20, 40, .42);
+  --scrollbar:       #cbd2e0;
+  --scrollbar-hover: #a8b2c6;
 
-  --r:    10px;
-  --r-sm: 7px;
-  --r-xs: 5px;
+  /* The bar every screen sits under. A theme can make it a brand band (ESPN's
+     black, Yahoo's purple); the primary-button pair keeps the bar's call to
+     action visible when the band itself is the primary colour. */
+  --appbar-bg:       #ffffff;
+  --appbar-fg:       #171a2b;
+  --appbar-muted:    #5f6984;
+  --appbar-border:   #e2e6f0;
+  --appbar-accent:   transparent;
+  --appbar-btn-bg:   #3a5bef;
+  --appbar-btn-fg:   #ffffff;
+
+  --tier-1: #d97706;
+  --tier-2: #6b7280;
+  --tier-3: #9ca3af;
+  --tier-4: #d1d5db;
+  --tier-5: #e5e7eb;
+
+  --pos-qb-bg:  #fef3c7;  --pos-qb-fg:  #92400e;
+  --pos-rb-bg:  #dcfce7;  --pos-rb-fg:  #14532d;
+  --pos-wr-bg:  #dbeafe;  --pos-wr-fg:  #1e3a8a;
+  --pos-te-bg:  #ede9fe;  --pos-te-fg:  #4c1d95;
+  --pos-k-bg:   #f3f4f6;  --pos-k-fg:   #374151;
+  --pos-dst-bg: #fce7f3;  --pos-dst-fg: #831843;
+
+  --platform-espn:    #cc0000;
+  --platform-yahoo:   #6001d2;
+  --platform-sleeper: #1e1e1e;
+  --platform-nfl:     #013369;
+
+  --r:        10px;
+  --r-sm:     7px;
+  --r-xs:     5px;
+  --r-btn:    7px;
+  --r-btn-sm: 5px;
+  --r-modal:  14px;
 
   --shadow-sm: 0 1px 2px rgba(16, 24, 60, .06);
   --shadow-md: 0 4px 14px rgba(16, 24, 60, .10);
@@ -40,6 +89,210 @@
 
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
+}
+
+/* ─── Sleeper: dark, mint accent, pill controls, solid position colours ──── */
+:root[data-theme="sleeper"] {
+  color-scheme: dark;
+
+  --bg:            #0f1420;
+  --surface:       #181e2c;
+  --surface-alt:   #1e2535;
+  --border:        #2b3346;
+  --border-light:  #232b3c;
+  --primary:       #19d3b5;
+  --primary-hover: #45e2c8;
+  --primary-light: #133a3c;
+  --primary-tint:  rgba(25, 211, 181, .07);
+  --on-primary:    #0b111c;
+  --green:         #4ade80;
+  --green-light:   #163526;
+  --amber:         #fbbf24;
+  --amber-light:   #3a2f12;
+  --red:           #ff6b86;
+  --red-light:     #3d1a25;
+  --blue:          #66c7ff;
+  --blue-light:    #15304a;
+  --text:          #f3f6fb;
+  --muted:         #a6b0c4;
+  --muted-light:   #8b96ac;
+  --row-hover:     #212939;
+  --overlay:       rgba(3, 6, 12, .66);
+  --scrollbar:       #343d53;
+  --scrollbar-hover: #4a556e;
+
+  --appbar-bg:       #131927;
+  --appbar-fg:       #f3f6fb;
+  --appbar-muted:    #a6b0c4;
+  --appbar-border:   #232b3c;
+  --appbar-accent:   transparent;
+  --appbar-btn-bg:   #19d3b5;
+  --appbar-btn-fg:   #0b111c;
+
+  --tier-1: #ffb547;
+  --tier-2: #a6b0c4;
+  --tier-3: #7d879c;
+  --tier-4: #5a6478;
+  --tier-5: #444d60;
+
+  --pos-qb-bg:  #ff4f86;  --pos-qb-fg:  #10141f;
+  --pos-rb-bg:  #20ceb8;  --pos-rb-fg:  #10141f;
+  --pos-wr-bg:  #5ab8ff;  --pos-wr-fg:  #10141f;
+  --pos-te-bg:  #ffae58;  --pos-te-fg:  #10141f;
+  --pos-k-bg:   #c38bff;  --pos-k-fg:   #10141f;
+  --pos-dst-bg: #d0906f;  --pos-dst-fg: #10141f;
+
+  --platform-espn:    #ff4b4b;
+  --platform-yahoo:   #a463ff;
+  --platform-sleeper: #19d3b5;
+  --platform-nfl:     #5b8def;
+
+  --r:        14px;
+  --r-sm:     10px;
+  --r-xs:     6px;
+  --r-btn:    999px;
+  --r-btn-sm: 999px;
+  --r-modal:  18px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .35);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, .40);
+  --shadow-lg: 0 22px 56px rgba(0, 0, 0, .55);
+}
+
+/* ─── ESPN: light and dense, black band with a red rule, square corners ─── */
+:root[data-theme="espn"] {
+  color-scheme: light;
+
+  --bg:            #eef0f2;
+  --surface:       #ffffff;
+  --surface-alt:   #f6f7f8;
+  --border:        #d8dbdf;
+  --border-light:  #e8eaed;
+  --primary:       #0b62c4;
+  --primary-hover: #094f9f;
+  --primary-light: #e6f0fc;
+  --primary-tint:  rgba(11, 98, 196, .05);
+  --on-primary:    #ffffff;
+  --green:         #0a7432;
+  --green-light:   #e2f5e8;
+  --amber:         #965500;
+  --amber-light:   #fdf0d9;
+  --red:           #c00000;
+  --red-light:     #fde4e4;
+  --blue:          #0b62c4;
+  --blue-light:    #e6f0fc;
+  --text:          #121314;
+  --muted:         #565a60;
+  --muted-light:   #64686e;
+  --row-hover:     #f1f5fb;
+  --overlay:       rgba(0, 0, 0, .5);
+  --scrollbar:       #c6cacf;
+  --scrollbar-hover: #a3a8ae;
+
+  --appbar-bg:       #121314;
+  --appbar-fg:       #ffffff;
+  --appbar-muted:    #c3c7cc;
+  --appbar-border:   #000000;
+  --appbar-accent:   #cc0000;
+  --appbar-btn-bg:   #0b62c4;
+  --appbar-btn-fg:   #ffffff;
+
+  --tier-1: #cc0000;
+  --tier-2: #565a60;
+  --tier-3: #8b9096;
+  --tier-4: #b5b9be;
+  --tier-5: #d3d6d9;
+
+  --pos-qb-bg:  #fde8ea;  --pos-qb-fg:  #a3001b;
+  --pos-rb-bg:  #e3f4ea;  --pos-rb-fg:  #0b6b34;
+  --pos-wr-bg:  #e5effb;  --pos-wr-fg:  #0b4f9e;
+  --pos-te-bg:  #fff1df;  --pos-te-fg:  #854600;
+  --pos-k-bg:   #eeeeee;  --pos-k-fg:   #3d3d3d;
+  --pos-dst-bg: #efe7f7;  --pos-dst-fg: #5a2d8a;
+
+  --platform-espn:    #cc0000;
+  --platform-yahoo:   #6001d2;
+  --platform-sleeper: #121314;
+  --platform-nfl:     #013369;
+
+  --r:        6px;
+  --r-sm:     4px;
+  --r-xs:     3px;
+  --r-btn:    4px;
+  --r-btn-sm: 3px;
+  --r-modal:  8px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .08);
+  --shadow-md: 0 3px 10px rgba(0, 0, 0, .12);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, .22);
+}
+
+/* ─── Yahoo: light, purple band, rounded cards and pill buttons ─────────── */
+:root[data-theme="yahoo"] {
+  color-scheme: light;
+
+  --bg:            #f4f3f8;
+  --surface:       #ffffff;
+  --surface-alt:   #f8f7fb;
+  --border:        #e0deea;
+  --border-light:  #eeedf3;
+  --primary:       #6001d2;
+  --primary-hover: #4d00a8;
+  --primary-light: #f1e8fd;
+  --primary-tint:  rgba(96, 1, 210, .05);
+  --on-primary:    #ffffff;
+  --green:         #0d7340;
+  --green-light:   #e1f6ea;
+  --amber:         #9a5300;
+  --amber-light:   #fff2dc;
+  --red:           #c8021a;
+  --red-light:     #fde6e9;
+  --blue:          #1a5bc9;
+  --blue-light:    #e7efff;
+  --text:          #1d2228;
+  --muted:         #565e66;
+  --muted-light:   #646b73;
+  --row-hover:     #f7f2fe;
+  --overlay:       rgba(29, 34, 40, .5);
+  --scrollbar:       #d2cfdd;
+  --scrollbar-hover: #b1adc2;
+
+  --appbar-bg:       #6001d2;
+  --appbar-fg:       #ffffff;
+  --appbar-muted:    #e6d9fc;
+  --appbar-border:   #6001d2;
+  --appbar-accent:   transparent;
+  --appbar-btn-bg:   #ffffff;
+  --appbar-btn-fg:   #6001d2;
+
+  --tier-1: #6001d2;
+  --tier-2: #565e66;
+  --tier-3: #8f959b;
+  --tier-4: #b9bdc1;
+  --tier-5: #d9dbdd;
+
+  --pos-qb-bg:  #fdeaf0;  --pos-qb-fg:  #a3124a;
+  --pos-rb-bg:  #e3f7ef;  --pos-rb-fg:  #0b6b46;
+  --pos-wr-bg:  #e8f0ff;  --pos-wr-fg:  #1a4fb0;
+  --pos-te-bg:  #fff1e0;  --pos-te-fg:  #8a4800;
+  --pos-k-bg:   #f0eef6;  --pos-k-fg:   #4b4560;
+  --pos-dst-bg: #f3e9fb;  --pos-dst-fg: #5f1fa0;
+
+  --platform-espn:    #cc0000;
+  --platform-yahoo:   #6001d2;
+  --platform-sleeper: #1d2228;
+  --platform-nfl:     #013369;
+
+  --r:        12px;
+  --r-sm:     9px;
+  --r-xs:     6px;
+  --r-btn:    999px;
+  --r-btn-sm: 999px;
+  --r-modal:  16px;
+
+  --shadow-sm: 0 1px 3px rgba(40, 20, 80, .07);
+  --shadow-md: 0 6px 16px rgba(40, 20, 80, .10);
+  --shadow-lg: 0 20px 50px rgba(40, 20, 80, .20);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -78,11 +331,49 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline-offs
 
 .da-row-hover:hover { background: var(--surface-alt); }
 
+/* ─── Draft board rows ───────────────────────────────────────────────────── */
+/* Hover lives here, not in React state: a hover id in state re-rendered all
+   ~2,200 board rows every time the pointer crossed one. The detail line swaps
+   in on hover and on keyboard focus, so the Draft button reveals it too. */
+.da-player-row { background: var(--surface); }
+.da-player-row[data-dim="true"] { background: var(--surface-alt); }
+.da-player-row:not([data-dim="true"]):hover,
+.da-player-row:not([data-dim="true"]):focus-within { background: var(--row-hover); }
+.da-player-row .da-row-detail { display: none; }
+.da-player-row:hover .da-row-detail,
+.da-player-row:focus-within .da-row-detail { display: block; }
+.da-player-row:hover .da-row-summary:has(+ .da-row-detail),
+.da-player-row:focus-within .da-row-summary:has(+ .da-row-detail) { display: none; }
+.da-player-row:hover .da-draft-btn:not(:disabled),
+.da-player-row:focus-within .da-draft-btn:not(:disabled) {
+  background: var(--primary); color: var(--on-primary);
+}
+.da-player-row[data-tappable="true"] { cursor: pointer; }
+
+/* ─── App bar ────────────────────────────────────────────────────────────── */
+/* A theme may paint the bar as a brand band, where page-coloured buttons would
+   vanish: subtle buttons take the bar's muted ink and the primary button the
+   bar's own call-to-action pair. Inline styles win over a stylesheet, hence
+   the !important. */
+.da-appbar .da-btn[data-variant="subtle"] { color: var(--appbar-muted) !important; }
+.da-appbar .da-btn[data-variant="primary"] {
+  background: var(--appbar-btn-bg) !important; color: var(--appbar-btn-fg) !important;
+  border-color: var(--appbar-btn-bg) !important;
+}
+
+/* ─── Touch ──────────────────────────────────────────────────────────────── */
+/* 40px is the smallest comfortable thumb target; on a mouse the compact sizes
+   stay, because the draft board is dense on purpose. */
+@media (pointer: coarse) {
+  .da-btn, .da-chip, .da-draft-btn { min-height: 40px; }
+  .da-menu-item { min-height: 44px; }
+}
+
 /* ─── Scrollbars ─────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #cbd2e0; border-radius: 99px; border: 2px solid transparent; background-clip: content-box; }
-::-webkit-scrollbar-thumb:hover { background: #a8b2c6; background-clip: content-box; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 99px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); background-clip: content-box; }
 .da-no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 .da-no-scrollbar::-webkit-scrollbar { display: none; }
 
@@ -171,6 +462,12 @@ input[type=checkbox], input[type=radio] { accent-color: var(--primary); }
 }
 .da-card-link:hover { border-color: var(--primary); box-shadow: var(--shadow-md); }
 .da-card-link:active { transform: translateY(1px); }
+
+/* Read by screen readers, invisible on screen. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
 
 /* Truncation helper — used in a dozen places for player and team names. */
 .da-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

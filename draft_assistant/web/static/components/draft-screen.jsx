@@ -102,7 +102,7 @@ function MyTeamPanel({ league, myPlayers, round, hint, onGetHint, fullWidth = fa
             borderBottom: i < lineup.length - 1 ? `1px solid ${T.borderLight}` : 'none', minHeight:34,
           }}>
             <span style={{
-              fontSize:10, fontWeight:800, letterSpacing:.3, width:28, flexShrink:0,
+              fontSize:11, fontWeight:800, letterSpacing:.3, width:28, flexShrink:0,
               color: slot.bench ? T.mutedLight : T.muted,
             }}>{slot.label}</span>
             {player ? (
@@ -110,7 +110,7 @@ function MyTeamPanel({ league, myPlayers, round, hint, onGetHint, fullWidth = fa
                 <div className="da-ellipsis" style={{fontSize:12, fontWeight:600, color:T.text}}>
                   {player.name}
                 </div>
-                <div style={{fontSize:10, color:T.muted, display:'flex', gap:5}}>
+                <div style={{fontSize:11, color:T.muted, display:'flex', gap:5}}>
                   <span>{player.pos} · {player.nflTeam}</span>
                   {player.byeWeek && <span style={{color:T.mutedLight}}>BYE {player.byeWeek}</span>}
                 </div>
@@ -163,7 +163,7 @@ function ModeToggle({ mode, onChange }) {
           title={m === 'live' ? 'Drafting live — picks by roster need' : 'Autodrafting — follows ADP'}
           style={{
             border:'none', cursor:'pointer', padding:'2px 7px',
-            fontSize:10, fontWeight:700, letterSpacing:.3,
+            fontSize:11, fontWeight:700, letterSpacing:.3,
             background: mode === m ? (m === 'auto' ? T.amberLight : T.primaryLight) : T.surface,
             color:      mode === m ? (m === 'auto' ? T.amber : T.primary) : T.mutedLight,
           }}>
@@ -187,17 +187,17 @@ function OpponentTeamRow({ teamNum, teamName, mode, counts, posProbs, pickLabel,
       <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:6, marginBottom:3}}>
         <span className="da-ellipsis" style={{fontSize:12, fontWeight:700, color:T.text}}>
           {teamName || `Team ${teamNum}`}
-          {pickLabel && <span style={{fontWeight:600, color:T.muted, marginLeft:6, fontSize:10}}>{pickLabel}</span>}
+          {pickLabel && <span style={{fontWeight:600, color:T.muted, marginLeft:6, fontSize:11}}>{pickLabel}</span>}
         </span>
         <ModeToggle mode={mode} onChange={onSetMode} />
       </div>
-      <div style={{fontSize:10, color:T.muted, marginBottom: topPos ? 5 : 0}}>{rosterCountString(counts)}</div>
+      <div style={{fontSize:11, color:T.muted, marginBottom: topPos ? 5 : 0}}>{rosterCountString(counts)}</div>
       {topPos && (
         <div style={{display:'flex', gap:4, flexWrap:'wrap'}}>
           {topPos.map(([pos, p]) => (
             <span key={pos} style={{display:'inline-flex', alignItems:'center', gap:3}}>
               <PosBadge pos={pos} />
-              <span className="da-num" style={{fontSize:10, fontWeight:700, color:T.muted}}>
+              <span className="da-num" style={{fontSize:11, fontWeight:700, color:T.muted}}>
                 {Math.round(p*100)}%
               </span>
             </span>
@@ -274,7 +274,7 @@ function OpponentsPanel({ league, oppData, picksMade, onSetTeamMode }) {
         ))}
       </div>
 
-      <div style={{padding:'10px 14px', borderTop:`1px solid ${T.border}`, fontSize:10.5, color:T.muted, lineHeight:1.55}}>
+      <div style={{padding:'10px 14px', borderTop:`1px solid ${T.border}`, fontSize:11, color:T.muted, lineHeight:1.55}}>
         <b style={{color:T.text}}>LIVE</b> drafts by roster need. <b style={{color:T.text}}>AUTO</b>{' '}
         follows ADP. Toggling a team changes its availability odds and the position-run alerts.
       </div>
@@ -321,8 +321,8 @@ function PickTicker({ league, picks, playersById }) {
             alignItems:'center', justifyContent:'center', gap:1,
             background:T.surfaceAlt, borderRight:`1px solid ${T.border}`,
           }}>
-            <span style={{fontSize:8, fontWeight:800, color:T.mutedLight, letterSpacing:.5}}>RD</span>
-            <span style={{fontSize:13, fontWeight:800, color:T.muted}}>{c.round}</span>
+            <span style={{fontSize:11, fontWeight:800, color:T.mutedLight, letterSpacing:.5}}>RD</span>
+            <span style={{fontSize:14, fontWeight:800, color:T.muted}}>{c.round}</span>
           </div>
         );
         const teamNum = getSnakeTeam(c.n, numTeams);
@@ -331,29 +331,32 @@ function PickTicker({ league, picks, playersById }) {
         const player = made ? playersById[made.playerId] : null;
         const isCurrent = c.n === currentPick;
         const teamName = (league.teamNames || [])[teamNum - 1] || `Team ${teamNum}`;
-        const mode = modes[teamNum] === 'auto' ? 'AUTO' : 'LIVE';
+        // Live is the normal state, so only the exception gets a label.
+        const isAuto = modes[teamNum] === 'auto';
+        // A made pick takes its position's colour, like a physical draft board.
+        const posColor = player ? POS_COLORS[player.pos] : null;
+        const fg = isCurrent ? T.onPrimary : posColor ? posColor.fg : null;
         return (
           <div key={c.key} ref={isCurrent ? currentRef : null} style={{
-            flexShrink:0, width:112, padding:'5px 8px 6px',
+            flexShrink:0, width:116, padding:'5px 8px 6px',
             borderRight:`1px solid ${T.borderLight}`,
-            background: isCurrent ? T.primary : isMine ? T.primaryLight : T.surface,
-            opacity: made && !isCurrent ? .7 : 1,
+            background: isCurrent ? T.primary : posColor ? posColor.bg : isMine ? T.primaryLight : T.surface,
+            boxShadow: isMine && !isCurrent ? `inset 0 -3px 0 ${T.primary}` : 'none',
           }}>
             <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:4}}>
-              <span className="da-num" style={{fontSize:8.5, fontWeight:800,
-                color: isCurrent ? 'rgba(255,255,255,.85)' : T.mutedLight}}>{c.n}</span>
-              {!made && !isCurrent && !isMine && (
-                <span style={{fontSize:8, fontWeight:800, letterSpacing:.3,
-                  color: mode === 'AUTO' ? T.amber : T.primary}}>{mode}</span>
+              <span className="da-num" style={{fontSize:11, fontWeight:700,
+                color: fg || T.mutedLight}}>{c.n}</span>
+              {!made && !isCurrent && !isMine && isAuto && (
+                <span style={{fontSize:11, fontWeight:800, letterSpacing:.3, color:T.amber}}>AUTO</span>
               )}
             </div>
             <div className="da-ellipsis" style={{
-              fontSize:10.5, fontWeight:700, marginTop:1,
-              color: isCurrent ? '#fff' : isMine ? T.primary : T.text,
+              fontSize:12, fontWeight:700, marginTop:1,
+              color: fg || (isMine ? T.primary : T.text),
             }}>{isMine ? 'YOU' : teamName}</div>
             <div className="da-ellipsis" style={{
-              fontSize:9.5, marginTop:1, fontWeight: player ? 600 : 500,
-              color: isCurrent ? 'rgba(255,255,255,.9)' : player ? T.muted : T.mutedLight,
+              fontSize:11, marginTop:1, fontWeight: player ? 700 : 500,
+              color: fg || T.mutedLight,
             }}>
               {isCurrent ? 'On the clock' : player ? `${player.name} · ${player.pos}` : '—'}
             </div>
@@ -395,7 +398,7 @@ function PicksFeedPanel({ league, picks, playersById }) {
                 {p ? p.name : pk.playerId}
                 {p && p.nflTeam && <span style={{fontWeight:500, color:T.muted}}> · {p.nflTeam}</span>}
               </div>
-              <div className="da-ellipsis" style={{fontSize:10, color:T.muted}}>
+              <div className="da-ellipsis" style={{fontSize:11, color:T.muted}}>
                 R{rd} P{pip} · #{pk.pickNum} — {mine ? 'You' : teamName}
               </div>
             </div>
@@ -444,7 +447,7 @@ function RecCard({ label, player, reason, highlight, onDraft, bestImpact }) {
   if (!player) return null;
   const metric = (caption, node) => (
     <span style={{display:'inline-flex', alignItems:'center', gap:4}}>
-      <span style={{fontSize:9.5, fontWeight:700, letterSpacing:.4, color:T.mutedLight, textTransform:'uppercase'}}>
+      <span style={{fontSize:11, fontWeight:700, letterSpacing:.4, color:T.mutedLight, textTransform:'uppercase'}}>
         {caption}
       </span>
       {node}
@@ -580,7 +583,9 @@ function RecommendationBar({ scored, myPlayers, league, oppData, onDraft, stale,
         <RecCard label="Best draft impact" player={bestOverall} onDraft={onDraft} bestImpact={bestOverall.draftScore}
           reason={isSame
             ? 'Highest season-points impact, and it fills an open starting slot.'
-            : `${bestOverall.availPct}% chance still there at your next pick.`}
+            : bestOverall.availPct < 5
+              ? 'Very unlikely to last until your next pick.'
+              : `${bestOverall.availPct}% chance of still being there at your next pick.`}
           highlight={isSame} />
         {bestByNeed && !isSame && (
           <RecCard label="Best by need" player={bestByNeed} onDraft={onDraft} bestImpact={bestOverall.draftScore}
@@ -756,7 +761,7 @@ function QuickPickInput({ players, search, setSearch, onDraftPlayer }) {
                 <div style={{display:'flex', alignItems:'center', gap:8, flexShrink:0}}>
                   <span className="da-num" style={{fontSize:11, color:T.mutedLight}}>ADP {p.adp || '—'}</span>
                   <span style={{
-                    fontSize:10.5, fontWeight:700, color: on ? T.primary : T.mutedLight,
+                    fontSize:11, fontWeight:700, color: on ? T.primary : T.mutedLight,
                   }}>{on ? '↵ draft' : 'draft'}</span>
                 </div>
               </div>
@@ -769,16 +774,93 @@ function QuickPickInput({ players, search, setSearch, onDraftPlayer }) {
 }
 
 // ─── PLAYER LIST ──────────────────────────────────────────────────────────────
+// The board holds ~2,200 players; rendering all of them made every filter
+// keystroke and every pick re-lay out thousands of rows. Show a page at a time —
+// search and the position filters still run over the whole board.
+const PLAYER_PAGE = 150;
+
+const SORT_HELP = {
+  adp:        'Average draft position across public drafts — where the field is taking this player.',
+  projPts:    "Projected season points under this league's scoring.",
+  vorp:       'Points above the replacement-level player at this position in this league.',
+  draftScore: 'Expected change in your total season points from drafting this player now, from the rest-of-draft simulation.',
+};
+
+function playerUpdateDetails(p) {
+  // News signals from /api/context: injury, depth chart, snaps, trending adds.
+  return playerNewsSignals(p.signals).map(sig =>
+    `${sig.attribution || sig.source}: ${sig.kind.replace(/_/g, ' ')} ${sig.value}`
+  );
+}
+
+const INELIGIBLE_NOTE = 'Not on an NFL roster — excluded from recommendations';
+
+// Everything a row's tooltip says, as a sheet a phone can actually open —
+// touch screens have no hover, so the tooltip was unreachable there.
+function PlayerDetailSheet({ player: p, bestImpact, onDraft, onClose }) {
+  const updates = playerUpdateDetails(p);
+  const ineligible = p.eligible === false;
+  const fact = (label, value) => (
+    <div style={{padding:'10px 0', borderBottom:`1px solid ${T.borderLight}`,
+      display:'flex', justifyContent:'space-between', gap:12, fontSize:13.5}}>
+      <span style={{color:T.muted}}>{label}</span>
+      <span className="da-num" style={{color:T.text, fontWeight:600}}>{value}</span>
+    </div>
+  );
+  return (
+    <Drawer title={p.name} onClose={onClose}>
+      <div style={{padding:16, display:'flex', flexDirection:'column', gap:12}}>
+        <div style={{display:'flex', alignItems:'center', gap:8, flexWrap:'wrap'}}>
+          <PosBadge pos={p.pos} />
+          <span style={{fontSize:13.5, color:T.muted}}>
+            {[p.nflTeam || 'FA', p.byeWeek ? `Bye ${p.byeWeek}` : null, p.tier ? `Tier ${p.tier}` : null]
+              .filter(Boolean).join(' · ')}
+          </span>
+          {(p.availability || ineligible) && <AvailabilityChip status={p.availability || 'Free Agent'} />}
+        </div>
+        {ineligible && <Note tone="warn">{INELIGIBLE_NOTE}</Note>}
+        <div>
+          {p.draftScore != null && fact('Draft impact',
+            <ScoreBadge score={p.draftScore} best={bestImpact} />)}
+          {fact('VORP', <VORPBadge vorp={p.vorp} />)}
+          {fact('Projected points', Math.round(p.projPts))}
+          {fact('ADP', p.adp != null ? p.adp : '—')}
+          {p.draftScore != null && fact('Available at your next pick', `${p.availPct}%`)}
+          {p.draftScore != null && p.lineupGain != null && fact('Immediate lineup gain', Math.round(p.lineupGain))}
+          {p.byePen > 0 && fact('Bye-week penalty', `−${p.byePen}`)}
+        </div>
+        {updates.length > 0 && (
+          <div>
+            <SectionLabel style={{marginBottom:6}}>Player news</SectionLabel>
+            {updates.map((line, i) => (
+              <div key={i} style={{fontSize:13, color:T.text, lineHeight:1.5, marginBottom:4}}>{line}</div>
+            ))}
+          </div>
+        )}
+        {!p.drafted && onDraft && (
+          <Btn size="lg" onClick={() => { onDraft(p); onClose(); }} style={{marginTop:4}}>
+            Draft {p.name}
+          </Btn>
+        )}
+      </div>
+    </Drawer>
+  );
+}
+
 function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
   const [search,    setSearch]    = React.useState('');
   const [posFilter, setPosFilter] = React.useState('ALL');
   const [sortBy,    setSortBy]    = React.useState('draftScore');
-  const [hoverId,   setHoverId]   = React.useState(null);
+  const [limit,     setLimit]     = React.useState(PLAYER_PAGE);
+  const [detail,    setDetail]    = React.useState(null);
   const { width } = useLayout();
 
   const isNarrow = width < 650;
   const isMedium = width >= 650 && width < 980;
   const isWide   = width >= 980;
+
+  // A new filter starts from the top page again.
+  React.useEffect(() => { setLimit(PLAYER_PAGE); }, [search, posFilter, sortBy, showDrafted]);
 
   const filtered = players
     .filter(p => showDrafted || !p.drafted)
@@ -793,36 +875,36 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
       if (sortBy === 'vorp')    return (b.vorp || 0) - (a.vorp || 0);
       return cmpScore(a, b);
     });
+  const visible = filtered.slice(0, limit);
 
   const bestImpact = filtered.reduce(
     (best, p) => (p.draftScore != null && p.draftScore > best ? p.draftScore : best), 0);
 
+  // One template per layout, and every row must render exactly one cell per
+  // track: on phones the position moves into the player cell, which is what
+  // keeps the Draft button on the row instead of wrapping beneath it.
   const GRID = isWide
     ? '30px 1fr 54px 50px 46px 52px 58px 60px 68px 74px'
     : isMedium
       ? '26px 1fr 50px 58px 60px 68px 70px'
-      : '24px 1fr 46px 60px 68px';
+      : '18px 1fr 52px 68px 58px';
 
   // Clickable column headers replace the old sort dropdown: the header already
   // names the column, so it may as well be the control that sorts by it.
-  const SORT_HELP = {
-    adp:        'Average draft position across public drafts — where the field is taking this player.',
-    projPts:    "Projected season points under this league's scoring.",
-    vorp:       'Points above the replacement-level player at this position in this league.',
-    draftScore: 'Expected change in your total season points from drafting this player now, from the rest-of-draft simulation.',
-  };
-
-  const SortHead = ({ id, label, align = 'right' }) => (
-    <button className="da-sort" onClick={() => setSortBy(id)}
-      title={SORT_HELP[id]}
-      aria-sort={sortBy === id ? 'descending' : 'none'}
-      style={{
-        justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
-        color: sortBy === id ? T.primary : T.muted,
-        fontWeight: 800, fontSize: 10, letterSpacing: .6, textTransform: 'uppercase',
-      }}>
-      {label}{sortBy === id ? ' ↓' : ''}
-    </button>
+  const SortHead = ({ id, label }) => (
+    <span role="columnheader" aria-sort={sortBy === id ? 'descending' : 'none'}
+      style={{display:'flex', justifyContent:'flex-end'}}>
+      <button className="da-sort" onClick={() => setSortBy(id)} title={SORT_HELP[id]}
+        style={{
+          color: sortBy === id ? T.primary : T.muted,
+          fontWeight: 800, fontSize: 11, letterSpacing: .6, textTransform: 'uppercase',
+        }}>
+        {label}{sortBy === id ? ' ↓' : ''}
+      </button>
+    </span>
+  );
+  const Head = ({ children, align }) => (
+    <span role="columnheader" style={align ? {textAlign:align} : undefined}>{children}</span>
   );
 
   return (
@@ -833,160 +915,164 @@ function PlayerList({ players, onDraft, showDrafted, onToggleDrafted }) {
       }}>
         <QuickPickInput players={players} search={search} setSearch={setSearch} onDraftPlayer={onDraft} />
 
-        <div className="da-no-scrollbar" style={{display:'flex', gap:4, alignItems:'center', overflowX:'auto'}}>
+        <div className="da-no-scrollbar" style={{display:'flex', gap:5, alignItems:'center', overflowX:'auto'}}>
           {['ALL', ...POSITIONS].map(pos => (
-            <button key={pos} onClick={() => setPosFilter(pos)} aria-pressed={posFilter === pos} style={{
-              padding:'4px 9px', borderRadius:T.rxs, flexShrink:0, cursor:'pointer',
-              border:`1.5px solid ${posFilter===pos ? T.primary : T.border}`,
-              background: posFilter===pos ? T.primaryLight : T.surface,
-              color: posFilter===pos ? T.primary : T.muted,
-              fontSize:11.5, fontWeight:700,
-            }}>{pos}</button>
+            <Chip key={pos} on={posFilter === pos} onClick={() => setPosFilter(pos)}>{pos}</Chip>
           ))}
           <div style={{width:1, height:16, background:T.border, margin:'0 4px', flexShrink:0}} />
-          <button onClick={onToggleDrafted} aria-pressed={showDrafted} style={{
-            padding:'4px 9px', borderRadius:T.rxs, flexShrink:0, cursor:'pointer',
-            border:`1.5px solid ${T.border}`,
-            background: showDrafted ? T.borderLight : T.surface,
-            color:T.muted, fontSize:11.5, fontWeight:600,
-          }}>
-            {showDrafted ? 'Hide drafted' : 'Show drafted'}
-          </button>
-          <span style={{marginLeft:'auto', fontSize:11.5, color:T.mutedLight, flexShrink:0, paddingLeft:8}}>
+          <Chip on={showDrafted} onClick={onToggleDrafted}>Show drafted</Chip>
+          <span style={{marginLeft:'auto', fontSize:12, color:T.mutedLight, flexShrink:0, paddingLeft:8}}>
             {filtered.length} shown
           </span>
         </div>
       </div>
 
-      <div style={{
-        display:'grid', gridTemplateColumns:GRID,
-        padding:'7px 14px', background:T.surfaceAlt, borderBottom:`1px solid ${T.border}`,
-        fontSize:10, fontWeight:800, color:T.muted, letterSpacing:.6, gap:6, alignItems:'center',
-        textTransform:'uppercase',
-      }}>
-        <span>#</span>
-        <span>Player</span>
-        <span>Pos</span>
-        {isWide && <span>Team</span>}
-        {isWide && <span style={{textAlign:'center'}}>Bye</span>}
-        {isWide && <SortHead id="adp" label="ADP" />}
-        {(isWide || isMedium) && <SortHead id="projPts" label="Proj" />}
-        <SortHead id="vorp" label="VORP" />
-        <SortHead id="draftScore" label="Impact" />
-        <span />
-      </div>
+      <div role="table" aria-label="Players" aria-rowcount={filtered.length + 1}
+        style={{flex:1, display:'flex', flexDirection:'column', minHeight:0}}>
+        <div role="row" style={{
+          display:'grid', gridTemplateColumns:GRID,
+          padding:'7px 14px', background:T.surfaceAlt, borderBottom:`1px solid ${T.border}`,
+          fontSize:11, fontWeight:800, color:T.muted, letterSpacing:.6, gap:6, alignItems:'center',
+          textTransform:'uppercase', flexShrink:0,
+        }}>
+          <Head>#</Head>
+          <Head>Player</Head>
+          {!isNarrow && <Head>Pos</Head>}
+          {isWide && <Head>Team</Head>}
+          {isWide && <Head align="center">Bye</Head>}
+          {isWide && <SortHead id="adp" label="ADP" />}
+          {(isWide || isMedium) && <SortHead id="projPts" label="Proj" />}
+          <SortHead id="vorp" label="VORP" />
+          <SortHead id="draftScore" label="Impact" />
+          <span role="columnheader"><span className="sr-only">Draft</span></span>
+        </div>
 
-      <div style={{flex:1, overflowY:'auto'}}>
-        {filtered.length === 0 && (
-          <div style={{padding:40, textAlign:'center', color:T.muted, fontSize:13.5}}>
-            No players match {search ? `“${search}”` : 'these filters'}.
-          </div>
-        )}
-        {filtered.map((p,i) => {
-          const isHov = hoverId === p.id;
-          const tierDot = ['','#d97706','#6b7280','#9ca3af','#d1d5db','#e5e7eb'][p.tier] || '#e5e7eb';
-          const teamText = p.nflTeam || 'FA';
-          const byeText = p.byeWeek ? `Bye ${p.byeWeek}` : null;
-          const subDetails = isNarrow
-            ? [teamText, byeText, `${Math.round(p.projPts)} pts`, `ADP ${p.adp}`].filter(Boolean).join(' · ')
-            : isMedium
-              ? [teamText, byeText, `ADP ${p.adp}`].filter(Boolean).join(' · ')
-              : (p.tier ? `Tier ${p.tier}` : '');
-          // News signals from /api/context: injury, depth chart, snaps, trending adds.
-          const updateDetails = playerNewsSignals(p.signals).map(sig =>
-            `${sig.attribution || sig.source}: ${sig.kind.replace(/_/g, ' ')} ${sig.value}`
-          );
-          // /api/players marks anyone the news feed says is off an NFL roster.
-          // They stay listed and draftable by hand — you may know something the
-          // feed does not — but they are dimmed and never recommended.
-          const ineligible = p.eligible === false;
-          const ineligibleNote = 'Not on an NFL roster — excluded from recommendations';
-          const rowTitle = [
-            p.draftScore != null
-              ? `Draft impact ${Math.round(p.draftScore)} · immediate lineup gain ${p.lineupGain} · ${p.availPct}% available at your next pick`
-              : null,
-            ineligible ? ineligibleNote : null,
-            p.availability ? `Availability: ${p.availability}` : null,
-            ...updateDetails,
-          ].filter(Boolean).join('\n');
+        <div style={{flex:1, overflowY:'auto'}}>
+          {filtered.length === 0 && (
+            <div style={{padding:40, textAlign:'center', color:T.muted, fontSize:13.5}}>
+              No players match {search ? `“${search}”` : 'these filters'}.
+            </div>
+          )}
+          {visible.map((p,i) => {
+            const teamText = p.nflTeam || 'FA';
+            const byeText = p.byeWeek ? `Bye ${p.byeWeek}` : null;
+            const subDetails = isNarrow
+              ? [teamText, byeText, `${Math.round(p.projPts)} pts`, `ADP ${p.adp}`].filter(Boolean).join(' · ')
+              : isMedium
+                ? [teamText, byeText, `ADP ${p.adp}`].filter(Boolean).join(' · ')
+                : (p.tier ? `Tier ${p.tier}` : '');
+            const updateDetails = playerUpdateDetails(p);
+            // /api/players marks anyone the news feed says is off an NFL roster.
+            // They stay listed and draftable by hand — you may know something the
+            // feed does not — but they are dimmed and never recommended.
+            const ineligible = p.eligible === false;
+            const rowTitle = [
+              p.draftScore != null
+                ? `Draft impact ${Math.round(p.draftScore)} · immediate lineup gain ${p.lineupGain} · ${p.availPct}% available at your next pick`
+                : null,
+              ineligible ? INELIGIBLE_NOTE : null,
+              p.availability ? `Availability: ${p.availability}` : null,
+              ...updateDetails,
+            ].filter(Boolean).join('\n');
+            const hasDetail = p.draftScore != null || updateDetails.length > 0;
 
-          return (
-            <div key={p.id}
-              onMouseEnter={() => setHoverId(p.id)}
-              onMouseLeave={() => setHoverId(null)}
-              title={rowTitle || undefined}
-              style={{
-                display:'grid', gridTemplateColumns:GRID,
-                padding:'7px 14px', gap:6, alignItems:'center',
-                borderBottom:`1px solid ${T.borderLight}`,
-                background: p.drafted || ineligible ? T.surfaceAlt : isHov ? '#f3f6ff' : T.surface,
-                opacity: p.drafted ? .45 : ineligible ? .55 : 1,
-              }}>
-              <span className="da-num" style={{fontSize:11, color:T.mutedLight}}>{i+1}</span>
+            return (
+              <div key={p.id} role="row" className="da-player-row"
+                data-dim={p.drafted || ineligible ? 'true' : 'false'}
+                data-tappable={isNarrow ? 'true' : 'false'}
+                onClick={isNarrow ? () => setDetail(p) : undefined}
+                title={!isNarrow && rowTitle ? rowTitle : undefined}
+                style={{
+                  display:'grid', gridTemplateColumns:GRID,
+                  padding: isNarrow ? '9px 14px' : '7px 14px', gap:6, alignItems:'center',
+                  borderBottom:`1px solid ${T.borderLight}`,
+                  opacity: p.drafted ? .45 : ineligible ? .55 : 1,
+                }}>
+                <span role="cell" className="da-num" style={{fontSize:11.5, color:T.mutedLight}}>{i+1}</span>
 
-              <div style={{minWidth:0}}>
-                <div style={{fontSize:13, fontWeight:600, color:T.text, display:'flex', alignItems:'center', gap:5}}>
-                  <span style={{width:7, height:7, borderRadius:'50%', background:tierDot, flexShrink:0}}
-                    title={`Tier ${p.tier}`} />
-                  <span className="da-ellipsis">{p.name}</span>
-                  {(p.availability || ineligible) && (
-                    <AvailabilityChip
-                      status={p.availability || 'Free Agent'}
-                      title={ineligible ? ineligibleNote : undefined} />
+                <div role="cell" style={{minWidth:0}}>
+                  <div style={{fontSize:13.5, fontWeight:600, color:T.text, display:'flex', alignItems:'center', gap:6}}>
+                    {isNarrow
+                      ? <PosBadge pos={p.pos} />
+                      : <span style={{width:7, height:7, borderRadius:'50%', background:tierColor(p.tier), flexShrink:0}}
+                          title={`Tier ${p.tier}`} />}
+                    <span className="da-ellipsis">{p.name}</span>
+                    {(p.availability || ineligible) && (
+                      <AvailabilityChip
+                        status={p.availability || 'Free Agent'}
+                        title={ineligible ? INELIGIBLE_NOTE : undefined} />
+                    )}
+                  </div>
+                  <div className="da-ellipsis da-row-summary" style={{fontSize:11.5, color:T.mutedLight, marginTop:1}}>
+                    {subDetails}
+                  </div>
+                  {!isNarrow && hasDetail && (
+                    <div className="da-ellipsis da-row-detail" style={{fontSize:11.5, color:T.mutedLight, marginTop:1}}>
+                      {[
+                        p.draftScore != null && <span key="a">avail {p.availPct}%</span>,
+                        p.byePen > 0 && <span key="b" style={{color:T.amber}}>bye −{p.byePen}</span>,
+                        updateDetails.length > 0 && <span key="n" style={{color:T.primary}}>{updateDetails[0]}</span>,
+                      ].filter(Boolean).reduce((out, part, j) => j ? [...out, ' · ', part] : [part], [])}
+                    </div>
                   )}
                 </div>
-                <div className="da-ellipsis" style={{fontSize:10, color:T.mutedLight, marginTop:1}}>
-                  {isHov && p.draftScore != null
-                    ? <>
-                        avail {p.availPct}%
-                        {p.byePen > 0 && <span style={{color:T.amber}}> · bye −{p.byePen}</span>}
-                        {updateDetails.length > 0 && <span style={{color:T.primary}}> · {updateDetails[0]}</span>}
-                      </>
-                    : subDetails}
-                </div>
-              </div>
 
-              <span><PosBadge pos={p.pos} /></span>
-              {isWide && <span className="da-ellipsis" style={{fontSize:12, color:T.muted}}>{p.nflTeam}</span>}
-              {isWide && (
-                <span className="da-num" style={{fontSize:12, color:T.muted, textAlign:'center'}}>
-                  {p.byeWeek || '—'}
-                </span>
-              )}
-              {isWide && (
-                <span className="da-num" style={{fontSize:12, color:T.mutedLight, textAlign:'right'}}>
-                  {p.adp != null ? p.adp : '—'}
-                </span>
-              )}
-              {(isWide || isMedium) && (
-                <span className="da-num" style={{fontSize:12, fontWeight:600, color:T.text, textAlign:'right'}}>
-                  {Math.round(p.projPts)}
-                </span>
-              )}
-              <span style={{display:'flex', justifyContent:'flex-end'}}>
-                <VORPBadge vorp={p.vorp} />
-              </span>
-              <span style={{display:'flex', justifyContent:'flex-end'}}>
-                {p.draftScore != null
-                  ? <ScoreBadge score={p.draftScore} best={bestImpact} />
-                  : <span style={{fontSize:11, color:T.mutedLight}}>—</span>}
-              </span>
-              <span style={{display:'flex', justifyContent:'flex-end'}}>
-                {p.drafted ? (
-                  <span style={{fontSize:11, color:T.mutedLight}}>Taken</span>
-                ) : (
-                  <button onClick={() => onDraft(p)} disabled={!onDraft} aria-label={`Draft ${p.name}`} style={{
-                    background: isHov ? T.primary : T.primaryLight,
-                    color: isHov ? '#fff' : T.primary,
-                    border:'none', borderRadius:T.rxs, padding:'4px 9px',
-                    fontSize:11, fontWeight:700, cursor:onDraft ? 'pointer' : 'default', opacity:onDraft ? 1 : .45, transition:'all .13s',
-                  }}>Draft</button>
+                {!isNarrow && <span role="cell"><PosBadge pos={p.pos} /></span>}
+                {isWide && <span role="cell" className="da-ellipsis" style={{fontSize:12, color:T.muted}}>{p.nflTeam}</span>}
+                {isWide && (
+                  <span role="cell" className="da-num" style={{fontSize:12, color:T.muted, textAlign:'center'}}>
+                    {p.byeWeek || '—'}
+                  </span>
                 )}
-              </span>
+                {isWide && (
+                  <span role="cell" className="da-num" style={{fontSize:12, color:T.muted, textAlign:'right'}}>
+                    {p.adp != null ? p.adp : '—'}
+                  </span>
+                )}
+                {(isWide || isMedium) && (
+                  <span role="cell" className="da-num" style={{fontSize:12, fontWeight:600, color:T.text, textAlign:'right'}}>
+                    {Math.round(p.projPts)}
+                  </span>
+                )}
+                <span role="cell" style={{display:'flex', justifyContent:'flex-end'}}>
+                  <VORPBadge vorp={p.vorp} />
+                </span>
+                <span role="cell" style={{display:'flex', justifyContent:'flex-end'}}>
+                  {p.draftScore != null
+                    ? <ScoreBadge score={p.draftScore} best={bestImpact} />
+                    : <span style={{fontSize:12, color:T.mutedLight}}>—</span>}
+                </span>
+                <span role="cell" style={{display:'flex', justifyContent:'flex-end'}}>
+                  {p.drafted ? (
+                    <span style={{fontSize:12, color:T.mutedLight}}>Taken</span>
+                  ) : (
+                    <button className="da-draft-btn" disabled={!onDraft} aria-label={`Draft ${p.name}`}
+                      onClick={e => { e.stopPropagation(); onDraft(p); }}
+                      style={{
+                        background:T.primaryLight, color:T.primary,
+                        border:'none', borderRadius:T.rbtnSm, padding:'4px 10px',
+                        fontSize:12, fontWeight:700, cursor:onDraft ? 'pointer' : 'default',
+                        opacity:onDraft ? 1 : .45, transition:'background .13s, color .13s',
+                      }}>Draft</button>
+                  )}
+                </span>
+              </div>
+            );
+          })}
+          {filtered.length > visible.length && (
+            <div style={{padding:14, display:'flex', justifyContent:'center'}}>
+              <Btn variant="secondary" onClick={() => setLimit(n => n + PLAYER_PAGE * 2)}>
+                Show more ({filtered.length - visible.length} left)
+              </Btn>
             </div>
-          );
-        })}
+          )}
+        </div>
       </div>
+
+      {detail && (
+        <PlayerDetailSheet player={players.find(p => p.id === detail.id) || detail}
+          bestImpact={bestImpact} onDraft={onDraft} onClose={() => setDetail(null)} />
+      )}
     </div>
   );
 }
@@ -1001,17 +1087,17 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
 
   return (
     <Modal title="Full draft board" onClose={onClose} width={Math.min(numTeams*112+80, 1100)}
-      subtitle="Snake order — odd rounds left to right, even rounds right to left. Your seat is tinted.">
+      subtitle="Snake order — odd rounds left to right, even rounds right to left. Picks are coloured by position; your seat is outlined.">
       <div style={{overflowX:'auto'}}>
         <table style={{borderCollapse:'collapse', width:'100%', fontSize:11}}>
           <thead>
             <tr>
-              <th style={{padding:'6px 10px', textAlign:'left', color:T.mutedLight, fontWeight:800, fontSize:10, letterSpacing:.5}}>RD</th>
+              <th style={{padding:'6px 10px', textAlign:'left', color:T.mutedLight, fontWeight:800, fontSize:11, letterSpacing:.5}}>RD</th>
               {teamNums.map(t=>(
                 <th key={t} className="da-ellipsis" style={{
                   padding:'6px 8px', textAlign:'center', maxWidth:110,
                   color: t===draftPosition ? T.primary : T.muted,
-                  fontWeight:800, fontSize:10, letterSpacing:.4,
+                  fontWeight:800, fontSize:11, letterSpacing:.4,
                   background: t===draftPosition ? T.primaryLight : 'transparent',
                 }}>
                   {t===draftPosition ? 'YOU' : ((league.teamNames || [])[t-1] || `T${t}`)}
@@ -1035,15 +1121,19 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
                     <td key={t} style={{
                       padding:'5px 8px', textAlign:'center', verticalAlign:'middle',
                       border:`1px solid ${T.borderLight}`,
-                      background: isMe ? 'rgba(58,91,239,.05)' : 'transparent',
+                      // A made pick is painted in its position's colour, so the
+                      // board reads as runs of positions at a glance.
+                      background: player ? (POS_COLORS[player.pos] || {}).bg || T.surfaceAlt
+                        : isMe ? T.primaryTint : 'transparent',
+                      boxShadow: isMe ? `inset 0 0 0 2px ${T.primary}` : 'none',
                       minWidth:92,
                     }}>
                       {player ? (
-                        <div>
-                          <div style={{fontWeight:600, color:isMe?T.primary:T.text, fontSize:11, lineHeight:1.3}}>
+                        <div style={{color:(POS_COLORS[player.pos] || {}).fg || T.text}}>
+                          <div style={{fontWeight:700, fontSize:12, lineHeight:1.3}}>
                             {player.name.split(' ').pop()}
                           </div>
-                          <PosBadge pos={player.pos} />
+                          <div style={{fontSize:11, fontWeight:800, opacity:.85}}>{player.pos}</div>
                         </div>
                       ) : (
                         <span style={{color:T.border}}>—</span>
@@ -1166,7 +1256,7 @@ function PasteDraftModal({ league, picks, allPlayers, onClose, onBatchDraft }) {
                 </thead>
                 <tbody>
                   {parsedItems.map((item, idx) => (
-                    <tr key={idx} style={{background: item.isConfirmed ? 'rgba(58,91,239,.05)' : 'transparent'}}>
+                    <tr key={idx} style={{background: item.isConfirmed ? T.primaryTint : 'transparent'}}>
                       <td style={{textAlign:'center'}}>
                         <input type="checkbox" checked={!!item.isConfirmed}
                           aria-label={`Include pick ${item.pickNum}`}
@@ -1252,6 +1342,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
   const editingBlocked = live.on || live.busy || trackingBlocked;
 
   const { isMobile, isTablet, isDesktop } = useLayout();
+  const [themeChoice, setTheme] = useThemeChoice();
 
   const tweakDefaults = typeof TWEAK_DEFAULTS !== 'undefined' ? TWEAK_DEFAULTS : { sims: 24, autoDrafters: 0 };
   const [tweaks, setTweaks] = useTweaks(tweakDefaults);
@@ -1617,6 +1708,8 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
     { label: 'Save snapshot to disk', onClick: handleSaveSnapshot },
     { label: 'Restore snapshot', disabled:editingBlocked, onClick: handleRestoreSnapshot },
     { type:'sep' },
+    ...themeMenuItems(themeChoice, setTheme, league),
+    { type:'sep' },
     { label: 'Clear all picks', tone:'danger', disabled: live.on || live.busy || picks.length === 0, onClick: onResetPicks },
   ].filter(Boolean);
 
@@ -1625,15 +1718,17 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
       <AppBar onBack={onBack} backLabel={isMobile ? '' : league.name} title="Draft room" compact
         badges={!isMobile ? <Badge label={SCORING_LABELS[league.scoringType]} color="blue" /> : null}>
         <div style={{
-          background: isMyPick ? T.primary : T.surfaceAlt,
-          border:`1.5px solid ${isMyPick ? T.primary : T.border}`,
-          borderRadius:T.rsm, padding:'3px 10px', textAlign:'center', flexShrink:0,
+          // The app bar's own call-to-action pair, so "your pick" stays loud
+          // on a bar that is itself the brand colour (Yahoo's purple).
+          background: isMyPick ? T.appbarBtnBg : T.surfaceAlt,
+          border:`1.5px solid ${isMyPick ? T.appbarBtnBg : T.border}`,
+          borderRadius:T.rsm, padding:'3px 11px', textAlign:'center', flexShrink:0,
         }}>
-          <div style={{fontSize:9, fontWeight:800, letterSpacing:.5,
-            color: isMyPick ? 'rgba(255,255,255,.85)' : T.muted}}>
+          <div style={{fontSize:11, fontWeight:800, letterSpacing:.5,
+            color: isMyPick ? T.appbarBtnFg : T.muted}}>
             {draftComplete ? 'DRAFT COMPLETE' : trackingBlocked ? 'CHECK SETUP' : isMyPick ? 'YOUR PICK' : `TEAM ${currentTeam}`}
           </div>
-          <div className="da-num" style={{fontSize:11.5, fontWeight:700, color: isMyPick ? '#fff' : T.text}}>
+          <div className="da-num" style={{fontSize:12, fontWeight:700, color: isMyPick ? T.appbarBtnFg : T.text}}>
             {trackingBlocked ? `${picks.length} entries` : `R${round} · ${pickInRound}/${league.numTeams}`}
           </div>
         </div>
@@ -1704,7 +1799,7 @@ function DraftScreen({ league, picks, allPlayers, onBack, onAddPick, onUndoPick,
             )}
             <button onClick={handleRefreshRecs} disabled={trackingBlocked} title="Recompute recommendations now"
               style={{marginLeft:'auto', background:'none', border:`1px solid ${T.border}`, borderRadius:T.rxs,
-                padding:'1px 7px', cursor:'pointer', color:T.muted, fontSize:10.5}}>
+                padding:'1px 8px', cursor:'pointer', color:T.muted, fontSize:11}}>
               Refresh
             </button>
           </div>

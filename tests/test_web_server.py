@@ -135,6 +135,20 @@ class TestSameOriginGuard(_ServerFixture):
         self.assertEqual(status, 200)
         self.assertIn(b"Draft Assistant", body)
 
+    def test_static_files_are_revalidated(self):
+        # Without this the browser kept an old ui-kit.jsx and styles.css beside
+        # a new index.html after an update.
+        for path in ("/index.html", "/styles.css", "/components/ui-kit.jsx"):
+            conn = HTTPConnection("127.0.0.1", self.port, timeout=10)
+            try:
+                conn.request("GET", path)
+                resp = conn.getresponse()
+                resp.read()
+                self.assertEqual(resp.status, 200, path)
+                self.assertEqual(resp.getheader("Cache-Control"), "no-cache", path)
+            finally:
+                conn.close()
+
 
 class TestRequestBodyLimits(_ServerFixture):
     def test_oversized_content_length_is_rejected(self):

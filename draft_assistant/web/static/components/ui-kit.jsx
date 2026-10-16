@@ -4,57 +4,178 @@
 // plain globals (each Babel script gets its own scope — the Object.assign at
 // the bottom is what publishes them).
 
-// Token values mirror the custom properties in styles.css. Inline styles read
-// them from here; real CSS reads them from there. Change both together.
+// Tokens are references to the custom properties in styles.css, never values:
+// the active theme (`data-theme` on <html>) decides what each one resolves to,
+// so an inline style written against `T` is themed for free. That also means
+// nothing may do arithmetic on a token — no `${T.primary}33` alpha suffixes;
+// mix with `color-mix(in srgb, X 20%, transparent)` instead. A raw colour
+// literal anywhere in the components skips theming entirely, which is why
+// scripts/check_theme_tokens.js refuses them.
 const T = {
-  bg:           '#f4f6fb',
-  surface:      '#ffffff',
-  surfaceAlt:   '#f7f9fd',
-  border:       '#e2e6f0',
-  borderLight:  '#eef1f7',
-  primary:      '#3a5bef',
-  primaryHover: '#2d4ad4',
-  primaryLight: '#eef1fd',
-  green:        '#15803d',
-  greenLight:   '#dcfce7',
-  amber:        '#b45309',
-  amberLight:   '#fef3c7',
-  red:          '#dc2626',
-  redLight:     '#fee2e2',
-  blue:         '#0369a1',
-  blueLight:    '#e0f2fe',
-  text:         '#171a2b',
-  muted:        '#66708a',
-  mutedLight:   '#98a1b6',
+  bg:           'var(--bg)',
+  surface:      'var(--surface)',
+  surfaceAlt:   'var(--surface-alt)',
+  border:       'var(--border)',
+  borderLight:  'var(--border-light)',
+  primary:      'var(--primary)',
+  primaryHover: 'var(--primary-hover)',
+  primaryLight: 'var(--primary-light)',
+  primaryTint:  'var(--primary-tint)',
+  onPrimary:    'var(--on-primary)',
+  green:        'var(--green)',
+  greenLight:   'var(--green-light)',
+  amber:        'var(--amber)',
+  amberLight:   'var(--amber-light)',
+  red:          'var(--red)',
+  redLight:     'var(--red-light)',
+  blue:         'var(--blue)',
+  blueLight:    'var(--blue-light)',
+  text:         'var(--text)',
+  muted:        'var(--muted)',
+  mutedLight:   'var(--muted-light)',
+  rowHover:     'var(--row-hover)',
+  overlay:      'var(--overlay)',
 
-  r:   '10px',
-  rsm: '7px',
-  rxs: '5px',
+  appbarBg:     'var(--appbar-bg)',
+  appbarFg:     'var(--appbar-fg)',
+  appbarMuted:  'var(--appbar-muted)',
+  appbarBorder: 'var(--appbar-border)',
+  appbarAccent: 'var(--appbar-accent)',
+  appbarBtnBg:  'var(--appbar-btn-bg)',
+  appbarBtnFg:  'var(--appbar-btn-fg)',
 
-  shadowSm: '0 1px 2px rgba(16, 24, 60, .06)',
-  shadowMd: '0 4px 14px rgba(16, 24, 60, .10)',
-  shadowLg: '0 18px 48px rgba(16, 24, 60, .18)',
+  r:      'var(--r)',
+  rsm:    'var(--r-sm)',
+  rxs:    'var(--r-xs)',
+  rbtn:   'var(--r-btn)',
+  rbtnSm: 'var(--r-btn-sm)',
+  rmodal: 'var(--r-modal)',
+
+  shadowSm: 'var(--shadow-sm)',
+  shadowMd: 'var(--shadow-md)',
+  shadowLg: 'var(--shadow-lg)',
 
   mono: 'var(--mono)',
 };
 // Historic alias — a couple of call sites reached for T.danger before it existed.
 T.danger = T.red;
 
+// Draft tiers 1–5 (tier 1 is the hot colour); anything past 5 shares the last.
+const TIER_COLORS = ['', 'var(--tier-1)', 'var(--tier-2)', 'var(--tier-3)', 'var(--tier-4)', 'var(--tier-5)'];
+const tierColor = tier => TIER_COLORS[tier] || TIER_COLORS[5];
+
+// Translucent version of a token, for borders and washes. The only safe way to
+// add alpha to a `var()`.
+const alpha = (color, pct) => `color-mix(in srgb, ${color} ${pct}%, transparent)`;
+
 const POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST'];
 
 // Brand accents used to tint league cards by platform.
 const PLATFORM_COLORS = {
-  ESPN: '#cc0000', Yahoo: '#6001d2', Sleeper: '#1e1e1e', 'NFL.com': '#013369',
+  ESPN: 'var(--platform-espn)', Yahoo: 'var(--platform-yahoo)',
+  Sleeper: 'var(--platform-sleeper)', 'NFL.com': 'var(--platform-nfl)',
 };
 
-const POS_COLORS = {
-  QB:  { bg:'#fef3c7', fg:'#92400e' },
-  RB:  { bg:'#dcfce7', fg:'#14532d' },
-  WR:  { bg:'#dbeafe', fg:'#1e3a8a' },
-  TE:  { bg:'#ede9fe', fg:'#4c1d95' },
-  K:   { bg:'#f3f4f6', fg:'#374151' },
-  DST: { bg:'#fce7f3', fg:'#831843' },
-};
+const POS_COLORS = Object.fromEntries(POSITIONS.map(pos => [pos, {
+  bg: `var(--pos-${pos.toLowerCase()}-bg)`, fg: `var(--pos-${pos.toLowerCase()}-fg)`,
+}]));
+
+// ─── THEMES ──────────────────────────────────────────────────────────────────
+// The palettes themselves live in styles.css; this is only which one is on.
+// The choice is a workspace preference (saved with the leagues), mirrored to
+// localStorage so the inline script in index.html can apply it before first
+// paint. 'match' follows the open league's platform — see resolveTheme.
+// theme-literals:start — swatches preview a theme that is not active, so they
+// cannot be tokens.
+const THEMES = [
+  { id: 'sleeper', label: 'Sleeper', swatch: ['#181e2c', '#19d3b5'] },
+  { id: 'espn',    label: 'ESPN',    swatch: ['#121314', '#cc0000'] },
+  { id: 'yahoo',   label: 'Yahoo',   swatch: ['#6001d2', '#ffffff'] },
+  { id: 'classic', label: 'Classic', swatch: ['#ffffff', '#3a5bef'] },
+];
+// theme-literals:end
+const DEFAULT_THEME = 'sleeper';
+const PLATFORM_THEMES = { ESPN: 'espn', Yahoo: 'yahoo', Sleeper: 'sleeper' };
+const THEME_IDS = new Set(THEMES.map(t => t.id));
+
+function normalizeThemeChoice(choice) {
+  return choice === 'match' || THEME_IDS.has(choice) ? choice : DEFAULT_THEME;
+}
+
+// The theme actually painted for a choice. Leagues on a platform with no theme
+// (NFL.com, manual) and the screens outside any league use the default.
+function resolveTheme(choice, league) {
+  const c = normalizeThemeChoice(choice);
+  if (c !== 'match') return c;
+  return (league && PLATFORM_THEMES[league.platform]) || DEFAULT_THEME;
+}
+
+function applyTheme(id) {
+  const theme = THEME_IDS.has(id) ? id : DEFAULT_THEME;
+  document.documentElement.dataset.theme = theme;
+  const meta = document.querySelector('meta[name="color-scheme"]');
+  if (meta) meta.setAttribute('content', theme === 'sleeper' ? 'dark' : 'light');
+}
+
+const _themeStore = { choice: DEFAULT_THEME, listeners: new Set() };
+try { _themeStore.choice = normalizeThemeChoice(localStorage.getItem('fda_theme')); } catch {}
+
+function setThemeChoice(choice) {
+  const next = normalizeThemeChoice(choice);
+  if (next === _themeStore.choice) return;
+  _themeStore.choice = next;
+  try { localStorage.setItem('fda_theme', next); } catch {}
+  _themeStore.listeners.forEach(fn => fn(next));
+}
+
+function useThemeChoice() {
+  const [choice, setChoice] = React.useState(_themeStore.choice);
+  React.useEffect(() => {
+    _themeStore.listeners.add(setChoice);
+    setChoice(_themeStore.choice);
+    return () => { _themeStore.listeners.delete(setChoice); };
+  }, []);
+  return [choice, setThemeChoice];
+}
+
+function ThemeSwatch({ colors }) {
+  return (
+    <span aria-hidden="true" style={{
+      width: 18, height: 18, borderRadius: '50%', flexShrink: 0, display: 'inline-block',
+      border: `1px solid ${T.border}`,
+      background: `linear-gradient(135deg, ${colors[0]} 0 50%, ${colors[1]} 50% 100%)`,
+    }} />
+  );
+}
+
+// Menu items for the appearance picker, so a screen can fold them into its own
+// More menu. `league` only labels what "Match league" currently resolves to.
+function themeMenuItems(choice, setChoice, league) {
+  const matched = THEMES.find(t => t.id === resolveTheme('match', league));
+  return [
+    { type: 'label', label: 'Appearance' },
+    ...THEMES.map(t => ({
+      label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
+        <ThemeSwatch colors={t.swatch} />{t.label}
+      </span>,
+      checked: choice === t.id,
+      onClick: () => setChoice(t.id),
+    })),
+    {
+      label: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9 }}>
+        <ThemeSwatch colors={matched.swatch} />Match league
+      </span>,
+      hint: league ? matched.label : 'per league',
+      checked: choice === 'match',
+      onClick: () => setChoice('match'),
+    },
+  ];
+}
+
+function ThemeMenu({ league }) {
+  const [choice, setChoice] = useThemeChoice();
+  return <Menu label="Appearance" items={themeMenuItems(choice, setChoice, league)} />;
+}
 
 // ─── VIEWPORT ────────────────────────────────────────────────────────────────
 function useWindowWidth() {
@@ -134,20 +255,21 @@ function useFocusTrap(ref, active = true) {
 function Btn({ children, onClick, variant = 'primary', size = 'md', disabled,
                type = 'button', title, style = {}, ...rest }) {
   const sizes = {
-    sm: { padding: '5px 10px', fontSize: 12,   borderRadius: T.rxs },
-    md: { padding: '8px 14px', fontSize: 13.5, borderRadius: T.rsm },
-    lg: { padding: '11px 20px', fontSize: 15,  borderRadius: T.rsm },
+    sm: { padding: '5px 11px', fontSize: 12,   borderRadius: T.rbtnSm },
+    md: { padding: '8px 15px', fontSize: 13.5, borderRadius: T.rbtn },
+    lg: { padding: '11px 21px', fontSize: 15,  borderRadius: T.rbtn },
   };
   const variants = {
-    primary:   { background: T.primary,    color: '#fff',    border: '1px solid ' + T.primary },
-    secondary: { background: T.surface,    color: T.text,    border: '1px solid ' + T.border },
-    subtle:    { background: 'transparent', color: T.muted,  border: '1px solid transparent' },
-    danger:    { background: T.surface,    color: T.red,     border: '1px solid ' + T.border },
-    success:   { background: T.greenLight, color: T.green,   border: '1px solid ' + T.greenLight },
+    primary:   { background: T.primary,    color: T.onPrimary, border: '1px solid ' + T.primary },
+    secondary: { background: T.surface,    color: T.text,      border: '1px solid ' + T.border },
+    subtle:    { background: 'transparent', color: T.muted,    border: '1px solid transparent' },
+    danger:    { background: T.surface,    color: T.red,       border: '1px solid ' + T.border },
+    success:   { background: T.greenLight, color: T.green,     border: '1px solid ' + T.greenLight },
   };
   return (
     <button
       type={type} onClick={onClick} disabled={disabled} title={title} className="da-btn"
+      data-variant={variant}
       style={{
         cursor: 'pointer', fontWeight: 600, display: 'inline-flex',
         alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap',
@@ -173,6 +295,23 @@ function Badge({ label, color = 'gray', title }) {
       background: c.bg, color: c.fg, borderRadius: 99, padding: '2px 9px',
       fontSize: 11, fontWeight: 700, letterSpacing: .2, whiteSpace: 'nowrap',
     }}>{label}</span>
+  );
+}
+
+// Toggle chip — position filters, view switches. `on` is the pressed state.
+function Chip({ children, on = false, onClick, title, style = {}, ...rest }) {
+  return (
+    <button type="button" className="da-chip" onClick={onClick} aria-pressed={on} title={title}
+      style={{
+        padding: '4px 11px', borderRadius: T.rbtnSm, flexShrink: 0, cursor: 'pointer',
+        border: `1.5px solid ${on ? T.primary : T.border}`,
+        background: on ? T.primaryLight : T.surface,
+        color: on ? T.primary : T.muted,
+        fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap',
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', ...style,
+      }} {...rest}>
+      {children}
+    </button>
   );
 }
 
@@ -248,7 +387,7 @@ function AvailabilityChip({ status, title }) {
   return (
     <span title={title || `Availability: ${status}`} style={{
       background: c.bg, color: c.fg, borderRadius: 3, padding: '1px 5px',
-      fontSize: 9.5, fontWeight: 800, letterSpacing: .3, flexShrink: 0, whiteSpace: 'nowrap',
+      fontSize: 11, fontWeight: 800, letterSpacing: .3, flexShrink: 0, whiteSpace: 'nowrap',
     }}>{short}</span>
   );
 }
@@ -370,13 +509,13 @@ function Modal({ title, subtitle, onClose, children, footer, width = 560, dismis
   return (
     <div className="da-overlay" role="presentation"
       style={{
-        position: 'fixed', inset: 0, background: 'rgba(15,20,40,.42)', zIndex: 1000,
+        position: 'fixed', inset: 0, background: T.overlay, zIndex: 1000,
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
       }}
       onMouseDown={e => dismissible && e.target === e.currentTarget && onClose()}>
       <div ref={dialogRef} className="da-pop" role="dialog" aria-modal="true" aria-label={title}
         style={{
-          background: T.surface, borderRadius: 14, width: '100%', maxWidth: width,
+          background: T.surface, borderRadius: T.rmodal, width: '100%', maxWidth: width,
           maxHeight: 'min(90vh, 900px)', display: 'flex', flexDirection: 'column',
           boxShadow: T.shadowLg, overflow: 'hidden',
         }}>
@@ -411,7 +550,7 @@ function Drawer({ title, onClose, children, width = 380 }) {
   useEscape(onClose);
   return (
     <div className="da-overlay" style={{
-      position: 'fixed', inset: 0, background: 'rgba(15,20,40,.42)', zIndex: 990,
+      position: 'fixed', inset: 0, background: T.overlay, zIndex: 990,
       display: 'flex', justifyContent: 'flex-end',
     }} onMouseDown={e => e.target === e.currentTarget && onClose()}>
       <div className="da-drawer" role="dialog" aria-modal="true" aria-label={title} style={{
@@ -464,12 +603,22 @@ function Menu({ label, items, align = 'right', buttonProps = {} }) {
           {items.filter(Boolean).map((it, i) => {
             if (it.type === 'sep') return <div key={i} className="da-menu-sep" />;
             if (it.type === 'label') return <div key={i} className="da-menu-label">{it.label}</div>;
+            // `checked` makes the item one of a radio set (true or false);
+            // leaving it undefined keeps a plain command item.
+            const radio = it.checked !== undefined;
             return (
-              <button key={i} role="menuitem" className="da-menu-item" disabled={it.disabled}
+              <button key={i} role={radio ? 'menuitemradio' : 'menuitem'}
+                aria-checked={radio ? !!it.checked : undefined}
+                className="da-menu-item" disabled={it.disabled}
                 onClick={() => { setOpen(false); it.onClick(); }}
                 style={it.tone === 'danger' ? { color: T.red } : undefined}>
                 <span>{it.label}</span>
-                {it.hint && <span className="da-menu-hint">{it.hint}</span>}
+                {(it.hint || it.checked) && (
+                  <span className="da-menu-hint">
+                    {it.hint}{it.hint && it.checked ? ' ' : ''}
+                    {it.checked && <span style={{ color: T.primary, fontWeight: 800 }}>✓</span>}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -561,28 +710,29 @@ function ConfirmHost() {
 // The bar every full screen sits under: back affordance, title block, actions.
 function AppBar({ onBack, backLabel, title, subtitle, badges, children, compact = false }) {
   return (
-    <header style={{
-      background: T.surface, borderBottom: `1px solid ${T.border}`, flexShrink: 0,
+    <header className="da-appbar" style={{
+      background: T.appbarBg, color: T.appbarFg, flexShrink: 0,
+      borderBottom: `1px solid ${T.appbarBorder}`, boxShadow: `inset 0 -3px 0 ${T.appbarAccent}`,
       padding: compact ? '0 12px' : '0 20px', minHeight: compact ? 52 : 60,
       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flex: '1 1 auto' }}>
         {onBack && (
-          <button onClick={onBack} style={{
-            background: 'none', border: 'none', cursor: 'pointer', color: T.muted,
+          <button onClick={onBack} aria-label={backLabel ? `Back to ${backLabel}` : 'Back'} style={{
+            background: 'none', border: 'none', cursor: 'pointer', color: T.appbarMuted,
             fontSize: 12.5, fontWeight: 600, display: 'flex', alignItems: 'center',
-            gap: 4, flexShrink: 0, padding: '6px 2px',
-          }}>←{backLabel ? ` ${backLabel}` : ''}</button>
+            gap: 4, flexShrink: 0, padding: '6px 2px', minHeight: 32, minWidth: 32,
+          }}><span aria-hidden="true">←</span>{backLabel ? ` ${backLabel}` : ''}</button>
         )}
-        {onBack && <div style={{ width: 1, height: 20, background: T.border, flexShrink: 0 }} />}
+        {onBack && <div style={{ width: 1, height: 20, background: alpha(T.appbarMuted, 35), flexShrink: 0 }} />}
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-            <span className="da-ellipsis" style={{ fontSize: compact ? 14 : 16, fontWeight: 700, color: T.text }}>
+            <span className="da-ellipsis" style={{ fontSize: compact ? 14 : 16, fontWeight: 700, color: T.appbarFg }}>
               {title}
             </span>
             {badges}
           </div>
-          {subtitle && <div className="da-ellipsis" style={{ fontSize: 12, color: T.muted, marginTop: 1 }}>{subtitle}</div>}
+          {subtitle && <div className="da-ellipsis" style={{ fontSize: 12, color: T.appbarMuted, marginTop: 1 }}>{subtitle}</div>}
         </div>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexShrink: 0, minWidth: 0 }}>{children}</div>
@@ -630,7 +780,7 @@ function Note({ children, tone = 'neutral', style = {} }) {
   const c = tones[tone] || tones.neutral;
   return (
     <div style={{
-      background: c.bg, color: c.fg, border: `1px solid ${c.br}33`,
+      background: c.bg, color: c.fg, border: `1px solid ${alpha(c.br, 20)}`,
       borderLeft: `3px solid ${c.br}`, borderRadius: T.rsm,
       padding: '9px 12px', fontSize: 12.5, lineHeight: 1.55, ...style,
     }}>{children}</div>
@@ -638,9 +788,11 @@ function Note({ children, tone = 'neutral', style = {} }) {
 }
 
 Object.assign(window, {
-  T, POSITIONS, POS_COLORS, PLATFORM_COLORS,
+  T, POSITIONS, POS_COLORS, PLATFORM_COLORS, tierColor, alpha,
+  THEMES, DEFAULT_THEME, resolveTheme, applyTheme, normalizeThemeChoice,
+  setThemeChoice, useThemeChoice, themeMenuItems, ThemeMenu,
   useWindowWidth, useLayout, useEscape, useFocusTrap,
-  Btn, Badge, PosBadge, AvailabilityChip, playerNewsSignals, Spinner,
+  Btn, Badge, Chip, PosBadge, AvailabilityChip, playerNewsSignals, Spinner,
   Field, Input, Textarea, Select, SegmentedControl, Checkbox,
   Modal, Drawer, Menu,
   toast, dismissToast, Toaster, confirmDialog, ConfirmHost,
