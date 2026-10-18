@@ -35,6 +35,7 @@ const T = {
   mutedLight:   'var(--muted-light)',
   rowHover:     'var(--row-hover)',
   overlay:      'var(--overlay)',
+  seatMark:     'var(--seat-mark)',
 
   appbarBg:     'var(--appbar-bg)',
   appbarFg:     'var(--appbar-fg)',

@@ -68,8 +68,14 @@
   --pos-rb-bg:  #dcfce7;  --pos-rb-fg:  #14532d;
   --pos-wr-bg:  #dbeafe;  --pos-wr-fg:  #1e3a8a;
   --pos-te-bg:  #ede9fe;  --pos-te-fg:  #4c1d95;
-  --pos-k-bg:   #f3f4f6;  --pos-k-fg:   #374151;
+  --pos-k-bg:   #e5e7eb;  --pos-k-fg:   #374151;
   --pos-dst-bg: #fce7f3;  --pos-dst-fg: #831843;
+
+  /* Marks your seat on the pick ticker and draft board, where it is drawn on
+     top of position colours. It is the primary colour wherever that stands
+     apart from every position fill; Sleeper's mint is its RB teal, so there
+     it would vanish on each running back you draft. */
+  --seat-mark:  #3a5bef;
 
   --platform-espn:    #cc0000;
   --platform-yahoo:   #6001d2;
@@ -142,6 +148,8 @@
   --pos-k-bg:   #c38bff;  --pos-k-fg:   #10141f;
   --pos-dst-bg: #d0906f;  --pos-dst-fg: #10141f;
 
+  --seat-mark:  #f3f6fb;
+
   --platform-espn:    #ff4b4b;
   --platform-yahoo:   #a463ff;
   --platform-sleeper: #19d3b5;
@@ -207,8 +215,10 @@
   --pos-rb-bg:  #e3f4ea;  --pos-rb-fg:  #0b6b34;
   --pos-wr-bg:  #e5effb;  --pos-wr-fg:  #0b4f9e;
   --pos-te-bg:  #fff1df;  --pos-te-fg:  #854600;
-  --pos-k-bg:   #eeeeee;  --pos-k-fg:   #3d3d3d;
+  --pos-k-bg:   #e2e2e2;  --pos-k-fg:   #3d3d3d;
   --pos-dst-bg: #efe7f7;  --pos-dst-fg: #5a2d8a;
+
+  --seat-mark:  #0b62c4;
 
   --platform-espn:    #cc0000;
   --platform-yahoo:   #6001d2;
@@ -275,8 +285,10 @@
   --pos-rb-bg:  #e3f7ef;  --pos-rb-fg:  #0b6b46;
   --pos-wr-bg:  #e8f0ff;  --pos-wr-fg:  #1a4fb0;
   --pos-te-bg:  #fff1e0;  --pos-te-fg:  #8a4800;
-  --pos-k-bg:   #f0eef6;  --pos-k-fg:   #4b4560;
+  --pos-k-bg:   #e7e4ee;  --pos-k-fg:   #4b4560;
   --pos-dst-bg: #f3e9fb;  --pos-dst-fg: #5f1fa0;
+
+  --seat-mark:  #6001d2;
 
   --platform-espn:    #cc0000;
   --platform-yahoo:   #6001d2;
