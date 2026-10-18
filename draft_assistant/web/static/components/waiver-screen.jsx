@@ -561,7 +561,7 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
                 <b style={{ color: T.text }}>Starters</b> is the point swing to your starting lineup —
                 the number that decides most weeks. <b style={{ color: T.text }}>Roster</b> counts bench
                 depth too, so a high roster gain with a flat starter gain is insurance, not an upgrade.
-                <b style={{ color: T.text }}> Trend</b> and the blue notes come from the news feed
+                <b style={{ color: T.text }}> Trend</b> and the notes under each reason come from the news feed
                 (injuries, depth chart, snap share, trending adds) — that is what moves a player between
                 refreshes. A drop is only suggested when your roster is already full.
               </Note>

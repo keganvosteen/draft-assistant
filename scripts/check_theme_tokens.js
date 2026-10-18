@@ -80,6 +80,17 @@ const PAIRS = [
   ...['qb', 'rb', 'wr', 'te', 'k', 'dst'].map(p => [`--pos-${p}-fg`, `--pos-${p}-bg`]),
 ];
 
+// [mark, background, minimum] for marks that are not text. The seat mark is
+// drawn over your own empty seats (WCAG's 3:1 for UI graphics) and over every
+// position colour. No single colour reaches 3:1 against both a dark surface
+// and Sleeper's mid-tone fills, so against those it only has to be plainly
+// distinct; 1.5:1 is what catches a mark that has become a position's own
+// colour (Sleeper's primary on its RB fill is 1.02:1).
+const MARKS = [
+  ...['--surface', '--surface-alt', '--primary-light'].map(bg => ['--seat-mark', bg, 3]),
+  ...['qb', 'rb', 'wr', 'te', 'k', 'dst'].map(p => ['--seat-mark', `--pos-${p}-bg`, 1.5]),
+];
+
 const report = [];
 for (const name of themeNames) {
   const tokens = { ...base, ...blocks[name] };
@@ -91,6 +102,14 @@ for (const name of themeNames) {
     worst = Math.min(worst, ratio);
     if (ratio < 4.5) {
       failures.push(`${name}: ${fg} (${tokens[fg]}) on ${bg} (${tokens[bg]}) is ${ratio.toFixed(2)}:1, needs 4.5:1`);
+    }
+  }
+  for (const [mark, bg, min] of MARKS) {
+    const a = rgb(tokens[mark]), b = rgb(tokens[bg]);
+    if (!a || !b) { failures.push(`${name}: ${mark} / ${bg} must both be #hex to be contrast-checked`); continue; }
+    const ratio = contrast(a, b);
+    if (ratio < min) {
+      failures.push(`${name}: ${mark} (${tokens[mark]}) against ${bg} (${tokens[bg]}) is ${ratio.toFixed(2)}:1, needs ${min}:1`);
     }
   }
   report.push(`${name} ${worst.toFixed(2)}:1`);
