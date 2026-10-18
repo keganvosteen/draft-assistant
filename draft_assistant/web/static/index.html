@@ -3,8 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="color-scheme" content="light" />
+  <meta name="color-scheme" content="dark" />
   <title>Draft Assistant</title>
+  <!-- Paint the saved theme before the stylesheet lands, so a dark Sleeper
+       board never flashes light first. ui-kit.jsx's applyTheme takes over once
+       React is up ("match" needs a league, so it starts on the default). -->
+  <script>
+  (function () {
+    var themes = { sleeper: 1, espn: 1, yahoo: 1, classic: 1 };
+    var theme = 'sleeper';
+    try { var saved = localStorage.getItem('fda_theme'); if (themes[saved]) theme = saved; } catch (e) {}
+    document.documentElement.setAttribute('data-theme', theme);
+    document.querySelector('meta[name="color-scheme"]')
+      .setAttribute('content', theme === 'sleeper' ? 'dark' : 'light');
+  })();
+  </script>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>

@@ -47,6 +47,7 @@ function LeagueHub({ league, picks, playerCount, onBack, onOpenDraft, onOpenWaiv
   const [syncing, setSyncing] = React.useState(false);
   const [showAuction, setShowAuction] = React.useState(false);
   const { isMobile } = useLayout();
+  const [themeChoice, setTheme] = useThemeChoice();
 
   const myPicks = picks.filter(p => p.teamNum === league.draftPosition);
   const totalSlots = rosterTotal(league.rosterSlots);
@@ -106,6 +107,8 @@ function LeagueHub({ league, picks, playerCount, onBack, onOpenDraft, onOpenWaiv
         <Btn variant="secondary" size="sm" onClick={() => onEditLeague(league.id)}>League settings</Btn>
         <Menu label="More" items={[
           { label: 'Pull player data', hint: `${playerCount || 0} loaded`, onClick: onPullData },
+          { type: 'sep' },
+          ...themeMenuItems(themeChoice, setTheme, league),
           { type: 'sep' },
           { label: 'Remove league', tone: 'danger', onClick: remove },
         ]} />

@@ -470,6 +470,7 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         elif self.path.startswith("/api/task/"):
             self._handle_task_status()
         else:
+            self._static_response = True
             super().do_GET()
 
     def do_POST(self):
@@ -703,7 +704,16 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
             self._linger_close()
         super().finish()
 
+    # Static files must be revalidated on every load. With no Cache-Control the
+    # browser caches heuristically off Last-Modified — for days, for a file that
+    # has not changed in weeks — so after an update a fresh index.html ran next
+    # to last version's scripts and stylesheet. "no-cache" still lets a
+    # matching If-Modified-Since come back as a cheap 304.
+    _static_response = False
+
     def end_headers(self):
+        if self._static_response:
+            self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")

@@ -238,7 +238,7 @@ function DraftOrderEditor({ numTeams, teamNames, teamIds, draftPosition, draftOr
                 fontSize:12, fontWeight:700, whiteSpace:'nowrap', flexShrink:0,
                 border:`1.5px solid ${isMe ? T.primary : T.border}`,
                 background: isMe ? T.primary : T.surface,
-                color: isMe ? '#fff' : T.muted,
+                color: isMe ? T.onPrimary : T.muted,
               }}>{isMe ? '● Me' : 'Me'}</button>
             </div>
           );
@@ -1328,7 +1328,7 @@ function UpdateBanner({ update, onDismiss }) {
   return (
     <div style={{
       margin:'0 0 22px', padding:'13px 15px', borderRadius:T.rsm,
-      background:T.primaryLight, border:`1px solid ${T.primary}33`,
+      background:T.primaryLight, border:`1px solid ${alpha(T.primary, 20)}`,
       display:'flex', alignItems:'center', gap:12, flexWrap:'wrap',
     }}>
       <div style={{flex:1, minWidth:220}}>
@@ -1401,6 +1401,7 @@ function HomeScreen({ leagues, picks, onOpenLeague, onAddLeague, onEditLeague, p
     try { localStorage.setItem('fda_setup_seen', '1'); } catch {}
   };
   const { isMobile } = useLayout();
+  const [themeChoice, setTheme] = useThemeChoice();
 
   return (
     <div style={{minHeight:'100vh', background:T.bg, display:'flex', flexDirection:'column'}}>
@@ -1408,10 +1409,10 @@ function HomeScreen({ leagues, picks, onOpenLeague, onAddLeague, onEditLeague, p
         title={
           <span style={{display:'inline-flex', alignItems:'center', gap:10}}>
             <span style={{
-              width:28, height:28, borderRadius:8, background:T.primary,
+              width:28, height:28, borderRadius:8, background:T.appbarBtnBg, color:T.appbarBtnFg,
               display:'inline-flex', alignItems:'center', justifyContent:'center',
             }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
                 <ellipse cx="12" cy="12" rx="10" ry="6" />
                 <path d="M2 12h20M12 6c0 0-4 3-4 6s4 6 4 6M12 6c0 0 4 3 4 6s-4 6-4 6" />
               </svg>
@@ -1419,13 +1420,28 @@ function HomeScreen({ leagues, picks, onOpenLeague, onAddLeague, onEditLeague, p
             Draft Assistant
           </span>
         }
-        badges={playerCount != null
+        badges={playerCount != null && !isMobile
           ? <Badge label={`${playerCount} players`} color={playerCount ? 'gray' : 'amber'} />
           : null}>
-        <Btn variant="subtle" size="sm" onClick={() => setShowGuide(true)}>Setup guide</Btn>
-        <Btn variant="subtle" size="sm" onClick={onOpenBackups}>Backups</Btn>
-        <Btn variant="secondary" size="sm" onClick={() => setShowPull(true)}>Pull data</Btn>
-        <Btn onClick={onAddLeague}>Add league</Btn>
+        {/* A phone bar fits the title and two controls; everything but the
+            primary action folds into one menu there. */}
+        {isMobile ? (
+          <Menu label="More" items={[
+            { label: 'Pull player data', onClick: () => setShowPull(true) },
+            { label: 'Setup guide', onClick: () => setShowGuide(true) },
+            { label: 'Backups', onClick: onOpenBackups },
+            { type: 'sep' },
+            ...themeMenuItems(themeChoice, setTheme, null),
+          ]} />
+        ) : (
+          <>
+            <Btn variant="subtle" size="sm" onClick={() => setShowGuide(true)}>Setup guide</Btn>
+            <Btn variant="subtle" size="sm" onClick={onOpenBackups}>Backups</Btn>
+            <ThemeMenu />
+            <Btn variant="secondary" size="sm" onClick={() => setShowPull(true)}>Pull data</Btn>
+          </>
+        )}
+        <Btn size={isMobile ? 'sm' : 'md'} onClick={onAddLeague}>Add league</Btn>
       </AppBar>
 
       <div style={{flex:1, padding: isMobile ? '24px 16px' : '36px 24px', maxWidth:960, margin:'0 auto', width:'100%'}}>
@@ -1454,7 +1470,7 @@ function HomeScreen({ leagues, picks, onOpenLeague, onAddLeague, onEditLeague, p
         ) : (
           <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(288px,1fr))', gap:16}}>
             {leagues.map(lg => (
-              <LeagueCard key={lg.id} league={lg} picks={picks[lg.id] || []}
+              <LeagueCard key={lg.id} league={lg} picks={picks[lg.id] || NO_PICKS}
                 onOpen={() => onOpenLeague(lg.id)}
                 onEdit={() => onEditLeague(lg.id)} />
             ))}
@@ -1479,6 +1495,11 @@ function HomeScreen({ leagues, picks, onOpenLeague, onAddLeague, onEditLeague, p
 // Navigation is a flat route: leagues → one league's hub → draft room or waiver
 // wire. The draft and the waiver wire never contain each other; the hub is the
 // only place both are reachable from.
+// A league with no picks yet must get the same empty array on every render:
+// the draft room re-runs the rollout whenever `picks` changes identity, and a
+// fresh `[]` per render restarted it on every autosave tick and theme switch.
+const NO_PICKS = Object.freeze([]);
+
 function App() {
   const [players, setPlayers] = React.useState(null);
   const [loadError, setLoadError] = React.useState(null);
@@ -1531,6 +1552,7 @@ function App() {
       setLeagues(migrateRosterIds(initialLeagues, data));
       setPicks(migratePickIds(saved.picks, data));
       setPreferences(saved.preferences);
+      if (saved.preferences.theme) setThemeChoice(saved.preferences.theme);
       try { localStorage.setItem('fda_tweaks', JSON.stringify(saved.preferences.tweaks || {})); } catch {}
       setPlayers(data);
       setWorkspaceReady(true);
@@ -1644,6 +1666,7 @@ function App() {
       setLeagues(migrateRosterIds(restored.leagues, players));
       setPicks(migratePickIds(restored.picks, players));
       setPreferences(restored.preferences);
+      if (restored.preferences.theme) setThemeChoice(restored.preferences.theme);
       try { localStorage.setItem('fda_tweaks', JSON.stringify(restored.preferences.tweaks || {})); } catch {}
       setRoute({screen:'home', leagueId:null});
       setShowBackups(false);
@@ -1747,6 +1770,18 @@ function App() {
 
   const editingLeague = editingId ? leagues.find(l => l.id === editingId) : null;
   const routeLeague = route.leagueId ? leagues.find(l => l.id === route.leagueId) : null;
+
+  // The look is a workspace preference like the engine tweaks, so it travels
+  // with backups and survives the packaged app's per-port localStorage.
+  // "Match league" paints the open league in its own platform's theme.
+  const [themeChoice] = useThemeChoice();
+  React.useEffect(() => {
+    if (workspaceReady) setPreferences(prev => prev.theme === themeChoice ? prev : {...prev, theme:themeChoice});
+  }, [workspaceReady, themeChoice]);
+  const routePlatform = routeLeague ? routeLeague.platform : null;
+  React.useEffect(() => {
+    applyTheme(resolveTheme(themeChoice, routePlatform ? {platform:routePlatform} : null));
+  }, [themeChoice, routePlatform]);
   const goHome = () => setRoute({ screen: 'home', leagueId: null });
   const openEditor = id => { setEditingId(id); setShowSetup(true); };
 
@@ -1783,7 +1818,7 @@ function App() {
     body = (
       <DraftScreen key={routeLeague.id}
         league={routeLeague}
-        picks={picks[routeLeague.id] || []}
+        picks={picks[routeLeague.id] || NO_PICKS}
         allPlayers={players}
         onBack={() => setRoute({ screen: 'league', leagueId: routeLeague.id })}
         onAddPick={pick => addPick(routeLeague.id, pick)}
@@ -1798,7 +1833,7 @@ function App() {
     body = (
       <WaiverScreen key={routeLeague.id}
         league={routeLeague}
-        picks={picks[routeLeague.id] || []}
+        picks={picks[routeLeague.id] || NO_PICKS}
         allPlayers={players}
         onBack={() => setRoute({ screen: 'league', leagueId: routeLeague.id })}
         onSyncLeague={syncLeague}
@@ -1810,7 +1845,7 @@ function App() {
     body = (
       <LeagueHub
         league={routeLeague}
-        picks={picks[routeLeague.id] || []}
+        picks={picks[routeLeague.id] || NO_PICKS}
         playerCount={players.length}
         onBack={goHome}
         onOpenDraft={() => setRoute({ screen: 'draft', leagueId: routeLeague.id })}
