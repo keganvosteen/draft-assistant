@@ -4,7 +4,6 @@ from __future__ import annotations
 import threading
 import webbrowser
 from functools import partial
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -13,7 +12,7 @@ from .paths import resolve
 from .providers.base import build_provider
 from .sample_data import sample_players
 from .storage import save_players
-from .web.server import DraftAPIHandler
+from .web.server import DraftAPIHandler, DraftHTTPServer
 
 
 def _ensure_data(profile: str) -> None:
@@ -120,7 +119,7 @@ def run_desktop(profile: str = DEFAULT_PROFILE, debug: bool = False) -> None:
     _ensure_data(profile)
 
     handler = partial(DraftAPIHandler, profile=profile)
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server = DraftHTTPServer(("127.0.0.1", 0), handler)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

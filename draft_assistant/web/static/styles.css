@@ -393,6 +393,23 @@ input[type=checkbox], input[type=radio] { accent-color: var(--primary); }
 }
 @keyframes da-spin { to { transform: rotate(360deg); } }
 
+/* The boot guard's error (index.html), shown instead of a blank page when a
+   file never arrived or the app threw while rendering. Plain DOM, so it gets
+   no Btn: the button is styled here to match a primary one. */
+.boot-error {
+  max-width: 560px; margin: 0 auto; padding: 18vh 24px 24px;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 12px;
+  line-height: 1.5;
+}
+.boot-error h1 { font-size: 20px; }
+.boot-error p { color: var(--muted); overflow-wrap: anywhere; }
+.boot-error button {
+  margin-top: 4px; padding: 8px 15px; border-radius: var(--r-btn); cursor: pointer;
+  font-weight: 600; background: var(--primary); color: var(--on-primary);
+  border: 1px solid var(--primary);
+}
+.boot-error button:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+
 /* ─── Overlays: modal / drawer / menu / toast ────────────────────────────── */
 @keyframes da-fade { from { opacity: 0 } to { opacity: 1 } }
 @keyframes da-rise { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }

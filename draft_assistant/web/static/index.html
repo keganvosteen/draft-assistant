@@ -18,6 +18,54 @@
       .setAttribute('content', theme === 'sleeper' ? 'dark' : 'light');
   })();
   </script>
+  <!-- Boot guard. The page is a dozen separate files, and losing one (a
+       refused connection on a quick reload, say) used to leave nothing to
+       read: React unmounted on its first ReferenceError, or never started,
+       and the page sat blank or on the spinner for good. Record every script
+       or stylesheet that fails to load and show a readable error with a
+       Reload button in #root instead. Plain DOM on purpose: React may be the
+       file that failed. Must stay ahead of every <link> and <script src>
+       (scripts/check_web_syntax.js checks), or a failure before it goes
+       unrecorded. The mount script at the bottom uses show() too. -->
+  <script>
+  (function () {
+    var failed = [];
+    addEventListener('error', function (event) {
+      var el = event.target;
+      if (!el || !el.tagName) return;
+      if (el.tagName === 'SCRIPT' && el.src) failed.push(el.getAttribute('src'));
+      else if (el.tagName === 'LINK' && el.rel === 'stylesheet') failed.push(el.getAttribute('href'));
+    }, true);
+
+    function show(title, detail, host) {
+      var box = document.createElement('div');
+      box.className = 'boot-error';
+      box.setAttribute('role', 'alert');
+      var heading = document.createElement('h1');
+      heading.textContent = title;
+      var text = document.createElement('p');
+      text.textContent = detail;
+      var reload = document.createElement('button');
+      reload.type = 'button';
+      reload.textContent = 'Reload';
+      reload.addEventListener('click', function () { location.reload(); });
+      box.appendChild(heading);
+      box.appendChild(text);
+      box.appendChild(reload);
+      host = host || document.getElementById('root');
+      host.textContent = '';
+      host.appendChild(box);
+    }
+
+    window.__fdaBoot = { failed: failed, show: show };
+    document.addEventListener('DOMContentLoaded', function () {
+      if (failed.length) {
+        show("Draft Assistant didn't finish loading",
+          'The local server did not send ' + failed.join(', ') + '. Nothing was changed. Reload to try again.');
+      }
+    });
+  })();
+  </script>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -60,10 +108,37 @@
   <script type="text/babel" src="components/waiver-screen.jsx"></script>
   <script type="text/babel" src="components/draft-screen.jsx"></script>
 
-  <!-- Mount -->
+  <!-- Mount. A file that failed to load has already put the boot guard's
+       error in #root, and rendering would only replace it. Babel fetches the
+       .jsx files itself and runs a refused one as an empty script, so the
+       guard never hears of it: a missing app-components.jsx leaves no App,
+       and any other leaves a ReferenceError for the boundary to catch,
+       whenever the screen that needs it renders. -->
   <script type="text/babel">
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
+    class BootBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { error };
+      }
+      render() {
+        if (!this.state.error) return this.props.children;
+        const detail = `${String(this.state.error).replace(/\.$/, '')}. Reload to try again.`;
+        return <div ref={el => el && window.__fdaBoot.show('Draft Assistant hit an error', detail, el)} />;
+      }
+    }
+
+    if (!window.__fdaBoot.failed.length) {
+      if (typeof App === 'function') {
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<BootBoundary><App /></BootBoundary>);
+      } else {
+        window.__fdaBoot.show("Draft Assistant didn't finish loading",
+          'The local server did not send all of the app. Nothing was changed. Reload to try again.');
+      }
+    }
   </script>
 </body>
 </html>

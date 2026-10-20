@@ -45,7 +45,7 @@ class DesktopPersistenceTests(unittest.TestCase):
             with patch.dict("sys.modules", {"webview": fake}), \
                     patch("draft_assistant.desktop.resolve", return_value=str(browser)), \
                     patch("draft_assistant.desktop._ensure_data"), \
-                    patch("draft_assistant.desktop.ThreadingHTTPServer", return_value=server) as bind, \
+                    patch("draft_assistant.desktop.DraftHTTPServer", return_value=server) as bind, \
                     patch("draft_assistant.desktop.threading.Thread"):
                 run_desktop()
                 marker = browser / "saved-profile-marker"
@@ -67,7 +67,7 @@ class DesktopPersistenceTests(unittest.TestCase):
             with patch.dict("sys.modules", {"webview": fake}), \
                     patch("draft_assistant.desktop.resolve", return_value=root), \
                     patch("draft_assistant.desktop._ensure_data"), \
-                    patch("draft_assistant.desktop.ThreadingHTTPServer", return_value=server), \
+                    patch("draft_assistant.desktop.DraftHTTPServer", return_value=server), \
                     patch("draft_assistant.desktop.threading.Thread"):
                 with self.assertRaisesRegex(RuntimeError, "browser failed"):
                     run_desktop()
