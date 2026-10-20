@@ -89,6 +89,34 @@ function signed(n, digits = 1) {
   return `${v > 0 ? '+' : ''}${v.toFixed(digits)}`;
 }
 
+// `urgency` is Sleeper's trending feed: how many Sleeper leagues added the
+// player minus how many dropped them in the last 24 hours, for its 100 most
+// added and 100 most dropped. It is a raw count, five or six figures around
+// waivers, not a bounded momentum score, so it is shortened, never scaled or
+// capped: there is no fixed top to scale against, and the gap between +800
+// and +60k is the information.
+function netAdds(n) {
+  const v = Math.round(Number(n) || 0);
+  if (!v) return null;
+  const abs = Math.abs(v);
+  const text = abs < 1000 ? String(abs)
+    : abs < 9950 ? `${(abs / 1000).toFixed(1)}k`
+      : `${Math.round(abs / 1000)}k`;
+  return {
+    text: `${v > 0 ? '+' : '-'}${text}`,
+    color: v > 0 ? T.green : T.red,
+    title: `${v > 0 ? '+' : '-'}${abs.toLocaleString()} net adds in Sleeper leagues over the last 24 hours`,
+  };
+}
+const NET_ADDS_HELP = 'Sleeper leagues that added this player minus those that dropped them, over the last 24 hours. '
+  + 'Blank when the player is not among Sleeper’s 100 most added or dropped.';
+
+function DropName({ drop }) {
+  return drop
+    ? <span>{drop.name} <span style={{ color: T.muted }}>({drop.pos})</span></span>
+    : <span style={{ color: T.green }}>Open slot</span>;
+}
+
 function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditLeague, onRefreshPlayers }) {
   const [topN, setTopN]           = React.useState(15);
   const [posFilter, setPosFilter] = React.useState('ALL');
@@ -458,6 +486,10 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
                 action={posFilter === 'ALL' ? null : <Btn variant="secondary" onClick={() => setPosFilter('ALL')}>Show all positions</Btn>} />
             )}
 
+            {/* A phone has room for four columns. Position, net adds and the
+                drop fold into the Add cell there, the way the draft board folds
+                its narrow rows, so the player you would cut never sits behind a
+                sideways scroll the table gives no hint of. */}
             {myPlayers.length > 0 && rows.length > 0 && (
               <div className="da-card" style={{ overflow: 'hidden' }}>
                 <div style={{ overflowX: 'auto' }}>
@@ -466,14 +498,14 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
                       <tr>
                         <th style={{ width: 32 }}>#</th>
                         <th>Add</th>
-                        <th style={{ width: 52 }}>Pos</th>
-                        <th style={{ textAlign: 'right', width: 70 }}
+                        {!isMobile && <th style={{ width: 52 }}>Pos</th>}
+                        <th style={{ textAlign: 'right', width: isMobile ? undefined : 70 }}
                           title={horizon === 'weekly'
                             ? 'Projected points for this player in the selected week'
                             : 'Projected points for this player over the rest of the season'}>
                           {horizon === 'weekly' ? 'Wk pts' : 'ROS pts'}
                         </th>
-                        <th style={{ textAlign: 'right', width: 84 }} title="Points this add gains your starting lineup">
+                        <th style={{ textAlign: 'right', width: isMobile ? undefined : 84 }} title="Points this add gains your starting lineup">
                           Starters
                         </th>
                         {isDesktop && (
@@ -481,75 +513,94 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
                             Roster
                           </th>
                         )}
-                        <th style={{ textAlign: 'center', width: 60 }}
-                          title="Momentum from the news feed - trending adds, snap share, and depth-chart moves">
-                          Trend
-                        </th>
-                        <th style={{ width: 140 }}>Drop</th>
+                        {!isMobile && (
+                          <th style={{ textAlign: 'center', width: 76 }} title={NET_ADDS_HELP}>
+                            Net adds
+                          </th>
+                        )}
+                        {!isMobile && <th style={{ width: 140 }}>Drop</th>}
                         {!isMobile && <th>Why</th>}
                       </tr>
                     </thead>
                     <tbody>
-                      {rows.map((row, i) => (
-                        <tr key={row.id}>
-                          <td className="da-num" style={{ color: T.mutedLight, fontSize: 12 }}>{i + 1}</td>
-                          <td>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <span style={{ fontWeight: 700, color: T.text }}>{row.name}</span>
-                              <AvailabilityChip status={row.availability} />
-                            </div>
-                            <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>
-                              {row.nflTeam}
-                              {row.byeWeek ? ` · BYE ${row.byeWeek}` : ''}
-                              {row.adp ? ` · ADP ${row.adp}` : ''}
-                            </div>
-                            {isMobile && (
-                              <div style={{ fontSize: 11, color: T.muted, marginTop: 4, lineHeight: 1.4 }}>{row.reason}</div>
-                            )}
-                          </td>
-                          <td><PosBadge pos={row.pos} /></td>
-                          <td className="da-num" style={{ textAlign: 'right', fontWeight: 700, color: T.text }}>
-                            {Number(row.points || 0).toFixed(1)}
-                          </td>
-                          <td className="da-num" style={{
-                            textAlign: 'right', fontWeight: 800,
-                            color: row.starterGain > 0 ? T.green : T.mutedLight,
-                          }}>{signed(row.starterGain)}</td>
-                          {isDesktop && (
-                            <td className="da-num" style={{
-                              textAlign: 'right', fontWeight: 700,
-                              color: row.rosterGain > 0 ? T.text : T.mutedLight,
-                            }}>{signed(row.rosterGain)}</td>
-                          )}
-                          <td className="da-num" style={{
-                            textAlign: 'center', fontWeight: 800,
-                            color: row.urgency > 0 ? T.green : row.urgency < 0 ? T.red : T.mutedLight,
-                          }} title="Positive means the news is trending this player up">
-                            {row.urgency > 0 ? `+${row.urgency}` : (row.urgency || '—')}
-                          </td>
-                          <td style={{ color: row.drop ? T.text : T.muted, fontSize: 12.5 }}>
-                            {row.drop
-                              ? <span>{row.drop.name} <span style={{ color: T.muted }}>({row.drop.pos})</span></span>
-                              : <span style={{ color: T.green }}>Open slot</span>}
-                          </td>
-                          {!isMobile && (
-                            <td style={{ color: T.muted, fontSize: 12, lineHeight: 1.45 }}>
-                              <div>{row.reason}</div>
-                              {playerNewsSignals(row.signals).slice(0, 2).map((sig, si) => (
-                                <div key={si} title={`${sig.source} · ${sig.observed_at}`}
-                                  style={{ fontSize: 11, marginTop: 2, color: T.primary }}>
-                                  {sig.attribution || sig.source}: {String(sig.kind).replace(/_/g, ' ')} {sig.value}
-                                </div>
-                              ))}
-                              {horizon === 'weekly' && row.weeklyProjectionOrigin && (
-                                <div style={{ fontSize: 11, marginTop: 2, color: T.mutedLight }}>
-                                  {row.weeklyProjectionOrigin}
+                      {rows.map((row, i) => {
+                        const trend = netAdds(row.urgency);
+                        return (
+                          <tr key={row.id}>
+                            <td className="da-num" style={{ color: T.mutedLight, fontSize: 12 }}>{i + 1}</td>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                {isMobile && <PosBadge pos={row.pos} />}
+                                <span style={{ fontWeight: 700, color: T.text }}>{row.name}</span>
+                                <AvailabilityChip status={row.availability} />
+                              </div>
+                              <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>
+                                {row.nflTeam}
+                                {row.byeWeek ? ` · BYE ${row.byeWeek}` : ''}
+                                {row.adp ? ` · ADP ${row.adp}` : ''}
+                                {isMobile && trend && ' · '}
+                                {isMobile && trend && (
+                                  <span title={trend.title} style={{ whiteSpace: 'nowrap' }}>
+                                    <span style={{ color: trend.color, fontWeight: 700 }}>{trend.text}</span> net adds
+                                  </span>
+                                )}
+                              </div>
+                              {isMobile && (
+                                <div style={{ fontSize: 12, color: T.text, marginTop: 4 }}>
+                                  {row.drop && <span style={{ color: T.muted, fontWeight: 700 }}>Drop </span>}
+                                  <DropName drop={row.drop} />
+                                  {!row.drop && <span style={{ color: T.muted }}> · no drop needed</span>}
                                 </div>
                               )}
+                              {isMobile && (
+                                <div style={{ fontSize: 11, color: T.muted, marginTop: 4, lineHeight: 1.4 }}>{row.reason}</div>
+                              )}
                             </td>
-                          )}
-                        </tr>
-                      ))}
+                            {!isMobile && <td><PosBadge pos={row.pos} /></td>}
+                            <td className="da-num" style={{ textAlign: 'right', fontWeight: 700, color: T.text }}>
+                              {Number(row.points || 0).toFixed(1)}
+                            </td>
+                            <td className="da-num" style={{
+                              textAlign: 'right', fontWeight: 800,
+                              color: row.starterGain > 0 ? T.green : T.mutedLight,
+                            }}>{signed(row.starterGain)}</td>
+                            {isDesktop && (
+                              <td className="da-num" style={{
+                                textAlign: 'right', fontWeight: 700,
+                                color: row.rosterGain > 0 ? T.text : T.mutedLight,
+                              }}>{signed(row.rosterGain)}</td>
+                            )}
+                            {!isMobile && (
+                              <td className="da-num" style={{
+                                textAlign: 'center', fontWeight: 800, color: trend ? trend.color : T.mutedLight,
+                              }} title={trend ? trend.title : NET_ADDS_HELP}>
+                                {trend ? trend.text : '—'}
+                              </td>
+                            )}
+                            {!isMobile && (
+                              <td style={{ color: row.drop ? T.text : T.muted, fontSize: 12.5 }}>
+                                <DropName drop={row.drop} />
+                              </td>
+                            )}
+                            {!isMobile && (
+                              <td style={{ color: T.muted, fontSize: 12, lineHeight: 1.45 }}>
+                                <div>{row.reason}</div>
+                                {playerNewsSignals(row.signals).slice(0, 2).map((sig, si) => (
+                                  <div key={si} title={`${sig.source} · ${sig.observed_at}`}
+                                    style={{ fontSize: 11, marginTop: 2, color: T.primary }}>
+                                    {sig.attribution || sig.source}: {String(sig.kind).replace(/_/g, ' ')} {sig.value}
+                                  </div>
+                                ))}
+                                {horizon === 'weekly' && row.weeklyProjectionOrigin && (
+                                  <div style={{ fontSize: 11, marginTop: 2, color: T.mutedLight }}>
+                                    {row.weeklyProjectionOrigin}
+                                  </div>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -561,8 +612,9 @@ function WaiverScreen({ league, picks, allPlayers, onBack, onSyncLeague, onEditL
                 <b style={{ color: T.text }}>Starters</b> is the point swing to your starting lineup —
                 the number that decides most weeks. <b style={{ color: T.text }}>Roster</b> counts bench
                 depth too, so a high roster gain with a flat starter gain is insurance, not an upgrade.
-                <b style={{ color: T.text }}> Trend</b> and the blue notes come from the news feed
-                (injuries, depth chart, snap share, trending adds) — that is what moves a player between
+                <b style={{ color: T.text }}> Net adds</b> is Sleeper’s trending count: leagues that added the
+                player minus leagues that dropped them over the last 24 hours. It and the blue notes (injuries,
+                depth chart, snap share) come from the news feed — that is what moves a player between
                 refreshes. A drop is only suggested when your roster is already full.
               </Note>
             )}
