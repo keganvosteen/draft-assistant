@@ -336,16 +336,21 @@ function PickTicker({ league, picks, playersById }) {
         // A made pick takes its position's colour, like a physical draft board.
         const posColor = player ? POS_COLORS[player.pos] : null;
         const fg = isCurrent ? T.onPrimary : posColor ? posColor.fg : null;
+        // Your empty seats sit on primaryLight, where mutedLight falls short of AA.
+        const quiet = isMine ? T.primary : T.mutedLight;
         return (
           <div key={c.key} ref={isCurrent ? currentRef : null} style={{
             flexShrink:0, width:116, padding:'5px 8px 6px',
             borderRight:`1px solid ${T.borderLight}`,
             background: isCurrent ? T.primary : posColor ? posColor.bg : isMine ? T.primaryLight : T.surface,
-            boxShadow: isMine && !isCurrent ? `inset 0 -3px 0 ${T.primary}` : 'none',
+            // The ring, not the fill, is what marks the clock: in Sleeper the
+            // primary fill is the RB colour, so it matched every RB pick beside it.
+            boxShadow: isCurrent ? `inset 0 0 0 2px ${T.onPrimary}`
+              : isMine ? `inset 0 -3px 0 ${T.seatMark}` : 'none',
           }}>
             <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:4}}>
               <span className="da-num" style={{fontSize:11, fontWeight:700,
-                color: fg || T.mutedLight}}>{c.n}</span>
+                color: fg || quiet}}>{c.n}</span>
               {!made && !isCurrent && !isMine && isAuto && (
                 <span style={{fontSize:11, fontWeight:800, letterSpacing:.3, color:T.amber}}>AUTO</span>
               )}
@@ -356,7 +361,7 @@ function PickTicker({ league, picks, playersById }) {
             }}>{isMine ? 'YOU' : teamName}</div>
             <div className="da-ellipsis" style={{
               fontSize:11, marginTop:1, fontWeight: player ? 700 : 500,
-              color: fg || T.mutedLight,
+              color: fg || quiet,
             }}>
               {isCurrent ? 'On the clock' : player ? `${player.name} · ${player.pos}` : '—'}
             </div>
@@ -1084,6 +1089,11 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
   const rounds     = Math.max(rosterTotal(league.rosterSlots), Math.ceil(picks.length / numTeams));
   const teamNums   = Array.from({length:numTeams},(_,i)=>i+1);
   const roundNums  = Array.from({length:rounds||1},(_,i)=>i+1);
+  // Your seat is framed as one column, header to last round. A collapsed
+  // table gives the wider border each shared edge, so the frame stays
+  // unbroken by the 1px cell grid.
+  const grid = `1px solid ${T.borderLight}`;
+  const seat = `2px solid ${T.seatMark}`;
 
   return (
     <Modal title="Full draft board" onClose={onClose} width={Math.min(numTeams*112+80, 1100)}
@@ -1099,6 +1109,7 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
                   color: t===draftPosition ? T.primary : T.muted,
                   fontWeight:800, fontSize:11, letterSpacing:.4,
                   background: t===draftPosition ? T.primaryLight : 'transparent',
+                  ...(t===draftPosition ? {borderTop:seat, borderLeft:seat, borderRight:seat} : {}),
                 }}>
                   {t===draftPosition ? 'YOU' : ((league.teamNames || [])[t-1] || `T${t}`)}
                 </th>
@@ -1120,12 +1131,12 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
                   return (
                     <td key={t} style={{
                       padding:'5px 8px', textAlign:'center', verticalAlign:'middle',
-                      border:`1px solid ${T.borderLight}`,
+                      borderTop:grid, borderBottom: isMe && rnd === roundNums.length ? seat : grid,
+                      borderLeft: isMe ? seat : grid, borderRight: isMe ? seat : grid,
                       // A made pick is painted in its position's colour, so the
                       // board reads as runs of positions at a glance.
                       background: player ? (POS_COLORS[player.pos] || {}).bg || T.surfaceAlt
                         : isMe ? T.primaryTint : 'transparent',
-                      boxShadow: isMe ? `inset 0 0 0 2px ${T.primary}` : 'none',
                       minWidth:92,
                     }}>
                       {player ? (
@@ -1133,7 +1144,8 @@ function DraftBoardModal({ league, picks, allPlayers, onClose }) {
                           <div style={{fontWeight:700, fontSize:12, lineHeight:1.3}}>
                             {player.name.split(' ').pop()}
                           </div>
-                          <div style={{fontSize:11, fontWeight:800, opacity:.85}}>{player.pos}</div>
+                          {/* Full strength: the pairs are only AA-checked at full opacity. */}
+                          <div style={{fontSize:11, fontWeight:800}}>{player.pos}</div>
                         </div>
                       ) : (
                         <span style={{color:T.border}}>—</span>
