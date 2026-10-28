@@ -805,6 +805,12 @@ def actual_stats_for(context: Optional[PlayerContext], player: Player) -> Option
 
 
 def urgency_for_player(context: Optional[PlayerContext], player: Player) -> int:
+    """Net Sleeper adds minus drops over the last 24 hours, as a raw count.
+
+    Summed across every Sleeper league, so it routinely runs to five or six
+    figures — it is not a bounded score. Zero means the player is outside
+    Sleeper's 100 most added and 100 most dropped, not that nobody moved.
+    """
     adds = drops = 0
     for signal in signals_for_player(context, player):
         if signal.kind == "trend_add":
