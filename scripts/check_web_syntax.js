@@ -16,9 +16,65 @@ const vm = require('vm');
 const STATIC_DIR = 'draft_assistant/web/static';
 const INDEX = path.join(STATIC_DIR, 'index.html');
 
+// ── Read the page ────────────────────────────────────────────────────────────
+// A small scanner rather than regexes over the markup: it skips comments the
+// way a browser does (a commented-out tag loads nothing), reads tag and
+// attribute names in any case, and ends a <script> body at the first
+// "</script", however it is spelled. Enough HTML for a page we write ourselves.
+function scanTags(source) {
+  const lower = source.toLowerCase();
+  const tags = [];
+  let i = 0;
+  while ((i = lower.indexOf('<', i)) !== -1) {
+    if (lower.startsWith('<!--', i)) {
+      // Closes at the first --> (which is how <!--> and <!---> close at once)
+      // or --!>. One that never closes runs to the end of the file.
+      const ends = [[lower.indexOf('-->', i + 2), 3], [lower.indexOf('--!>', i + 4), 4]]
+        .filter(([at]) => at !== -1);
+      if (!ends.length) break;
+      const [at, length] = ends.reduce((a, b) => (b[0] < a[0] ? b : a));
+      i = at + length;
+      continue;
+    }
+    const name = /^[a-z][a-z0-9-]*/.exec(lower.slice(i + 1, i + 64));
+    if (!name) {
+      i++;
+      continue;
+    }
+    // The attributes run to the first > outside quotes.
+    const start = i + 1 + name[0].length;
+    let end = start;
+    for (let quote = null; end < source.length; end++) {
+      const c = source[end];
+      if (quote) {
+        if (c === quote) quote = null;
+      } else if (c === '"' || c === "'") {
+        quote = c;
+      } else if (c === '>') {
+        break;
+      }
+    }
+    const attrs = {};
+    const attrText = source.slice(start, end);
+    for (const m of attrText.matchAll(/([^\s"'=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g)) {
+      attrs[m[1].toLowerCase()] = m[2] ?? m[3] ?? m[4] ?? '';
+    }
+    const tag = { name: name[0], attrs, body: '' };
+    i = end + 1;
+    if (tag.name === 'script') {
+      const close = lower.indexOf('</script', i);
+      tag.body = source.slice(i, close === -1 ? source.length : close);
+      i = close === -1 ? source.length : close;
+    }
+    tags.push(tag);
+  }
+  return tags;
+}
+
 // ── What does the page actually load? ────────────────────────────────────────
-const html = fs.readFileSync(INDEX, 'utf8');
-const referenced = [...html.matchAll(/<script[^>]*\bsrc="([^"]+)"/g)].map(m => m[1]);
+const tags = scanTags(fs.readFileSync(INDEX, 'utf8'));
+const isExternalScript = tag => tag.name === 'script' && 'src' in tag.attrs;
+const referenced = tags.filter(isExternalScript).map(tag => tag.attrs.src);
 if (referenced.length === 0) {
   throw new Error(`No <script src> tags found in ${INDEX} — did the markup change?`);
 }
@@ -70,12 +126,12 @@ if (babelScripts[0] !== 'components/ui-kit.jsx') {
 // ── The boot guard listens before anything can fail ──────────────────────────
 // It records every script or stylesheet that fails to load, so the page shows
 // an error instead of coming up blank. One that fails ahead of it is missed.
-const markup = html.replace(/<!--[\s\S]*?-->/g, '');
-const guardAt = markup.indexOf('window.__fdaBoot =');
+const inlineScripts = tags.filter(tag => tag.name === 'script' && !isExternalScript(tag));
+const guardAt = tags.indexOf(inlineScripts.find(tag => tag.body.includes('window.__fdaBoot =')));
 if (guardAt === -1) {
   throw new Error('index.html no longer defines the boot guard (window.__fdaBoot).');
 }
-if (guardAt > markup.search(/<link\b|<script[^>]*\bsrc=/)) {
+if (guardAt > tags.findIndex(tag => tag.name === 'link' || isExternalScript(tag))) {
   throw new Error(
     'The boot guard in index.html must come before every <link> and <script src>: ' +
     'a file that fails to load ahead of it goes unrecorded.'
@@ -103,11 +159,8 @@ for (const rel of referenced) {
 }
 
 // index.html's own scripts: theme bootstrap, boot guard, engine defaults, mount.
-let inline = 0;
-for (const [, attrs = '', source] of markup.matchAll(/<script(\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
-  if (/\bsrc=/.test(attrs)) continue;
-  parse(source, /type="text\/babel"/.test(attrs));
-  inline++;
+for (const tag of inlineScripts) {
+  parse(tag.body, tag.attrs.type === 'text/babel');
 }
 
 // ── Behavioural parity check: imported league scoring on a DST ───────────────
@@ -132,4 +185,4 @@ if (helperContext.rosterTotal(slots) !== 17) {
   throw new Error(`rosterTotal must skip IR: expected 17, got ${helperContext.rosterTotal(slots)}`);
 }
 
-console.log(`Browser JavaScript and JSX syntax: PASS (${checked} files, ${inline} inline scripts)`);
+console.log(`Browser JavaScript and JSX syntax: PASS (${checked} files, ${inlineScripts.length} inline scripts)`);
