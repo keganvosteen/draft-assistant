@@ -67,21 +67,69 @@ if (babelScripts[0] !== 'components/ui-kit.jsx') {
   );
 }
 
+// ── The boot guard listens before anything can fail ──────────────────────────
+// It records every script or stylesheet that fails to load, so the page shows
+// an error instead of coming up blank. One that fails ahead of it is missed.
+
+// index.html with its comments taken out, so a commented-out tag is never read
+// as a live one. A scan rather than a regex replace: it ends a comment where a
+// browser does (`-->` or `--!>`), and an unclosed one runs to the end.
+function withoutComments(text) {
+  let out = '';
+  let at = 0;
+  for (;;) {
+    const open = text.indexOf('<!--', at);
+    if (open === -1) return out + text.slice(at);
+    out += text.slice(at, open);
+    const ends = ['-->', '--!>']
+      .map(end => [text.indexOf(end, open + 4), end.length])
+      .filter(([found]) => found !== -1);
+    if (ends.length === 0) return out;
+    const [close, length] = ends.reduce((a, b) => (b[0] < a[0] ? b : a));
+    at = close + length;
+  }
+}
+
+const markup = withoutComments(html);
+const guardAt = markup.indexOf('window.__fdaBoot =');
+if (guardAt === -1) {
+  throw new Error('index.html no longer defines the boot guard (window.__fdaBoot).');
+}
+if (guardAt > markup.search(/<link\b|<script[^>]*\bsrc=/i)) {
+  throw new Error(
+    'The boot guard in index.html must come before every <link> and <script src>: ' +
+    'a file that fails to load ahead of it goes unrecorded.'
+  );
+}
+
 // ── Parse everything ─────────────────────────────────────────────────────────
 const babelContext = {};
 vm.createContext(babelContext);
 vm.runInContext(fs.readFileSync(path.join(STATIC_DIR, 'vendor/babel.min.js'), 'utf8'), babelContext);
 
-let checked = 0;
-for (const rel of referenced) {
-  if (isVendor(rel)) continue; // integrity is covered by check_vendor_assets.py
-  const source = fs.readFileSync(toDisk(rel), 'utf8');
-  if (rel.endsWith('.jsx')) {
+const parse = (source, babel) => {
+  if (babel) {
     babelContext.Babel.transform(source, { presets: ['react'] });
   } else {
     new Function(source); // parses without executing
   }
+};
+
+let checked = 0;
+for (const rel of referenced) {
+  if (isVendor(rel)) continue; // integrity is covered by check_vendor_assets.py
+  parse(fs.readFileSync(toDisk(rel), 'utf8'), rel.endsWith('.jsx'));
   checked++;
+}
+
+// index.html's own scripts: theme bootstrap, boot guard, engine defaults, mount.
+let inline = 0;
+// Tag names are case-insensitive and a closing tag may carry whitespace, as in
+// a browser, so `<SCRIPT>` or `</script >` cannot slip a block past the parse.
+for (const [, attrs = '', source] of markup.matchAll(/<script(\s[^>]*)?>([\s\S]*?)<\/script[^>]*>/gi)) {
+  if (/\bsrc=/i.test(attrs)) continue;
+  parse(source, /type="text\/babel"/i.test(attrs));
+  inline++;
 }
 
 // ── Behavioural parity check: imported league scoring on a DST ───────────────
@@ -106,4 +154,4 @@ if (helperContext.rosterTotal(slots) !== 17) {
   throw new Error(`rosterTotal must skip IR: expected 17, got ${helperContext.rosterTotal(slots)}`);
 }
 
-console.log(`Browser JavaScript and JSX syntax: PASS (${checked} files)`);
+console.log(`Browser JavaScript and JSX syntax: PASS (${checked} files, ${inline} inline scripts)`);

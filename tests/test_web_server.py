@@ -4,25 +4,29 @@ The server binds to loopback, which keeps other machines out but does nothing
 about a page the user already has open in their browser — hence the same-origin
 guard these tests pin down.
 """
+import io
 import json
+import socket
 import threading
 import unittest
+from contextlib import redirect_stdout
 from functools import partial
 from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from draft_assistant.models import LeagueConfig, Player, PlayerContext
-from draft_assistant.web.server import MAX_BODY_BYTES, DraftAPIHandler
+from draft_assistant.web.server import (
+    MAX_BODY_BYTES, DraftAPIHandler, DraftHTTPServer, run_server,
+)
 
 
 class _ServerFixture(unittest.TestCase):
-    """Runs the real handler on an ephemeral loopback port."""
+    """Runs the real handler and server class on an ephemeral loopback port."""
 
     @classmethod
     def setUpClass(cls):
         handler = partial(DraftAPIHandler, profile="default")
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        cls.server = DraftHTTPServer(("127.0.0.1", 0), handler)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -236,6 +240,68 @@ class TestEarlyRejectionsCloseCleanly(_ServerFixture):
             )
             self.assertEqual(status, 415)
         self._repeat(send)
+
+
+class TestConnectionBurst(unittest.TestCase):
+    """A page load's burst of connections waits for the server; none is refused.
+
+    The server is HTTP/1.0 and closes after every response, so the browser
+    opens a connection per script and API call, and each waits in the listen
+    backlog until the accept loop takes it. That loop falls behind while
+    /api/players holds the GIL. With socketserver's default backlog of 5,
+    Windows refused the overflow outright: a quick reload lost
+    workspace-store.js and the page came up blank. Linux and macOS drop the
+    SYN instead, so there a connect stalls until it times out; either way
+    this fails.
+
+    Nothing is accepted until every client has connected, so all of them sit
+    in the backlog at once: the worst case of a stalled accept loop.
+    """
+
+    BURST = 32
+
+    def test_burst_waits_in_the_backlog_instead_of_being_refused(self):
+        server = DraftHTTPServer(("127.0.0.1", 0), partial(DraftAPIHandler, profile="default"))
+        clients = []
+        try:
+            port = server.server_address[1]
+            for _ in range(self.BURST):
+                clients.append(socket.create_connection(("127.0.0.1", port), timeout=5))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                for client in clients:
+                    client.settimeout(15)
+                    client.sendall(b"GET /index.html HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+                for client in clients:
+                    with client.makefile("rb") as reply:
+                        self.assertTrue(reply.read().startswith(b"HTTP/1.0 200 "))
+            finally:
+                server.shutdown()
+                thread.join(timeout=5)
+        finally:
+            for client in clients:
+                client.close()
+            server.server_close()
+
+    def test_mime_table_is_read_before_any_request_thread(self):
+        # Left to the first guess_type(), every request thread that arrives
+        # before the read finishes repeats it: on Windows 13 at once took
+        # ~1.4s under the GIL, and the burst above took over 6s.
+        with patch("draft_assistant.web.server.mimetypes") as table:
+            table.inited = False
+            DraftHTTPServer(("127.0.0.1", 0), partial(DraftAPIHandler, profile="default")).server_close()
+        table.init.assert_called_once_with()
+
+    def test_web_ui_uses_the_server_with_the_raised_backlog(self):
+        # The desktop window's server is pinned in test_desktop_persistence.
+        server = MagicMock()
+        server.serve_forever.side_effect = KeyboardInterrupt
+        with patch("draft_assistant.web.server.DraftHTTPServer", return_value=server) as bind, \
+                redirect_stdout(io.StringIO()):
+            run_server(port=0, open_browser=False)
+        self.assertEqual(bind.call_args.args[0], ("127.0.0.1", 0))
+        server.shutdown.assert_called_once()
 
 
 class TestMalformedBodyHandling(_ServerFixture):

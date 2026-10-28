@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import mimetypes
 import os
 import socket
 import threading
@@ -2025,16 +2026,43 @@ class DraftAPIHandler(SimpleHTTPRequestHandler):
         pass
 
 
+class DraftHTTPServer(ThreadingHTTPServer):
+    """The local server behind the web UI and the desktop window.
+
+    Threaded: the rollout endpoint can take a couple seconds, and a
+    single-threaded server would freeze every other request (player data,
+    state saves, the next pick) while it runs.
+
+    The listen backlog is raised from socketserver's default of 5. The server
+    is HTTP/1.0 and closes after every response, so a page load opens a
+    connection per script and API call — about twenty at once. While
+    /api/players or the context refresh holds the GIL the accept loop falls
+    behind, and on Windows a full backlog refuses a connection outright
+    instead of letting it wait. A reload under load lost plain scripts that
+    way (workspace-store.js among them) and the page came up blank. 128 is
+    what socket.listen() picks when given no backlog at all.
+    """
+
+    request_queue_size = 128
+
+    def __init__(self, *args, **kwargs):
+        # The first guess_type() in a process reads the MIME table (from the
+        # registry on Windows, ~0.1s), and every request thread that arrives
+        # before that read finishes starts its own. A first page load's dozen
+        # static requests spent ~1.4s rereading it under the GIL, starving the
+        # accept loop too. Read it once, before any request thread exists.
+        if not mimetypes.inited:
+            mimetypes.init()
+        super().__init__(*args, **kwargs)
+
+
 def run_server(
     port: int = 8080,
     profile: str = DEFAULT_PROFILE,
     open_browser: bool = True,
 ) -> None:
     handler = partial(DraftAPIHandler, profile=profile)
-    # Threaded: the rollout endpoint can take a couple seconds, and a
-    # single-threaded server would freeze every other request (player data,
-    # state saves, the next pick) while it runs.
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server = DraftHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}"
     print(f"Draft Assistant web UI: {url}")
     print("Press Ctrl+C to stop.")
